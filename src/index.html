@@ -1,0 +1,355 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <!-- 'unsafe-inline' for script-src lets composed pages (rendered in the sandboxed
+       srcdoc iframe, which inherits this CSP) run their own inline JS + the injected
+       Parslee bridge runtime. Isolation is provided by the iframe sandbox, not this CSP;
+       the renderer itself has no inline-script injection surface. -->
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; script-src 'self' 'unsafe-inline';" />
+  <title>Parslee</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div id="app">
+    <!-- Tab strip (full width) -->
+    <div id="tabstrip">
+      <div id="tabs"></div>
+      <button id="new-tab" title="New tab (Ctrl+T)">+</button>
+    </div>
+
+    <div id="main">
+    <!-- Chat sidebar -->
+    <aside id="sidebar">
+      <header id="brand">
+        <img class="logo-img" src="sprig-badge.jpg" alt="Sprig" />
+        <div class="brand-text">
+          <div class="brand-name">Parslee</div>
+          <div class="brand-tag">chatting with Sprig</div>
+        </div>
+      </header>
+
+      <div id="conversation" aria-live="polite"></div>
+
+      <div id="attach-chips" hidden></div>
+      <form id="composer" autocomplete="off">
+        <textarea id="prompt" rows="1"
+                  placeholder="Hey Sprig, ask anything…"
+                  title="Start with “Hey Sprig, …” · Enter to send, Shift+Enter for a new line"
+                  aria-label="Ask Sprig"></textarea>
+        <button id="attach-btn" type="button" class="composer-icon"
+                title="Attach files (text, CSV, image, PDF)">📎</button>
+        <button id="deep-toggle" type="button" class="deep-toggle" aria-pressed="false"
+                title="Deep Dive — thorough, cited research (slower)">🔬</button>
+        <button id="send" type="submit" title="Send">↑</button>
+        <input id="file-input" type="file" multiple hidden />
+      </form>
+    </aside>
+
+    <!-- Live page canvas -->
+    <main id="canvas">
+      <div id="omnibar">
+        <button id="back-btn" class="omni-btn" title="Back" disabled>‹</button>
+        <button id="fwd-btn" class="omni-btn" title="Forward" disabled>›</button>
+        <div id="page-title">Welcome to Parslee</div>
+        <div id="omni-actions">
+          <button id="map-btn" class="omni-btn text" title="Thinking canvas — map of this tab's pages">⌗ Map</button>
+          <button id="history-btn" class="omni-btn text" title="History &amp; Trash">History</button>
+          <button id="save-btn" class="omni-btn text" title="Save this page to disk" disabled>⤓ Save</button>
+          <button id="settings-btn" class="omni-btn" title="Settings">⚙</button>
+          <div id="mode-badge" class="badge">ready</div>
+        </div>
+      </div>
+
+      <div id="viewport">
+        <!-- Generated pages render here -->
+        <iframe id="page-frame" sandbox="allow-scripts allow-popups"
+                referrerpolicy="no-referrer"></iframe>
+
+        <!-- Real sites embed here -->
+        <webview id="web-view" hidden></webview>
+
+        <!-- First-run / loading overlay -->
+        <div id="overlay">
+          <div class="overlay-card">
+            <img class="overlay-sprig" src="sprig-hero.jpg" alt="Sprig, the Parslee mascot" />
+            <h1>Meet Sprig</h1>
+            <p class="overlay-sub">Your guide to the agentic web — just ask.</p>
+            <p class="overlay-hint">Just say <strong>“Hey Sprig, …”</strong> followed by what you want.
+              Sprig searches the live web and composes a page for you — or opens a real site when you ask.</p>
+            <div class="suggestions" id="suggestions">
+              <button data-q="Hey Sprig, what's the latest in AI this week?">Latest in AI this week</button>
+              <button data-q="Hey Sprig, plan a 3-day food tour of Tokyo">3-day Tokyo food tour</button>
+              <button data-q="Hey Sprig, compare the iPhone 16 and Pixel 9">iPhone 16 vs Pixel 9</button>
+              <button data-q="Hey Sprig, open YouTube">Open YouTube</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Remix bar: transform the current composed page -->
+        <div id="remix-bar" hidden>
+          <span class="remix-label">Remix</span>
+          <button class="remix-btn" data-remix="summary">Summarize</button>
+          <button class="remix-btn" data-remix="simplify">Simplify</button>
+          <button class="remix-btn" data-remix="deeper">Go deeper</button>
+          <button class="remix-btn" data-remix="slides">Slides</button>
+          <button class="remix-btn" data-remix="keypoints">Key points</button>
+          <button id="audio-btn" class="remix-btn audio">🔊 Audio</button>
+          <span class="remix-sep"></span>
+          <button id="verify-btn" class="remix-btn verify" title="Fact-check this page against the live web">✓ Verify</button>
+          <button id="sources-btn" class="remix-btn" title="Sources Sprig used">Sources</button>
+          <button id="pdf-btn" class="remix-btn" title="Export this page as a PDF">⤓ PDF</button>
+          <span class="remix-sep"></span>
+          <select id="live-select" class="live-select" title="Keep this page auto-updated">
+            <option value="off">⏱ Live: off</option>
+            <option value="300000">every 5 min</option>
+            <option value="900000">every 15 min</option>
+            <option value="1800000">every 30 min</option>
+            <option value="3600000">every hour</option>
+            <option value="21600000">every 6 hours</option>
+          </select>
+          <span id="live-status" class="live-status" hidden></span>
+        </div>
+
+        <!-- Sources / "show your work" panel -->
+        <div id="sources-panel" hidden>
+          <div class="sources-head">
+            <span class="sources-title">Grounding</span>
+            <button id="sources-close" class="modal-close" title="Close">✕</button>
+          </div>
+          <div id="sources-list"></div>
+        </div>
+
+        <!-- Audio player (appears while narrating) -->
+        <div id="audio-bar" hidden>
+          <span id="audio-title">🔊 Reading this page</span>
+          <button id="audio-toggle" class="audio-ctrl">Pause</button>
+          <button id="audio-stop" class="audio-ctrl">Stop</button>
+        </div>
+      </div>
+    </main>
+    </div>
+  </div>
+
+  <!-- Settings modal -->
+  <div id="settings-modal" class="modal">
+    <div class="modal-card">
+      <header class="modal-head">
+        <h2>Settings</h2>
+        <button id="settings-close" class="modal-close" title="Close">✕</button>
+      </header>
+
+      <section class="setting-group">
+        <h3>When you click a link in a composed page</h3>
+        <label class="opt">
+          <input type="radio" name="linkBehavior" value="smart" />
+          <span><strong>Smart</strong><small>Let Parslee decide — open real apps/sites live, compose a page for topics.</small></span>
+        </label>
+        <label class="opt">
+          <input type="radio" name="linkBehavior" value="live" />
+          <span><strong>Open the live site</strong><small>Always load the real website in an embedded view.</small></span>
+        </label>
+        <label class="opt">
+          <input type="radio" name="linkBehavior" value="compose" />
+          <span><strong>Compose a Parslee page</strong><small>Always compose a fresh page about the link.</small></span>
+        </label>
+      </section>
+
+      <section class="setting-group">
+        <h3>When you send a follow-up about the current page</h3>
+        <label class="opt">
+          <input type="radio" name="followupMode" value="auto" />
+          <span><strong>Let the model decide</strong><small>Parslee refines the page or makes a new one based on your message.</small></span>
+        </label>
+        <label class="opt">
+          <input type="radio" name="followupMode" value="ask" />
+          <span><strong>Ask me each time</strong><small>Choose "Refine this page" or "New page" for every follow-up.</small></span>
+        </label>
+      </section>
+
+      <section class="setting-group">
+        <h3>Provider &amp; model — bring your own API</h3>
+        <p class="group-hint">Switch providers to save money, work offline, or use a model you prefer. Each has trade-offs — pick what fits the task. Claude, Grok, and Gemini do live web grounding (real, cited sources); Azure and Ollama compose from the model's own knowledge. Claude also offers the full two-phase Deep Dive.</p>
+
+        <label class="opt">
+          <input type="radio" name="provider" value="claude" />
+          <span><strong>Claude (Anthropic)</strong><small><b>Gain:</b> best quality + live web grounding (search &amp; fetch), Deep Dive research, image-rich pages. <b>Cost:</b> uses your Anthropic credits.</small></span>
+        </label>
+        <label class="opt">
+          <input type="radio" name="provider" value="grok" />
+          <span><strong>Grok (xAI)</strong><small><b>Gain:</b> live web grounding via xAI Live Search (web, news &amp; X, with citations), strong fast reasoning, often cheaper; uses your xAI key. <b>Lose:</b> no two-phase Deep Dive (Verify still works, grounded).</small></span>
+        </label>
+        <label class="opt">
+          <input type="radio" name="provider" value="gemini" />
+          <span><strong>Gemini (Google)</strong><small><b>Gain:</b> live web grounding via Google Search, huge context, fast &amp; low-cost (Flash); uses your Google AI key. <b>Lose:</b> no two-phase Deep Dive (Verify still works, grounded).</small></span>
+        </label>
+        <label class="opt">
+          <input type="radio" name="provider" value="azure" />
+          <span><strong>Azure AI Foundry</strong><small><b>Gain:</b> enterprise/compliance, runs in your own Azure with many hosted models. <b>Lose:</b> no live web grounding or Deep Dive in Parslee yet; needs your endpoint, deployment &amp; key.</small></span>
+        </label>
+        <label class="opt">
+          <input type="radio" name="provider" value="ollama" />
+          <span><strong>Ollama — local &amp; free</strong><small><b>Gain:</b> free, private, runs offline on your machine. <b>Lose:</b> no live web grounding or Deep Dive; quality depends on your local model/hardware.</small></span>
+        </label>
+
+        <div class="prov-block">
+          <label class="field" id="provider-key-row">
+            <span class="field-label" id="provider-key-label">API key</span>
+            <span class="field-row">
+              <input id="api-key-input" type="password" placeholder="paste key…" autocomplete="off" spellcheck="false" />
+              <button id="api-key-save" type="button" class="lib-btn primary">Save</button>
+            </span>
+            <small id="api-key-status" class="field-note"></small>
+            <small class="field-note">Stored encrypted on this machine (never plain text). Leave blank and Save to clear.</small>
+          </label>
+
+          <div class="field" id="provider-model-row">
+            <span class="field-label">Model</span>
+            <select id="model-select"></select>
+            <input id="model-custom" type="text" placeholder="custom model id…" spellcheck="false" hidden />
+          </div>
+
+          <div id="ollama-extra" hidden>
+            <label class="field">
+              <span class="field-label">Ollama server URL</span>
+              <input id="ollama-url" type="text" placeholder="http://localhost:11434" spellcheck="false" />
+            </label>
+          </div>
+
+          <div id="azure-extra" hidden>
+            <label class="field">
+              <span class="field-label">Azure endpoint</span>
+              <input id="azure-endpoint" type="text" placeholder="https://your-resource.openai.azure.com" spellcheck="false" />
+            </label>
+            <label class="field">
+              <span class="field-label">Deployment name</span>
+              <input id="azure-deployment" type="text" placeholder="my-gpt-deployment" spellcheck="false" />
+            </label>
+            <label class="field">
+              <span class="field-label">API version</span>
+              <input id="azure-api-version" type="text" placeholder="2024-10-21" spellcheck="false" />
+            </label>
+          </div>
+        </div>
+      </section>
+
+      <section class="setting-group">
+        <h3>Audio narration (text-to-speech)</h3>
+        <p class="group-hint">Used by the 🔊 Audio button on composed pages. Voices come from your operating system — look for ones labelled "Natural" or "Online" for the best quality.</p>
+        <div class="prov-block">
+          <label class="field">
+            <span class="field-label">Voice</span>
+            <span class="field-row">
+              <select id="voice-select"></select>
+              <button id="voice-test" type="button" class="lib-btn">▶ Test</button>
+            </span>
+            <small id="voice-note" class="field-note"></small>
+          </label>
+          <label class="field">
+            <span class="field-label">Speed</span>
+            <select id="rate-select">
+              <option value="0.85">Slower</option>
+              <option value="1">Normal</option>
+              <option value="1.15">Faster</option>
+              <option value="1.3">Fast</option>
+            </select>
+          </label>
+        </div>
+      </section>
+
+      <section class="setting-group">
+        <h3>Notifications</h3>
+        <p class="group-hint">Living pages (the ● live control on a composed page) auto-refresh on a schedule. Parslee keeps refreshing them even when minimized or in the background.</p>
+        <label class="toggle-row">
+          <input id="notify-toggle" type="checkbox" />
+          <span>Show a system notification when a Living page updates while Parslee isn't focused. Click the notification to jump to the page.</span>
+        </label>
+      </section>
+
+      <section class="setting-group">
+        <h3>MCP servers <span class="badge-soft">Claude only</span></h3>
+        <p class="group-hint">Connect remote <strong>Model Context Protocol</strong> servers to give Sprig extra tools and data (e.g. your calendar, a database, a SaaS app). Sprig can call their tools while composing a page. Their tools run on Anthropic's side as part of the request — so only add servers you trust, and prefer read-only ones. Works with the Claude provider only; other providers ignore these.</p>
+        <div class="prov-block">
+          <div id="mcp-list" class="mcp-list"></div>
+          <div class="mcp-add">
+            <input id="mcp-name" type="text" class="mcp-field" placeholder="Name (e.g. Calendar)" spellcheck="false" />
+            <input id="mcp-url" type="text" class="mcp-field mcp-field-url" placeholder="https://your-mcp-server.example.com/sse" spellcheck="false" />
+            <input id="mcp-token" type="password" class="mcp-field" placeholder="Auth token (optional)" spellcheck="false" autocomplete="off" />
+            <button id="mcp-add" type="button" class="lib-btn">Add server</button>
+          </div>
+          <small class="field-note">Remote URL servers only (SSE/HTTP). Local/stdio servers aren't supported yet. The token is stored on this machine and sent to Anthropic as the server's authorization.</small>
+        </div>
+      </section>
+
+      <section class="setting-group">
+        <h3>About you (personal memory)</h3>
+        <p class="group-hint">Tell Sprig about yourself — location, interests, work, preferences, how you like answers. Sprig uses this to tailor every page it composes (kept on this machine, sent only to your chosen model).</p>
+        <textarea id="profile-input" class="profile-input" rows="5"
+                  placeholder="e.g. I'm a product designer in Chicago. I prefer concise, visual answers with metric units. Into cycling, sci-fi, and home cooking. Vegetarian."></textarea>
+      </section>
+    </div>
+  </div>
+
+  <!-- Library drawer (History / Trash) -->
+  <div id="library-drawer" class="drawer">
+    <div class="drawer-panel">
+      <header class="drawer-head">
+        <div class="drawer-tabs">
+          <button id="lib-tab-history" class="drawer-tab active">History</button>
+          <button id="lib-tab-trash" class="drawer-tab">Trash</button>
+        </div>
+        <div class="drawer-head-right">
+          <button id="empty-trash" class="lib-btn danger" hidden>Empty Trash</button>
+          <button id="library-close" class="modal-close" title="Close">✕</button>
+        </div>
+      </header>
+
+      <!-- Space bar (History tab only): pick a Space, create one, or synthesize across it -->
+      <div id="space-bar">
+        <label class="space-label">Space</label>
+        <select id="space-select" title="Switch Space"></select>
+        <button id="new-space-btn" class="lib-btn" title="New Space">+ New</button>
+        <button id="synthesize-btn" class="lib-btn primary" title="Synthesize across this Space">✨ Synthesize</button>
+      </div>
+      <div id="new-space-row" hidden>
+        <input id="new-space-name" type="text" maxlength="40" placeholder="Name this Space…" />
+        <button id="create-space-btn" class="lib-btn">Create</button>
+      </div>
+      <div id="synth-row" hidden>
+        <input id="synth-input" type="text" placeholder="Ask across these pages…  (blank = full overview)" />
+        <button id="synth-go" class="lib-btn primary">Go</button>
+      </div>
+
+      <div id="library-list" class="drawer-list"></div>
+    </div>
+  </div>
+
+  <!-- Thinking canvas: a map of the current tab's page tree -->
+  <div id="map-view" class="map-view">
+    <div class="map-head">
+      <span class="map-title">⌗ Thinking canvas</span>
+      <span class="map-hint">Each page is a node. Branches fork when you go back and ask something new. Click a node to jump there.</span>
+      <button id="map-close" class="modal-close" title="Close">✕</button>
+    </div>
+    <div class="map-scroll">
+      <div id="map-canvas" class="map-canvas">
+        <svg id="map-edges"></svg>
+      </div>
+    </div>
+  </div>
+
+  <!-- Hover tooltip for the back/forward buttons (shows the target page) -->
+  <div id="nav-tip" hidden></div>
+
+  <!-- Transient toast notifications (e.g. a living page refreshed) -->
+  <div id="toast" hidden></div>
+
+  <!-- Drag-and-drop overlay for attaching files -->
+  <div id="drop-overlay" hidden>
+    <div class="drop-card">📎 Drop files to attach<small>text, CSV, images, PDF</small></div>
+  </div>
+
+  <script src="renderer.js"></script>
+</body>
+</html>

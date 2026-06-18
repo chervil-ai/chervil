@@ -1,0 +1,26 @@
+{
+  "name": "parslee",
+  "version": "0.1.0",
+  "description": "Parslee — the Agentic, Conversational Modern Web Browser",
+  "main": "electron/main.js",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron ."
+  },
+  "keywords": [
+    "browser",
+    "agentic",
+    "claude",
+    "electron",
+    "conversational"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.69.0",
+    "dotenv": "^17.0.0"
+  },
+  "devDependencies": {
+    "electron": "^33.0.0"
+  }
+}
