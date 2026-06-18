@@ -35,11 +35,13 @@
       <div id="attach-chips" hidden></div>
       <form id="composer" autocomplete="off">
         <textarea id="prompt" rows="1"
-                  placeholder="Hey Sprig, ask anything…"
+                  placeholder="Hey Sprig, ask…"
                   title="Start with “Hey Sprig, …” · Enter to send, Shift+Enter for a new line"
                   aria-label="Ask Sprig"></textarea>
         <button id="attach-btn" type="button" class="composer-icon"
                 title="Attach files (text, CSV, image, PDF)">📎</button>
+        <button id="mic-btn" type="button" class="composer-icon"
+                title="Voice input — talk to Sprig" aria-pressed="false">🎤</button>
         <button id="deep-toggle" type="button" class="deep-toggle" aria-pressed="false"
                 title="Deep Dive — thorough, cited research (slower)">🔬</button>
         <button id="send" type="submit" title="Send">↑</button>
@@ -256,6 +258,46 @@
             </select>
           </label>
         </div>
+      </section>
+
+      <section class="setting-group">
+        <h3>Voice input (speech-to-text)</h3>
+        <p class="group-hint">Talk to Sprig with the 🎤 button in the chat box. Recordings are sent to a Whisper-compatible transcription service of your choice (OpenAI, Groq, Azure, or a local whisper server) — Claude can't transcribe audio, so this uses its own key. The audio is sent only to this endpoint, never stored.</p>
+        <div class="prov-block">
+          <label class="field">
+            <span class="field-label">Transcription endpoint</span>
+            <input id="stt-endpoint" type="text" placeholder="https://api.openai.com/v1/audio/transcriptions" spellcheck="false" />
+          </label>
+          <label class="field">
+            <span class="field-label">Model</span>
+            <input id="stt-model" type="text" placeholder="whisper-1" spellcheck="false" />
+          </label>
+          <label class="field">
+            <span class="field-label">API key</span>
+            <span class="field-row">
+              <input id="stt-key-input" type="password" placeholder="paste transcription key…" autocomplete="off" spellcheck="false" />
+              <button id="stt-key-save" type="button" class="lib-btn primary">Save</button>
+            </span>
+            <small id="stt-key-status" class="field-note"></small>
+            <small class="field-note">Stored encrypted on this machine. Example: <b>Groq</b> (the inference provider at groq.com — not xAI's Grok) offers fast Whisper transcription at <code>https://api.groq.com/openai/v1/audio/transcriptions</code> with model <code>whisper-large-v3</code>.</small>
+          </label>
+          <label class="toggle-row">
+            <input id="voice-autosend" type="checkbox" />
+            <span>Send automatically after transcribing (otherwise the text just fills the chat box for you to review).</span>
+          </label>
+        </div>
+      </section>
+
+      <section class="setting-group">
+        <h3>Appearance</h3>
+        <p class="group-hint">Choose how tabs are arranged. Either way, you can click-hold-drag a tab to reorder it, just like a web browser.</p>
+        <label class="field">
+          <span class="field-label">Tab layout</span>
+          <select id="tab-layout-select">
+            <option value="horizontal">Horizontal — strip across the top</option>
+            <option value="vertical">Vertical — rail down the left side</option>
+          </select>
+        </label>
       </section>
 
       <section class="setting-group">

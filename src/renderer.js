@@ -8,6 +8,7 @@ const els = {
   send: document.getElementById('send'),
   deepToggle: document.getElementById('deep-toggle'),
   attachBtn: document.getElementById('attach-btn'),
+  micBtn: document.getElementById('mic-btn'),
   fileInput: document.getElementById('file-input'),
   attachChips: document.getElementById('attach-chips'),
   dropOverlay: document.getElementById('drop-overlay'),
@@ -66,6 +67,15 @@ const els = {
   azureEndpoint: document.getElementById('azure-endpoint'),
   azureDeployment: document.getElementById('azure-deployment'),
   azureApiVersion: document.getElementById('azure-api-version'),
+  // Voice input (speech-to-text)
+  sttEndpoint: document.getElementById('stt-endpoint'),
+  sttModel: document.getElementById('stt-model'),
+  sttKeyInput: document.getElementById('stt-key-input'),
+  sttKeySave: document.getElementById('stt-key-save'),
+  sttKeyStatus: document.getElementById('stt-key-status'),
+  voiceAutosend: document.getElementById('voice-autosend'),
+  // Appearance
+  tabLayoutSelect: document.getElementById('tab-layout-select'),
   // Notifications
   notifyToggle: document.getElementById('notify-toggle'),
   // MCP servers (Claude's native remote MCP connector)
@@ -123,6 +133,10 @@ let settings = {
   profile: '',       // personal "About you" memory — tailors composed pages
   mcpServers: [],    // connected MCP servers: {id, name, url, token, enabled} (Claude only)
   notifications: true, // OS notification when a Living page updates in the background
+  tabLayout: 'horizontal', // 'horizontal' (top strip) or 'vertical' (side rail)
+  sttEndpoint: 'https://api.openai.com/v1/audio/transcriptions', // Whisper-compatible STT
+  sttModel: 'whisper-1',
+  voiceAutosend: false, // auto-send the transcript instead of just filling the box
 };
 
 // Per-provider metadata for the Settings UI.
@@ -370,6 +384,8 @@ function renderTabs() {
     const el = document.createElement('div');
     el.className = 'tab' + (tab.id === activeId ? ' active' : '');
     el.title = tabLabel(tab);
+    el.dataset.tabId = tab.id;
+    el.draggable = true; // click-hold-drag to reorder, like a browser
 
     if (isTabBusy(tab.id)) {
       const spin = document.createElement('span');
@@ -391,9 +407,67 @@ function renderTabs() {
     });
     el.appendChild(close);
 
-    el.addEventListener('click', () => switchTab(tab.id));
+    // A real drag suppresses the trailing click, so plain clicks still switch tabs.
+    el.addEventListener('click', () => { if (!tabDragId) switchTab(tab.id); });
+    el.addEventListener('dragstart', (e) => {
+      tabDragId = tab.id;
+      el.classList.add('dragging');
+      try { e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', tab.id); } catch {}
+    });
+    el.addEventListener('dragend', () => {
+      el.classList.remove('dragging');
+      commitTabOrder();
+      // Clear after the click event would have fired, so a real drag doesn't switch.
+      setTimeout(() => { tabDragId = null; }, 0);
+    });
+
     els.tabs.appendChild(el);
   }
+}
+
+// ---- Tab layout (horizontal strip vs. vertical rail) ----
+function isVerticalTabs() {
+  return settings.tabLayout === 'vertical';
+}
+
+function applyTabLayout() {
+  const app = document.getElementById('app');
+  if (app) app.classList.toggle('vtabs', isVerticalTabs());
+}
+
+// ---- Drag-to-reorder tabs (works horizontally or vertically) ----
+let tabDragId = null;
+
+// Find the tab the dragged one should be inserted before, based on pointer position.
+function tabDragAfter(x, y) {
+  const vertical = isVerticalTabs();
+  const others = [...els.tabs.querySelectorAll('.tab:not(.dragging)')];
+  let closest = { offset: -Infinity, el: null };
+  for (const el of others) {
+    const box = el.getBoundingClientRect();
+    const offset = vertical ? (y - box.top - box.height / 2) : (x - box.left - box.width / 2);
+    if (offset < 0 && offset > closest.offset) closest = { offset, el };
+  }
+  return closest.el;
+}
+
+function onTabsDragOver(e) {
+  if (!tabDragId) return;
+  e.preventDefault();
+  try { e.dataTransfer.dropEffect = 'move'; } catch {}
+  const dragging = els.tabs.querySelector('.tab.dragging');
+  if (!dragging) return;
+  const after = tabDragAfter(e.clientX, e.clientY);
+  if (after == null) els.tabs.appendChild(dragging);
+  else if (after !== dragging.nextSibling) els.tabs.insertBefore(dragging, after);
+}
+
+// Read the DOM order back into the tabs array and persist it.
+function commitTabOrder() {
+  const order = [...els.tabs.querySelectorAll('.tab')].map((el) => el.dataset.tabId);
+  if (order.length !== tabs.length) return;
+  tabs.sort((a, b) => order.indexOf(a.id) - order.indexOf(b.id));
+  scheduleSave();
 }
 
 // ---- Rendering: conversation ----
@@ -879,6 +953,109 @@ function toast(message) {
   }, 4500);
 }
 
+// ---- Voice input (speech-to-text) ----
+let micRecorder = null;
+let micStream = null;
+let micChunks = [];
+let micBusy = false;
+
+async function toggleVoiceInput() {
+  if (micBusy) return;
+  if (micRecorder && micRecorder.state === 'recording') { stopVoiceInput(); return; }
+
+  try {
+    micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  } catch {
+    toast('Microphone access was blocked. Allow mic access to use voice input.');
+    return;
+  }
+
+  // Pick a container the platform can actually record.
+  let mime = '';
+  for (const m of ['audio/webm;codecs=opus', 'audio/webm', 'audio/ogg;codecs=opus', 'audio/mp4']) {
+    if (window.MediaRecorder && MediaRecorder.isTypeSupported(m)) { mime = m; break; }
+  }
+  try {
+    micRecorder = new MediaRecorder(micStream, mime ? { mimeType: mime } : undefined);
+  } catch {
+    toast('Voice recording is not supported here.');
+    stopMicTracks();
+    return;
+  }
+
+  micChunks = [];
+  micRecorder.addEventListener('dataavailable', (e) => { if (e.data && e.data.size) micChunks.push(e.data); });
+  micRecorder.addEventListener('stop', onVoiceStop);
+  micRecorder.start();
+  setMicState('recording');
+  toast('Listening… click the mic again to stop.');
+}
+
+function stopVoiceInput() {
+  if (micRecorder && micRecorder.state === 'recording') micRecorder.stop();
+  setMicState('transcribing');
+}
+
+async function onVoiceStop() {
+  stopMicTracks();
+  const type = (micRecorder && micRecorder.mimeType) || 'audio/webm';
+  const blob = new Blob(micChunks, { type });
+  micChunks = [];
+  if (!blob.size) { setMicState('idle'); return; }
+
+  micBusy = true;
+  setMicState('transcribing');
+  try {
+    const b64 = arrayBufferToBase64(await blob.arrayBuffer());
+    const ext = /mp4/.test(type) ? 'mp4' : /ogg/.test(type) ? 'ogg' : 'webm';
+    const resp = await window.parslee.transcribe({
+      audio: b64,
+      mimeType: type,
+      filename: 'speech.' + ext,
+      endpoint: settings.sttEndpoint,
+      model: settings.sttModel,
+    });
+    if (resp && resp.ok && resp.text) insertTranscript(resp.text);
+    else toast((resp && resp.error) || 'Sprig didn’t catch that — try again.');
+  } catch (e) {
+    toast('Transcription failed: ' + (e && e.message ? e.message : e));
+  }
+  micBusy = false;
+  setMicState('idle');
+}
+
+function insertTranscript(text) {
+  const cur = els.prompt.value.trim();
+  els.prompt.value = cur ? `${cur} ${text}` : text;
+  autoGrowPrompt();
+  els.prompt.focus();
+  if (settings.voiceAutosend) handleComposerSubmit(els.prompt.value);
+}
+
+function setMicState(state) {
+  if (!els.micBtn) return;
+  els.micBtn.classList.toggle('recording', state === 'recording');
+  els.micBtn.classList.toggle('busy', state === 'transcribing');
+  els.micBtn.setAttribute('aria-pressed', state === 'recording' ? 'true' : 'false');
+  els.micBtn.textContent = state === 'transcribing' ? '…' : '🎤';
+  els.micBtn.title =
+    state === 'recording' ? 'Listening… click to stop'
+    : state === 'transcribing' ? 'Transcribing…'
+    : 'Voice input — talk to Sprig';
+}
+
+function stopMicTracks() {
+  if (micStream) { for (const t of micStream.getTracks()) t.stop(); micStream = null; }
+}
+
+function arrayBufferToBase64(buf) {
+  const bytes = new Uint8Array(buf);
+  let bin = '';
+  const chunk = 0x8000; // chunk to avoid arg-count limits on fromCharCode
+  for (let i = 0; i < bytes.length; i += chunk) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
+  return btoa(bin);
+}
+
 // ---- Web agent: let Sprig act on the embedded live site ----
 let agentRunning = false;
 const AGENT_SELECTOR = 'a[href],button,input:not([type=hidden]),textarea,select,[role=button]';
@@ -1007,7 +1184,7 @@ function updatePlaceholder() {
   const tab = activeTab();
   const cur = currentEntry(tab);
   if (cur && cur.kind === 'navigate') els.prompt.placeholder = 'Hey Sprig, act here…';
-  else els.prompt.placeholder = deepMode ? 'Hey Sprig, research…' : 'Hey Sprig, ask anything…';
+  else els.prompt.placeholder = deepMode ? 'Hey Sprig, research…' : 'Hey Sprig, ask…';
 }
 
 // Speak a short sample with the currently selected voice/speed (Settings test button).
@@ -1840,7 +2017,24 @@ function applySettingsToUI() {
   populateVoiceSelect();
   els.profileInput.value = settings.profile || '';
   if (els.notifyToggle) els.notifyToggle.checked = settings.notifications !== false;
+  if (els.tabLayoutSelect) els.tabLayoutSelect.value = isVerticalTabs() ? 'vertical' : 'horizontal';
+  if (els.sttEndpoint) els.sttEndpoint.value = settings.sttEndpoint || '';
+  if (els.sttModel) els.sttModel.value = settings.sttModel || '';
+  if (els.voiceAutosend) els.voiceAutosend.checked = !!settings.voiceAutosend;
+  if (els.sttKeyInput) els.sttKeyInput.value = '';
+  refreshSttKeyStatus();
   renderMcpServers();
+}
+
+// Reflect whether a speech-to-text key is saved (key lives in the main process).
+async function refreshSttKeyStatus() {
+  if (!els.sttKeyStatus) return;
+  try {
+    const st = await window.parslee.getKeyStatus();
+    const has = st && st.stt;
+    els.sttKeyStatus.textContent = has ? 'A transcription key is saved.' : 'No transcription key saved yet.';
+    els.sttKeyStatus.className = 'field-note' + (has ? ' ok' : '');
+  } catch { /* ignore */ }
 }
 
 // ---- MCP servers (Claude's native remote MCP connector) ----
@@ -2114,6 +2308,7 @@ async function init() {
     startScheduler();
   }
 
+  applyTabLayout();
   renderTabs();
   renderConversation();
   renderCurrentPage();
@@ -2185,6 +2380,9 @@ window.addEventListener('drop', (e) => {
   if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length) addFiles(e.dataTransfer.files);
 });
 
+// Voice input: record the mic, transcribe via the configured Whisper endpoint.
+if (els.micBtn) els.micBtn.addEventListener('click', toggleVoiceInput);
+
 els.prompt.addEventListener('input', autoGrowPrompt);
 
 els.prompt.addEventListener('keydown', (e) => {
@@ -2201,6 +2399,9 @@ els.suggestions.addEventListener('click', (e) => {
 });
 
 els.newTab.addEventListener('click', () => newTab(true));
+// Tab reorder: allow dropping a dragged tab anywhere along the strip/rail.
+els.tabs.addEventListener('dragover', onTabsDragOver);
+els.tabs.addEventListener('drop', (e) => e.preventDefault());
 els.back.addEventListener('click', goBack);
 els.fwd.addEventListener('click', goForward);
 els.save.addEventListener('click', saveCurrentPage);
@@ -2271,6 +2472,36 @@ els.ollamaUrl.addEventListener('input', () => { settings.ollamaUrl = els.ollamaU
 els.azureEndpoint.addEventListener('input', () => { settings.azureEndpoint = els.azureEndpoint.value.trim(); scheduleSave(); });
 els.azureDeployment.addEventListener('input', () => { settings.azureDeployment = els.azureDeployment.value.trim(); scheduleSave(); });
 els.azureApiVersion.addEventListener('input', () => { settings.azureApiVersion = els.azureApiVersion.value.trim(); scheduleSave(); });
+
+// Voice input (speech-to-text) settings.
+if (els.sttEndpoint) els.sttEndpoint.addEventListener('input', () => { settings.sttEndpoint = els.sttEndpoint.value.trim(); scheduleSave(); });
+if (els.sttModel) els.sttModel.addEventListener('input', () => { settings.sttModel = els.sttModel.value.trim(); scheduleSave(); });
+if (els.voiceAutosend) els.voiceAutosend.addEventListener('change', () => { settings.voiceAutosend = els.voiceAutosend.checked; scheduleSave(); });
+if (els.sttKeySave) els.sttKeySave.addEventListener('click', async () => {
+  els.sttKeyStatus.textContent = 'Saving…';
+  els.sttKeyStatus.className = 'field-note';
+  try {
+    const res = await window.parslee.setApiKey('stt', els.sttKeyInput.value.trim());
+    if (res && res.ok) {
+      els.sttKeyInput.value = '';
+      if (res.warn) { els.sttKeyStatus.textContent = res.warn; els.sttKeyStatus.className = 'field-note warn'; }
+      else refreshSttKeyStatus();
+    } else {
+      els.sttKeyStatus.textContent = (res && res.error) || 'Could not save the key.';
+      els.sttKeyStatus.className = 'field-note warn';
+    }
+  } catch (e) {
+    els.sttKeyStatus.textContent = String(e && e.message ? e.message : e);
+    els.sttKeyStatus.className = 'field-note warn';
+  }
+});
+
+// Tab layout (horizontal strip vs. vertical rail).
+if (els.tabLayoutSelect) els.tabLayoutSelect.addEventListener('change', () => {
+  settings.tabLayout = els.tabLayoutSelect.value === 'vertical' ? 'vertical' : 'horizontal';
+  applyTabLayout();
+  scheduleSave();
+});
 
 // Notifications toggle.
 if (els.notifyToggle) els.notifyToggle.addEventListener('change', () => {

@@ -87,6 +87,23 @@ function createWindow() {
 
   mainWindow.loadFile(path.join(__dirname, '..', 'src', 'index.html'));
 
+  // Allow microphone access for voice input, but ONLY for Parslee's own UI
+  // (the file:// origin) — never auto-grant mic/camera to remote sites embedded
+  // in the <webview>. Benign browsing permissions (fullscreen, pointer lock) stay
+  // allowed so embedded real sites still work; sensitive ones (geolocation,
+  // notifications, etc.) are denied.
+  const ses = mainWindow.webContents.session;
+  const fromApp = (url) => (url || '').startsWith('file://');
+  const BROWSING_OK = new Set(['fullscreen', 'pointerLock', 'keyboardLock', 'clipboard-sanitized-write']);
+  ses.setPermissionRequestHandler((wc, permission, callback, details) => {
+    if (permission === 'media') return callback(fromApp(details && details.requestingUrl));
+    return callback(BROWSING_OK.has(permission));
+  });
+  ses.setPermissionCheckHandler((wc, permission, requestingOrigin) => {
+    if (permission === 'media') return fromApp(requestingOrigin);
+    return BROWSING_OK.has(permission);
+  });
+
   // Uncomment to debug the renderer.
   // mainWindow.webContents.openDevTools({ mode: 'detach' });
 }
@@ -189,7 +206,7 @@ ipcMain.handle('parslee:notify', async (_event, payload) => {
 // --- Bring-your-own API key IPC (per provider) ---------------------------
 ipcMain.handle('parslee:get-key-status', async () => {
   const status = {};
-  for (const p of ['claude', 'grok', 'gemini', 'azure']) status[p] = !!savedKeys[p];
+  for (const p of ['claude', 'grok', 'gemini', 'azure', 'stt']) status[p] = !!savedKeys[p];
   status.claudeFromEnv = !!process.env.ANTHROPIC_API_KEY && savedKeys.claude === process.env.ANTHROPIC_API_KEY;
   return status;
 });
@@ -206,6 +223,47 @@ ipcMain.handle('parslee:agent-step', async (_event, payload) => {
     const { task, pageState, steps } = payload || {};
     const action = await runAgentStep({ task, pageState, steps, config: providerConfigFrom(payload) });
     return { ok: true, action };
+  } catch (err) {
+    return { ok: false, error: String(err && err.message ? err.message : err) };
+  }
+});
+
+// --- Voice input: transcribe recorded mic audio (Whisper-compatible STT) --
+// The renderer records the mic and sends the audio bytes here; we POST them as
+// multipart/form-data to a configurable OpenAI-Whisper-compatible endpoint
+// (OpenAI, Groq, Azure, or a local whisper server) using the saved 'stt' key.
+ipcMain.handle('parslee:transcribe', async (_event, payload) => {
+  try {
+    const { audio, mimeType, filename, endpoint, model } = payload || {};
+    if (!audio) return { ok: false, error: 'No audio captured.' };
+    const url = (endpoint && String(endpoint).trim()) || 'https://api.openai.com/v1/audio/transcriptions';
+    const key = savedKeys.stt || '';
+    // Azure transcription uses an api-key header; everyone else uses Bearer.
+    const isAzure = /\.azure\.com/i.test(url) || /api-version=/i.test(url);
+    if (!key) {
+      return { ok: false, error: 'No speech-to-text key set. Add one in Settings → Voice input.' };
+    }
+
+    const buf = Buffer.from(String(audio), 'base64');
+    const form = new FormData();
+    form.append('file', new Blob([buf], { type: mimeType || 'audio/webm' }), filename || 'speech.webm');
+    form.append('model', (model && String(model).trim()) || 'whisper-1');
+    form.append('response_format', 'json');
+
+    const headers = isAzure ? { 'api-key': key } : { Authorization: `Bearer ${key}` };
+    let res;
+    try {
+      res = await fetch(url, { method: 'POST', headers, body: form });
+    } catch (err) {
+      return { ok: false, error: `Couldn't reach the transcription service at ${url}. Check the endpoint and your network.` };
+    }
+    if (!res.ok) {
+      const t = await res.text().catch(() => '');
+      return { ok: false, error: `Transcription error ${res.status}: ${t.slice(0, 300)}` };
+    }
+    const j = await res.json().catch(() => null);
+    const text = j && (j.text || (j.results && j.results[0] && j.results[0].text)) || '';
+    return { ok: true, text: String(text).trim() };
   } catch (err) {
     return { ok: false, error: String(err && err.message ? err.message : err) };
   }

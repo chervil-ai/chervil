@@ -52,6 +52,9 @@ contextBridge.exposeInMainWorld('parslee', {
   /** Export a composed page as PDF via a native save dialog. */
   exportPdf: (payload) => ipcRenderer.invoke('parslee:export-pdf', payload),
 
+  /** Transcribe recorded mic audio via the configured Whisper-compatible STT. */
+  transcribe: (payload) => ipcRenderer.invoke('parslee:transcribe', payload),
+
   /** Show an OS notification (e.g. a Living page refreshed in the background). */
   notify: (payload) => ipcRenderer.invoke('parslee:notify', payload),
 
