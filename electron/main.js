@@ -152,7 +152,10 @@ function attachContextMenu(wc, opts = {}) {
       ]);
     }
 
-    if (!app.isPackaged) {
+    // On the app shell, only show a menu when there's something to act on, so a
+    // plain right-click on tabs/chrome doesn't pop a stray native menu that
+    // fights the custom tab-management menu. Embedded sites always get a menu.
+    if (!app.isPackaged && (!isMainUI || groups.length)) {
       groups.push([{ label: 'Inspect Element', click: () => wc.inspectElement(params.x, params.y) }]);
     }
 

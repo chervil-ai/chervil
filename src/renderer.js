@@ -3088,6 +3088,9 @@ els.tabSelectAll.addEventListener('click', selectAllTabs);
 els.tabSelectClose.addEventListener('click', closeSelectedTabs);
 els.tabSelectDone.addEventListener('click', exitTabSelect);
 window.addEventListener('click', () => { if (els.tabMenu && !els.tabMenu.hidden) closeTabMenu(); });
+window.addEventListener('contextmenu', () => { if (els.tabMenu && !els.tabMenu.hidden) closeTabMenu(); });
+window.addEventListener('blur', () => closeTabMenu());
+els.tabs.addEventListener('scroll', () => closeTabMenu());
 window.addEventListener('keydown', (e) => { if (e.key === 'Escape') { closeTabMenu(); if (tabSelectMode) exitTabSelect(); } });
 // Tab reorder: allow dropping a dragged tab anywhere along the strip/rail.
 els.tabs.addEventListener('dragover', onTabsDragOver);
