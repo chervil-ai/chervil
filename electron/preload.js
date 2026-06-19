@@ -92,6 +92,9 @@ contextBridge.exposeInMainWorld('chervil', {
   /** Subscribe to prompts sent from the floating quick-ask bar (global hotkey). */
   onQuickPrompt: (cb) => ipcRenderer.on('chervil:quick-prompt', (_e, prompt) => cb(prompt)),
 
+  /** Subscribe to "Ask Sprig about <selection>" from the right-click menu. */
+  onContextAsk: (cb) => ipcRenderer.on('chervil:context-ask', (_e, text) => cb(text)),
+
   /** Load persisted session state (tabs, prompts, pages). */
   loadState: () => ipcRenderer.invoke('chervil:load-state'),
 

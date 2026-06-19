@@ -3388,4 +3388,15 @@ if (window.chervil.onQuickPrompt) {
   });
 }
 
+// "Ask Sprig about <selection>" from the right-click menu fills the composer.
+if (window.chervil.onContextAsk) {
+  window.chervil.onContextAsk((text) => {
+    const t = String(text || '').trim();
+    if (!t) return;
+    const cur = els.prompt.value.trim();
+    els.prompt.value = cur ? `${cur} ${t}` : t;
+    els.prompt.focus();
+  });
+}
+
 init();

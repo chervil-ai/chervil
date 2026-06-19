@@ -3,7 +3,7 @@
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
-const { app, BrowserWindow, ipcMain, dialog, safeStorage, Notification, Tray, Menu, globalShortcut, screen } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, safeStorage, Notification, Tray, Menu, globalShortcut, screen, shell, clipboard } = require('electron');
 
 // Load .env from the project root (one level up from /electron).
 // quiet:true suppresses dotenv v17's "injected env … tip" banner (which also
@@ -82,6 +82,90 @@ function providerConfigFrom(payload) {
   return { ...cfg, provider, apiKey: savedKeys[provider] || '' };
 }
 
+// Build a native right-click menu from the page's context-menu params. Used for
+// the app UI and for any embedded real sites (<webview>).
+function attachContextMenu(wc, opts = {}) {
+  const isMainUI = !!opts.isMainUI;
+  wc.on('context-menu', (_event, params) => {
+    const groups = [];
+    const sel = (params.selectionText || '').trim();
+
+    if (params.linkURL) {
+      groups.push([
+        { label: 'Open Link in Browser', click: () => shell.openExternal(params.linkURL) },
+        { label: 'Copy Link Address', click: () => clipboard.writeText(params.linkURL) },
+      ]);
+    }
+
+    if (params.mediaType === 'image' && params.srcURL) {
+      groups.push([
+        { label: 'Copy Image', click: () => wc.copyImageAt(params.x, params.y) },
+        { label: 'Save Image As…', click: () => wc.downloadURL(params.srcURL) },
+        { label: 'Copy Image Address', click: () => clipboard.writeText(params.srcURL) },
+      ]);
+    }
+
+    if (params.isEditable) {
+      const spell = [];
+      for (const s of (params.dictionarySuggestions || [])) {
+        spell.push({ label: s, click: () => wc.replaceMisspelling(s) });
+      }
+      if (params.misspelledWord) {
+        if (spell.length) spell.push({ type: 'separator' });
+        spell.push({ label: 'Add to Dictionary', click: () => wc.session.addWordToSpellCheckerDictionary(params.misspelledWord) });
+      }
+      if (spell.length) groups.push(spell);
+      groups.push([{ role: 'undo' }, { role: 'redo' }]);
+      groups.push([
+        { role: 'cut' },
+        { role: 'copy' },
+        { role: 'paste' },
+        { role: 'pasteAndMatchStyle', label: 'Paste and Match Style' },
+        { role: 'selectAll' },
+      ]);
+    } else if (sel) {
+      const short = sel.length > 32 ? sel.slice(0, 32) + '…' : sel;
+      groups.push([
+        { role: 'copy' },
+        {
+          label: `Ask Sprig about “${short}”`,
+          click: () => {
+            if (mainWindow && !mainWindow.webContents.isDestroyed()) {
+              mainWindow.show();
+              mainWindow.webContents.send('chervil:context-ask', sel);
+            }
+          },
+        },
+      ]);
+    }
+
+    // Native back/forward/reload only for embedded sites — never the app shell,
+    // where "reload" would blow away the whole SPA.
+    if (!isMainUI) {
+      const hist = wc.navigationHistory;
+      const canBack = hist ? hist.canGoBack() : wc.canGoBack();
+      const canFwd = hist ? hist.canGoForward() : wc.canGoForward();
+      groups.push([
+        { label: 'Back', enabled: canBack, click: () => (hist ? hist.goBack() : wc.goBack()) },
+        { label: 'Forward', enabled: canFwd, click: () => (hist ? hist.goForward() : wc.goForward()) },
+        { label: 'Reload', click: () => wc.reload() },
+      ]);
+    }
+
+    if (!app.isPackaged) {
+      groups.push([{ label: 'Inspect Element', click: () => wc.inspectElement(params.x, params.y) }]);
+    }
+
+    if (!groups.length) return;
+    const template = [];
+    groups.forEach((g, i) => {
+      if (i) template.push({ type: 'separator' });
+      template.push(...g);
+    });
+    Menu.buildFromTemplate(template).popup({ window: BrowserWindow.fromWebContents(wc) || mainWindow });
+  });
+}
+
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1280,
@@ -106,6 +190,10 @@ function createWindow() {
   });
 
   mainWindow.loadFile(path.join(__dirname, '..', 'src', 'index.html'));
+
+  // Native right-click menus for the app UI (and any embedded real sites).
+  attachContextMenu(mainWindow.webContents, { isMainUI: true });
+  mainWindow.webContents.on('did-attach-webview', (_e, wc) => attachContextMenu(wc, { isMainUI: false }));
 
   // Allow microphone access for voice input, but ONLY for Chervil's own UI
   // (the file:// origin) — never auto-grant mic/camera to remote sites embedded
