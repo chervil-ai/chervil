@@ -45,12 +45,13 @@ streamed events tagged with a `requestId` route back to the originating tab.
 State (tabs, page tree, settings, library, Spaces, living pages) persists in a
 state file in the Electron `userData` directory.
 
-> **Note on the rename:** the project was renamed from "Parslee" to **Chervil**.
-> Some internal identifiers still use the old name (the `PARSLEE_*` env prefixes,
-> the `window.parslee` page bridge, `parslee:*` IPC channel names, and the
-> `parslee-state.json` file). Migrating these is a tracked follow-up — see
-> [docs/pre-launch-hardening.md](docs/pre-launch-hardening.md). Match the existing
-> identifiers in code you touch until that pass lands.
+> **Note on the rename:** the project was renamed from "Parslee" to **Chervil**,
+> including internal identifiers — use the **`chervil`** names in new code:
+> `CHERVIL_*` env prefixes, the `window.chervil` page bridge, `chervil:*` IPC
+> channels, and `chervil-state.json` / `chervil-keys.bin`. The old `parslee`
+> names survive only as backward-compat shims (env-var fallbacks, a
+> `window.parslee` alias for pre-rename composed pages, and one-time legacy-file
+> reads) so existing installs keep working — don't add new references to them.
 
 ## Adding a provider
 

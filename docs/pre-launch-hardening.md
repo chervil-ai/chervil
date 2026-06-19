@@ -9,8 +9,8 @@
 > "Parslee" which collided with Volato's funded parslee.ai). `chervil.ai` is
 > confirmed available via RDAP; `chervil.com` is registered/parked (use `.ai` +
 > a `getchervil.com` redirect). A formal USPTO/attorney pass is still recommended
-> before public launch. Internal code identifiers still use the old name — see the
-> rename item under P1.
+> before public launch. The internal code rename is done and backward-compatible;
+> its live verification is tracked under P1.
 
 ---
 
@@ -27,23 +27,23 @@ These are the paths where a failure either harms a user or destroys the first im
 - [ ] **Core compose flow (live, Claude).** A cold "compose a page" request renders cleanly, with images and sources, on a fresh machine.
 - [ ] **Clean-install experience on a machine that is not the dev box.** No dev-only paths, no missing runtime, state file initializes correctly.
 - [ ] **Code signing.** Acquire a code-signing cert; produce a **signed** Windows installer (avoid SmartScreen "unknown publisher") and a signed/notarized macOS build if shipping Mac. *Unsigned = scary install = dead first impression for an agentic browser.*
-- [ ] **API key security, live.** Confirm `safeStorage` encryption at rest, renderer never receives the raw key, and `parslee-keys.bin` round-trips correctly after restart.
+- [ ] **API key security, live.** Confirm `safeStorage` encryption at rest, renderer never receives the raw key, and `chervil-keys.bin` round-trips correctly after restart (incl. one-time migration from a legacy `parslee-keys.bin`).
 - [ ] **Webview permission boundary (live).** Embedded real sites cannot grab mic/camera; media is scoped to the app origin only.
 
 ## P1 — Verify before calling it stable
 
 - [ ] **Deep Dive (P3) end-to-end (live, Claude).** Never live-run. Confirm the two-phase pipeline returns a long *cited* report (not the old 3KB uncited stub) in acceptable time, with the disinformation tagging present.
-- [ ] **Applet bridge in-iframe round-trip.** `window.parslee.ask()` click→result was never screen-verified (dual-monitor friction). Confirm a composed applet's button actually re-queries and updates.
+- [ ] **Applet bridge in-iframe round-trip.** `window.chervil.ask()` click→result was never screen-verified (dual-monitor friction). Confirm a composed applet's button actually re-queries and updates — and that an *old* saved page using the `window.parslee` alias still works.
 - [ ] **Living pages timer fire (P5/P13).** Observe a real ≥5-min refresh cycle change content, raise a toast, and — when backgrounded — fire an OS notification that deep-links back. (Watch Windows Focus Assist suppressing toasts.)
 - [ ] **Multi-provider live calls (P12).** Grok / Gemini / Azure live grounding + citation parsing are unverified (need real keys). At minimum verify the providers you intend to advertise on day one.
 - [ ] **Voice input STT (live).** Needs a real mic + Whisper key — record→transcribe→insert→optional autosend.
 - [ ] **MCP (P11).** Needs a real remote MCP server + Claude credits — confirm a tool actually runs and surfaces the "using <tool>" status.
-- [ ] **Internal rename pass (Parslee → Chervil).** Public-facing docs are done; code identifiers are not. Migrate and verify: `PARSLEE_*` env prefixes, the `window.parslee` injected page bridge, `parslee:*` IPC channel names, and the `parslee-state.json` file (with a migration path so existing users don't lose state). The page bridge and state migration are the risky bits — live-verify after.
+- [ ] **Internal rename live-verify (Parslee → Chervil).** The code rename is DONE and backward-compatible — `CHERVIL_*` env (with `PARSLEE_*`/`PINGCHAT_*` fallback), `chervil:*` IPC, `window.chervil` bridge (+ `window.parslee` alias), and `chervil-state.json` / `chervil-keys.bin` (each with a one-time read-fallback to the legacy `parslee-*` file). `node --check` passes; NOT yet run in the live app. Verify in a running build: existing state + keys migrate forward, an old saved page's applet still works via the alias, and every IPC path functions. The state/key migration is the risky bit.
 
 ## P2 — Polish / known rough edges
 
-- [ ] **State-file growth.** History stores full page HTML + conversation snapshots; confirm the ~100 cap + Trash keeps `parslee-state.json` from ballooning, and consider compaction.
-- [ ] **`<!-- parslee:refine -->` reliability.** Refine-in-place depends on the model emitting the marker; confirm graceful default to "new" and acceptable hit rate.
+- [ ] **State-file growth.** History stores full page HTML + conversation snapshots; confirm the ~100 cap + Trash keeps `chervil-state.json` from ballooning, and consider compaction.
+- [ ] **`<!-- chervil:refine -->` reliability.** Refine-in-place depends on the model emitting the marker; confirm graceful default to "new" and acceptable hit rate.
 - [ ] **Map view (P7) rendering.** Live node cards were occluded by the env's window overlap — confirm the tree renders and `jumpToNode` works on a clean screen.
 - [ ] **Remix + Audio Overview (P4).** Live GUI not screenshot-verified; confirm each remix action and OS-voice narration with real speakers.
 - [ ] **Cross-OS pass.** If shipping both, smoke-test Windows + macOS (paths, safeStorage, notifications, printToPDF).

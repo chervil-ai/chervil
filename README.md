@@ -51,10 +51,9 @@ Environment variables also work (a `.env` is supported):
 > Deep Dive). Grok and Gemini support live grounding. Azure and Ollama are
 > compose-only (no live web search).
 >
-> **Env-var migration:** the code currently reads `PARSLEE_*` (and legacy
-> `PINGCHAT_*`) prefixes; the `CHERVIL_*` names above are the target and will be
-> wired up as part of the rename pass (see [docs/pre-launch-hardening.md](docs/pre-launch-hardening.md)).
-> Until then, `PARSLEE_*` still works.
+> **Env vars:** `CHERVIL_*` is the primary prefix. The older `PARSLEE_*` (and
+> legacy `PINGCHAT_*`) names are still read as fallbacks, so existing `.env`
+> files keep working.
 
 ## Status & roadmap
 
