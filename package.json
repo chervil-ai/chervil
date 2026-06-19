@@ -21,6 +21,7 @@
     "docx": "^9.7.1",
     "dotenv": "^17.0.0",
     "exceljs": "^4.4.0",
+    "gifenc": "^1.0.3",
     "pptxgenjs": "^4.0.1"
   },
   "devDependencies": {

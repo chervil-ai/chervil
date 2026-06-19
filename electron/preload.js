@@ -64,6 +64,9 @@ contextBridge.exposeInMainWorld('chervil', {
   /** Export a composed page as an image (PNG/JPG) via a full-page screenshot. */
   exportImage: (payload) => ipcRenderer.invoke('chervil:export-image', payload),
 
+  /** Export a composed page as an animated GIF (records a few seconds). */
+  exportGif: (payload) => ipcRenderer.invoke('chervil:export-gif', payload),
+
   /** Transcribe recorded mic audio via the configured Whisper-compatible STT. */
   transcribe: (payload) => ipcRenderer.invoke('chervil:transcribe', payload),
 

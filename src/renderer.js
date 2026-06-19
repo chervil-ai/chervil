@@ -2858,6 +2858,16 @@ async function exportCurrentImage(format) {
   else if (res && !res.canceled) addMessage(tab, 'bot', `Couldn't export image: ${res.error || 'unknown error'}`, 'error');
 }
 
+async function exportCurrentGif() {
+  const tab = activeTab();
+  const entry = currentEntry(tab);
+  if (!entry || entry.kind !== 'page') return;
+  toast('Recording animated GIF (~3s)…');
+  const res = await window.chervil.exportGif({ html: entry.html, suggestedName: entry.title });
+  if (res && res.ok) addMessage(tab, 'bot', `Exported animated GIF to ${res.path}`);
+  else if (res && !res.canceled) addMessage(tab, 'bot', `Couldn't export GIF: ${res.error || 'unknown error'}`, 'error');
+}
+
 // The remix-bar "⤓ Export…" dropdown routes to the chosen format, then resets.
 function onExportSelect(e) {
   const v = e.target.value;
@@ -2865,6 +2875,7 @@ function onExportSelect(e) {
   if (v === 'pdf') exportCurrentPdf();
   else if (v === 'png') exportCurrentImage('png');
   else if (v === 'jpg') exportCurrentImage('jpg');
+  else if (v === 'gif') exportCurrentGif();
   else if (v === 'pptx') exportCurrentPptx();
   else if (v === 'docx') exportCurrentDocx();
   else if (v === 'xlsx') exportCurrentXlsx();

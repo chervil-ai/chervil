@@ -745,6 +745,69 @@ ipcMain.handle('chervil:export-image', async (event, payload) => {
   }
 });
 
+// --- Export a composed page as an animated GIF (records ~3s of the page) --
+ipcMain.handle('chervil:export-gif', async (event, payload) => {
+  const { html, suggestedName } = payload || {};
+  if (!html) return { ok: false, error: 'Nothing to export.' };
+  const win = BrowserWindow.fromWebContents(event.sender);
+  const safe = String(suggestedName || 'chervil-page')
+    .replace(/[^a-z0-9\-_ ]+/gi, '').trim().slice(0, 80) || 'chervil-page';
+  const { canceled, filePath } = await dialog.showSaveDialog(win, {
+    title: 'Export animated GIF',
+    defaultPath: `${safe}.gif`,
+    filters: [{ name: 'GIF', extensions: ['gif'] }],
+  });
+  if (canceled || !filePath) return { ok: false, canceled: true };
+
+  const tmp = path.join(os.tmpdir(), `chervil-gif-${Date.now()}.html`);
+  const shot = new BrowserWindow({ show: false, width: 960, height: 640, webPreferences: { sandbox: true } });
+  try {
+    fs.writeFileSync(tmp, html, 'utf8');
+    await shot.loadFile(tmp);
+    shot.setBounds({ x: -32000, y: 0, width: 960, height: 640 });
+    shot.showInactive();
+    await new Promise((r) => setTimeout(r, 500)); // let it paint / start animating
+
+    const { GIFEncoder, quantize, applyPalette } = require('gifenc');
+    const enc = GIFEncoder();
+    const FRAMES = 30;
+    const DELAY = 100; // ms/frame → ~3s at ~10fps
+    const MAXW = 720;
+
+    // Lock output dimensions from the first frame so every frame matches.
+    const first = await shot.webContents.capturePage();
+    const s0 = first.getSize();
+    const targetW = Math.min(s0.width || MAXW, MAXW);
+    const targetH = Math.max(1, Math.round((s0.height || 1) * (targetW / (s0.width || targetW))));
+
+    for (let i = 0; i < FRAMES; i++) {
+      const cap = i === 0 ? first : await shot.webContents.capturePage();
+      const img = cap.resize({ width: targetW, height: targetH });
+      const bgra = img.toBitmap(); // Electron NativeImage bitmap is BGRA
+      const rgba = Buffer.allocUnsafe(bgra.length);
+      for (let p = 0; p < bgra.length; p += 4) {
+        rgba[p] = bgra[p + 2];
+        rgba[p + 1] = bgra[p + 1];
+        rgba[p + 2] = bgra[p];
+        rgba[p + 3] = bgra[p + 3];
+      }
+      const u8 = new Uint8Array(rgba.buffer, rgba.byteOffset, rgba.length);
+      const palette = quantize(u8, 256);
+      const index = applyPalette(u8, palette);
+      enc.writeFrame(index, targetW, targetH, { palette, delay: DELAY });
+      if (i < FRAMES - 1) await new Promise((r) => setTimeout(r, DELAY));
+    }
+    enc.finish();
+    fs.writeFileSync(filePath, Buffer.from(enc.bytes()));
+    return { ok: true, path: filePath };
+  } catch (err) {
+    return { ok: false, error: String(err && err.message ? err.message : err) };
+  } finally {
+    try { shot.destroy(); } catch { /* ignore */ }
+    try { fs.unlinkSync(tmp); } catch { /* ignore */ }
+  }
+});
+
 // --- Save a composed page to disk ---------------------------------------
 ipcMain.handle('chervil:save-page', async (event, payload) => {
   const { html, suggestedName } = payload || {};
