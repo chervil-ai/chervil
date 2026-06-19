@@ -465,6 +465,8 @@ function openTabMenu(e, tabId) {
   const i = tabs.findIndex((t) => t.id === tabId);
   menu.querySelector('[data-act="others"]').disabled = tabs.length <= 1;
   menu.querySelector('[data-act="right"]').disabled = i < 0 || i >= tabs.length - 1;
+  const layoutBtn = menu.querySelector('[data-act="layout"]');
+  if (layoutBtn) layoutBtn.textContent = isVerticalTabs() ? 'Switch to horizontal tabs' : 'Switch to vertical tabs';
   menu.hidden = false;
   const mw = menu.offsetWidth || 200;
   const mh = menu.offsetHeight || 220;
@@ -485,6 +487,7 @@ function onTabMenuClick(act) {
   else if (act === 'others') closeOtherTabs(id);
   else if (act === 'right') closeTabsToRight(id);
   else if (act === 'select') enterTabSelect(id);
+  else if (act === 'layout') toggleTabLayout();
   else if (act === 'all') closeAllTabs();
 }
 
@@ -605,6 +608,13 @@ function isVerticalTabs() {
 function applyTabLayout() {
   const app = document.getElementById('app');
   if (app) app.classList.toggle('vtabs', isVerticalTabs());
+}
+
+function toggleTabLayout() {
+  settings.tabLayout = isVerticalTabs() ? 'horizontal' : 'vertical';
+  applyTabLayout();
+  if (els.tabLayoutSelect) els.tabLayoutSelect.value = settings.tabLayout;
+  scheduleSave();
 }
 
 // ---- Drag-to-reorder tabs (works horizontally or vertically) ----
