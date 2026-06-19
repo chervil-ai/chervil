@@ -17,6 +17,14 @@ point.
 *(Chervil is "French parsley" — which is exactly why Sprig, our leafy guide, feels
 right at home.)*
 
+## Demo
+
+> 🎬 A short screen capture of Sprig composing a page from a question is on the
+> way. _(Building in public — it'll land right here.)_
+
+<!-- When recorded, save it as Images/demo.gif and replace the line above with:
+![Chervil composing a page from a question](Images/demo.gif) -->
+
 ## What it does
 
 - **Compose pages, not link lists** — grounded in live web search, rendered in a sandbox.
@@ -26,6 +34,11 @@ right at home.)*
 - **Spaces** — persistent topic workspaces that synthesize across everything you've gathered.
 - **Living pages** — schedule a page to re-ground itself and notify you when it changes.
 - **Agentic web actions** — Sprig can operate real sites for you, with hard safety gates (see [SECURITY.md](SECURITY.md)).
+- **Quick-ask** — a global hotkey opens a floating ask bar; Chervil lives in the tray, always a keystroke away.
+- **Scheduled agents** — run prompts on a daily/weekly/interval schedule in the background, optionally "as" a chosen agent.
+- **Agent files** — import a persona (instructions, model, tools, starters) to make Sprig a specialist. Starters in [`/agents`](agents).
+- **Video summaries** — summarize YouTube videos from captions, or watched natively on Gemini.
+- **Export anywhere** — turn any page into PDF, PowerPoint, Word, Excel, an image, or an animated GIF.
 - **Bring your own AI** — pluggable providers: Claude, Grok, Gemini, Azure AI Foundry, and local Ollama.
 
 ## Run from source

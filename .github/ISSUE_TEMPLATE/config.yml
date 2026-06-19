@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Website
+    url: https://getchervil.com
+    about: Learn what Chervil is and follow along.
+  - name: Report a security issue (privately)
+    url: https://github.com/chervil-ai/chervil/security/policy
+    about: Please report vulnerabilities privately per SECURITY.md — do not open a public issue.

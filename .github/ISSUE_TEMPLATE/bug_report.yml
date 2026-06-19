@@ -1,0 +1,58 @@
+name: Bug report
+description: Something isn't working as expected
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for helping improve Chervil. Please search existing issues first, and never paste API keys or secrets.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: A clear description of the bug and what you expected instead.
+      placeholder: When I…, Chervil…
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Open …
+        2. Ask Sprig …
+        3. See …
+    validations:
+      required: true
+  - type: dropdown
+    id: provider
+    attributes:
+      label: AI provider in use
+      options:
+        - Claude
+        - Grok
+        - Gemini
+        - Azure AI Foundry
+        - Ollama (local)
+        - Not sure / N/A
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: OS & version
+      placeholder: Windows 11 / macOS 14 / Ubuntu 24.04
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Chervil version / commit
+      placeholder: v0.1.0 or a git commit hash
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs or screenshots
+      description: Console output (View → Toggle Developer Tools) or screenshots. Redact any keys.
+      render: shell
