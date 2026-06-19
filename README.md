@@ -1,127 +1,75 @@
-# Parslee ◈
+# Chervil — the agentic, conversational web browser
 
-**The Agentic, Conversational Modern Web Browser.**
+> ⚠️ **Alpha / building in public.** Chervil is young and moves fast. Many
+> features are implemented but not yet end-to-end verified on every platform.
+> Treat this as a preview, not a stable release. No packaged installer yet — run
+> from source (below).
 
-Parslee replaces the list of blue links with a conversation. You talk to the web,
-and Parslee brings it alive — searching the live web in real time and **composing a
-complete, beautiful web page** in response, or **opening a real site** in an embedded
-browser when that's what you actually want.
+**Chervil replaces the browse-and-skim loop with a conversation.** Instead of ten
+blue links, you talk to **Sprig** — an assistant that searches the live web, then
+composes a single, self-contained, image-rich page built for your exact question.
+When you actually want a real site (email, bank, a web app), Sprig opens it live.
+Synthesized pages when synthesis is better; the real web when the real web is the
+point.
 
-It's a hybrid browser:
+*(Chervil is "French parsley" — which is exactly why Sprig, our leafy guide, feels
+right at home.)*
 
-- **Composed pages** — for questions, comparisons, research, and discovery, Parslee
-  synthesizes a self-contained HTML page (text, images, layout, light interactivity),
-  grounded in current sources via live web search.
-- **Real sites** — when you ask to "open YouTube" or "go to gmail", Parslee embeds the
-  actual website in a live browser view.
+## What it does
 
----
+- **Compose pages, not link lists** — grounded in live web search, rendered in a sandbox.
+- **Living, interactive pages** — composed pages can call back to Sprig at runtime to fetch fresh data (mini-apps, not printouts).
+- **Deep Dive** — a two-phase research pipeline that produces a long, cited report with disinformation vetting.
+- **Trust layer** — every page can show its sources and one-click **Verify** its own claims against live sources.
+- **Spaces** — persistent topic workspaces that synthesize across everything you've gathered.
+- **Living pages** — schedule a page to re-ground itself and notify you when it changes.
+- **Agentic web actions** — Sprig can operate real sites for you, with hard safety gates (see [SECURITY.md](SECURITY.md)).
+- **Bring your own AI** — pluggable providers: Claude, Grok, Gemini, Azure AI Foundry, and local Ollama.
 
-## Quick start
+## Run from source
 
 ```bash
-# 1. Install dependencies
+git clone <this-repo>
+cd <repo>
 npm install
-
-# 2. Add your Anthropic API key
-cp .env.example .env
-#   then edit .env and set ANTHROPIC_API_KEY=sk-ant-...
-
-# 3. Launch
-npm start
+npm start          # alias: npm run dev
 ```
 
-Get an API key at <https://console.anthropic.com>.
-
----
-
-## How it works
-
-```
-┌─────────────────┐     IPC      ┌──────────────────────────────┐
-│  Renderer (UI)  │ ───────────▶ │  Main process (Electron)     │
-│  chat + canvas  │ ◀─────────── │  runs the agent              │
-└─────────────────┘  stream      └───────────────┬──────────────┘
-                                                  │
-                                         ┌────────▼─────────┐
-                                         │  Model provider  │  (pluggable)
-                                         │  default: Claude │
-                                         └────────┬─────────┘
-                                                  │ web_search / web_fetch
-                                                  │ open_website (decide to embed)
-                                                  ▼
-                                    Composed HTML  ──or──  Real-site URL
-```
-
-For each message the model either:
-
-1. **Composes a page** — grounds itself with the server-side `web_search` /
-   `web_fetch` tools, then streams back a full HTML document that renders in a
-   sandboxed `<iframe>`, or
-2. **Calls `open_website(url)`** — a client-side tool that tells the UI to load a
-   real site in a `<webview>`.
-
-### Project layout
-
-| Path | Purpose |
-|------|---------|
-| `electron/main.js` | App window + IPC; bridges UI ↔ agent |
-| `electron/preload.js` | Safe `window.parslee` bridge (contextIsolation) |
-| `lib/agent.js` | Thin orchestrator for one turn |
-| `lib/models/index.js` | Pluggable provider registry |
-| `lib/models/claude.js` | Claude provider: tools, system prompt, streaming, HTML extraction |
-| `src/` | Renderer UI (chat sidebar + page canvas) |
-
----
-
-## Configuration
-
-Set in `.env`:
+You'll need an API key for at least one provider (or a local [Ollama](https://ollama.com)
+install for free, offline use). Add keys in **Settings ⚙ → Provider** — they're
+encrypted at rest on your machine and never round-tripped through the UI.
+Environment variables also work (a `.env` is supported):
 
 | Variable | Default | Notes |
 |----------|---------|-------|
-| `ANTHROPIC_API_KEY` | — | **Required.** |
-| `PARSLEE_MODEL` | `claude-sonnet-4-6` | Use `claude-opus-4-8` for maximum quality at the cost of latency. |
-| `PARSLEE_EFFORT` | `low` | How hard the model deliberates. Try `medium`/`high` for richer pages. |
-| `PARSLEE_PROVIDER` | `claude` | The model backend. |
+| `CHERVIL_PROVIDER` | `claude` | Model backend: `claude`, `grok`, `gemini`, `azure`, `ollama`. |
+| `CHERVIL_MODEL` | `claude-sonnet-4-6` | Use `claude-opus-4-8` for maximum quality at higher latency. |
+| `CHERVIL_EFFORT` | `low` | How hard the model deliberates (`low`/`medium`/`high`). |
+| `ANTHROPIC_API_KEY` | — | Claude — the only provider with the full Deep Dive + web grounding (search *and* fetch). |
 
-The legacy `PINGCHAT_*` names are still honored as a fallback.
+> Provider notes: Claude has the richest experience (live grounding + two-phase
+> Deep Dive). Grok and Gemini support live grounding. Azure and Ollama are
+> compose-only (no live web search).
+>
+> **Env-var migration:** the code currently reads `PARSLEE_*` (and legacy
+> `PINGCHAT_*`) prefixes; the `CHERVIL_*` names above are the target and will be
+> wired up as part of the rename pass (see [docs/pre-launch-hardening.md](docs/pre-launch-hardening.md)).
+> Until then, `PARSLEE_*` still works.
 
-### Adding another model backend
+## Status & roadmap
 
-The model is pluggable. Create `lib/models/<name>.js` exporting a factory with a
-`run({ query, history, onStatus, onText })` method that resolves to either
-`{ kind: 'page', html, title, sources }` or `{ kind: 'navigate', url, reason }`,
-then register it in `lib/models/index.js`.
+This is an early public build. See [docs/pre-launch-hardening.md](docs/pre-launch-hardening.md)
+for the known verification gaps we're closing before a signed, packaged release.
+The direction: deeper multi-step agents, Spaces that hold your files as permanent
+sources, richer computed pages, and ever-stronger trust tooling.
 
----
+## Tech
 
-## Browser features
-
-- **Tabs** — each tab is its own chat *and* its own back/forward page stack. New tab = new conversation.
-- **Back / Forward** — navigate the history of pages you've composed (and real sites you've opened) within a tab.
-- **Save** — export any composed page to a standalone `.html` file via the Save button.
-- **Persistence** — tabs, prompts, and pages are saved to disk and restored on the next launch.
-
-### Keyboard shortcuts
-
-| Shortcut | Action |
-|----------|--------|
-| `Ctrl+T` | New tab |
-| `Ctrl+W` | Close tab |
-| `Alt+←` / `Alt+→` | Back / Forward |
-
-Session state lives in `parslee-state.json` under Electron's `userData` directory.
-
-## Status
-
-This is an early MVP / prototype. Roadmap ideas:
-
-- Click-through: let links inside composed pages start new Parslee queries
-- Per-page follow-up chat ("make this darker", "add a price table")
-- A saved-pages library (browse everything you've saved)
-- Concurrent generations across tabs (today, one request runs at a time)
+Electron desktop app (bundles its own engine — no installed browser needed). A
+main process holds keys and talks to providers; a sandboxed renderer is the UI;
+the model layer is fully pluggable. See [CONTRIBUTING.md](CONTRIBUTING.md) for
+architecture and how to add a provider.
 
 ## License
 
-MIT
+[MIT](LICENSE) © 2026 Rod Trent.

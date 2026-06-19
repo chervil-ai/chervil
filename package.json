@@ -1,7 +1,7 @@
 {
-  "name": "parslee",
+  "name": "chervil",
   "version": "0.1.0",
-  "description": "Parslee — the Agentic, Conversational Modern Web Browser",
+  "description": "Chervil — the Agentic, Conversational Modern Web Browser",
   "main": "electron/main.js",
   "scripts": {
     "start": "electron .",
