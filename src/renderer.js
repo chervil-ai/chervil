@@ -90,6 +90,7 @@ const els = {
   voiceAutosend: document.getElementById('voice-autosend'),
   // Appearance
   tabLayoutSelect: document.getElementById('tab-layout-select'),
+  remixDefaultSelect: document.getElementById('remix-default-select'),
   // Notifications
   notifyToggle: document.getElementById('notify-toggle'),
   // MCP servers (Claude's native remote MCP connector)
@@ -2673,6 +2674,7 @@ function applySettingsToUI() {
   els.profileInput.value = settings.profile || '';
   if (els.notifyToggle) els.notifyToggle.checked = settings.notifications !== false;
   if (els.tabLayoutSelect) els.tabLayoutSelect.value = isVerticalTabs() ? 'vertical' : 'horizontal';
+  if (els.remixDefaultSelect) els.remixDefaultSelect.value = settings.remixMinimized ? 'minimized' : 'expanded';
   if (els.sttEndpoint) els.sttEndpoint.value = settings.sttEndpoint || '';
   if (els.sttModel) els.sttModel.value = settings.sttModel || '';
   if (els.voiceAutosend) els.voiceAutosend.checked = !!settings.voiceAutosend;
@@ -3262,6 +3264,14 @@ if (els.sttKeySave) els.sttKeySave.addEventListener('click', async () => {
 if (els.tabLayoutSelect) els.tabLayoutSelect.addEventListener('change', () => {
   settings.tabLayout = els.tabLayoutSelect.value === 'vertical' ? 'vertical' : 'horizontal';
   applyTabLayout();
+  scheduleSave();
+});
+
+// Default state of the floating Remix/Export bar; applies to the current page too.
+if (els.remixDefaultSelect) els.remixDefaultSelect.addEventListener('change', () => {
+  settings.remixMinimized = els.remixDefaultSelect.value === 'minimized';
+  const showing = !els.remixBar.hidden || (els.remixHandle && !els.remixHandle.hidden);
+  setRemixVisible(showing);
   scheduleSave();
 });
 
