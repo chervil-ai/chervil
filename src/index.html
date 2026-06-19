@@ -38,13 +38,15 @@
                   placeholder="Hey Sprig, ask…"
                   title="Start with “Hey Sprig, …” · Enter to send, Shift+Enter for a new line"
                   aria-label="Ask Sprig"></textarea>
-        <button id="attach-btn" type="button" class="composer-icon"
-                title="Attach files (text, CSV, image, PDF)">📎</button>
-        <button id="mic-btn" type="button" class="composer-icon"
-                title="Voice input — talk to Sprig" aria-pressed="false">🎤</button>
-        <button id="deep-toggle" type="button" class="deep-toggle" aria-pressed="false"
-                title="Deep Dive — thorough, cited research (slower)">🔬</button>
-        <button id="send" type="submit" title="Send">↑</button>
+        <div class="composer-tools">
+          <button id="attach-btn" type="button" class="composer-icon"
+                  title="Attach files (text, CSV, image, PDF)">📎</button>
+          <button id="mic-btn" type="button" class="composer-icon"
+                  title="Voice input — talk to Sprig" aria-pressed="false">🎤</button>
+          <button id="deep-toggle" type="button" class="deep-toggle" aria-pressed="false"
+                  title="Deep Dive — thorough, cited research (slower)">🔬</button>
+          <button id="send" type="submit" title="Send">↑</button>
+        </div>
         <input id="file-input" type="file" multiple hidden />
       </form>
     </aside>

@@ -261,15 +261,24 @@ html, body {
 
 #composer {
   display: flex;
-  align-items: flex-end;
-  gap: 6px;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
   padding: 14px;
   border-top: 1px solid var(--border);
   background: var(--panel-2);
 }
 
+/* Toolbar row beneath the prompt: tools on the left, Send pushed to the right. */
+.composer-tools {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
 #prompt {
-  flex: 1;
+  width: 100%;
+  box-sizing: border-box;
   background: var(--bg);
   border: 1px solid var(--border);
   border-radius: 12px;
@@ -290,8 +299,9 @@ html, body {
 
 #send {
   flex: none;
-  width: 46px;
-  height: 46px;
+  margin-left: auto;  /* push Send to the right end of the toolbar */
+  width: 44px;
+  height: 40px;
   border: none;
   border-radius: 12px;
   background: linear-gradient(135deg, var(--accent), var(--accent-2));
@@ -307,7 +317,7 @@ html, body {
 .composer-icon {
   flex: none;
   width: 36px;
-  height: 46px;
+  height: 40px;
   border: 1px solid var(--border);
   border-radius: 12px;
   background: var(--panel);
@@ -385,7 +395,7 @@ html, body {
 .deep-toggle {
   flex: none;
   width: 40px;
-  height: 46px;
+  height: 40px;
   border: 1px solid var(--border);
   border-radius: 12px;
   background: var(--panel);
