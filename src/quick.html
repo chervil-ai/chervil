@@ -45,16 +45,32 @@
       border-radius: 6px;
       padding: 2px 6px;
     }
+    #close {
+      -webkit-app-region: no-drag;
+      flex: none;
+      background: transparent;
+      border: none;
+      color: #7c8595;
+      font-size: 16px;
+      line-height: 1;
+      cursor: pointer;
+      padding: 4px 6px;
+      border-radius: 6px;
+    }
+    #close:hover { color: #e6e6e6; background: rgba(255, 255, 255, 0.08); }
   </style>
 </head>
 <body>
   <div id="bar">
     <span id="leaf">🌿</span>
     <input id="q" type="text" placeholder="Hey Sprig, ask…" autocomplete="off" spellcheck="false" />
-    <span id="hint">Enter ↵</span>
+    <span id="hint">↵ send · Esc to close</span>
+    <button id="close" title="Close (Esc)" aria-label="Close">✕</button>
   </div>
   <script>
     const q = document.getElementById('q');
+    const closeBtn = document.getElementById('close');
+    if (closeBtn) closeBtn.addEventListener('click', () => { if (window.quick) window.quick.hide(); });
     function focusInput() { try { q.focus(); q.select(); } catch (e) {} }
     // Refocus + clear each time the bar is summoned.
     if (window.quick && window.quick.onShow) window.quick.onShow(() => { q.value = ''; setTimeout(focusInput, 30); });
