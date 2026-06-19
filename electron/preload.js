@@ -74,6 +74,9 @@ contextBridge.exposeInMainWorld('chervil', {
     return () => ipcRenderer.removeListener('chervil:notification-click', handler);
   },
 
+  /** Subscribe to prompts sent from the floating quick-ask bar (global hotkey). */
+  onQuickPrompt: (cb) => ipcRenderer.on('chervil:quick-prompt', (_e, prompt) => cb(prompt)),
+
   /** Load persisted session state (tabs, prompts, pages). */
   loadState: () => ipcRenderer.invoke('chervil:load-state'),
 

@@ -2735,4 +2735,12 @@ if (window.chervil.onNotificationClick) {
   });
 }
 
+// Prompts fired from the floating quick-ask bar (global hotkey) open a fresh tab.
+if (window.chervil.onQuickPrompt) {
+  window.chervil.onQuickPrompt((prompt) => {
+    newTab(true);
+    handleComposerSubmit(String(prompt || ''));
+  });
+}
+
 init();

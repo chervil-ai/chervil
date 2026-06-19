@@ -3,7 +3,7 @@
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
-const { app, BrowserWindow, ipcMain, dialog, safeStorage, Notification } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, safeStorage, Notification, Tray, Menu, globalShortcut, screen } = require('electron');
 
 // Load .env from the project root (one level up from /electron).
 // quiet:true suppresses dotenv v17's "injected env … tip" banner (which also
@@ -13,6 +13,9 @@ require('dotenv').config({ path: path.join(__dirname, '..', '.env'), quiet: true
 const { runAgent, runAppletAsk, runListModels, runAgentStep, runExtractSlides, runExtractDoc, runExtractSheets } = require('../lib/agent');
 
 let mainWindow = null;
+let tray = null;
+let quickWindow = null;
+let isQuitting = false; // true only when truly quitting (tray → Quit); otherwise window close = hide-to-tray
 
 // --- Bring-your-own API keys (per provider, encrypted at rest via safeStorage) ---
 function keysFile() {
@@ -121,9 +124,104 @@ function createWindow() {
     return BROWSING_OK.has(permission);
   });
 
+  // Close to tray instead of quitting, so the global hotkey (and background work)
+  // keep running. A real quit goes through the tray menu (which sets isQuitting).
+  mainWindow.on('close', (e) => {
+    if (!isQuitting) { e.preventDefault(); mainWindow.hide(); }
+  });
+
   // Uncomment to debug the renderer.
   // mainWindow.webContents.openDevTools({ mode: 'detach' });
 }
+
+// --- Floating quick-ask (global hotkey) + system tray -------------------------
+
+function showMain() {
+  if (!mainWindow || mainWindow.isDestroyed()) { createWindow(); return; }
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  mainWindow.show();
+  mainWindow.focus();
+}
+
+function createQuickWindow() {
+  quickWindow = new BrowserWindow({
+    width: 640,
+    height: 96,
+    frame: false,
+    resizable: false,
+    transparent: true,
+    backgroundColor: '#00000000',
+    alwaysOnTop: true,
+    skipTaskbar: true,
+    show: false,
+    webPreferences: {
+      preload: path.join(__dirname, 'quick-preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+    },
+  });
+  quickWindow.loadFile(path.join(__dirname, '..', 'src', 'quick.html'));
+  // Spotlight behavior: clicking away (blur) dismisses it.
+  quickWindow.on('blur', () => { if (quickWindow && quickWindow.isVisible()) quickWindow.hide(); });
+  quickWindow.on('close', (e) => { if (!isQuitting) { e.preventDefault(); quickWindow.hide(); } });
+}
+
+function showQuick() {
+  if (!quickWindow || quickWindow.isDestroyed()) createQuickWindow();
+  const area = screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).workArea;
+  const w = 640;
+  quickWindow.setBounds({
+    x: Math.round(area.x + (area.width - w) / 2),
+    y: Math.round(area.y + area.height * 0.18),
+    width: w,
+    height: 96,
+  });
+  quickWindow.show();
+  quickWindow.focus();
+  if (!quickWindow.webContents.isDestroyed()) quickWindow.webContents.send('chervil:quick-show');
+}
+
+function hideQuick() { if (quickWindow && !quickWindow.isDestroyed()) quickWindow.hide(); }
+
+function toggleQuick() {
+  if (quickWindow && quickWindow.isVisible()) hideQuick();
+  else showQuick();
+}
+
+function createTray() {
+  try {
+    tray = new Tray(path.join(__dirname, '..', 'build', 'icon.ico'));
+  } catch {
+    return; // no tray icon available — skip gracefully
+  }
+  tray.setToolTip('Chervil');
+  tray.setContextMenu(Menu.buildFromTemplate([
+    { label: 'Open Chervil', click: showMain },
+    { label: 'Quick ask  (Ctrl+Shift+Space)', click: toggleQuick },
+    { type: 'separator' },
+    {
+      label: 'Launch at login',
+      type: 'checkbox',
+      checked: app.getLoginItemSettings().openAtLogin,
+      click: (item) => app.setLoginItemSettings({ openAtLogin: item.checked }),
+    },
+    { type: 'separator' },
+    { label: 'Quit Chervil', click: () => { isQuitting = true; app.quit(); } },
+  ]));
+  tray.on('click', showMain);
+}
+
+// The floating quick-ask hands its prompt to the main window (new tab + compose).
+ipcMain.on('chervil:quick-hide', () => hideQuick());
+ipcMain.on('chervil:quick-submit', (_event, text) => {
+  hideQuick();
+  const t = String(text || '').trim();
+  if (!t) return;
+  showMain();
+  if (mainWindow && !mainWindow.webContents.isDestroyed()) {
+    mainWindow.webContents.send('chervil:quick-prompt', t);
+  }
+});
 
 app.whenReady().then(() => {
   // Windows shows the AppUserModelID as the toast/notification source; set it so
@@ -132,14 +230,22 @@ app.whenReady().then(() => {
   if (process.platform === 'win32') app.setAppUserModelId('com.chervil.app');
   loadSavedKeys();
   createWindow();
+  createTray();
+  // System-wide hotkey to summon the floating quick-ask, even when Chervil isn't focused.
+  globalShortcut.register('CommandOrControl+Shift+Space', toggleQuick);
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
+    else showMain();
   });
 });
 
+app.on('before-quit', () => { isQuitting = true; });
+app.on('will-quit', () => { globalShortcut.unregisterAll(); });
+
 app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') app.quit();
+  // Stay resident in the tray; quit only via the tray menu (which sets isQuitting).
+  if (isQuitting && process.platform !== 'darwin') app.quit();
 });
 
 /**
