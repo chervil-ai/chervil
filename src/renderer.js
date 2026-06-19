@@ -128,7 +128,7 @@ let settings = {
   provider: 'claude',
   claudeModel: 'claude-sonnet-4-6',
   grokModel: 'grok-3',
-  geminiModel: 'gemini-2.0-flash',
+  geminiModel: 'gemini-2.5-flash',
   azureModel: '',
   azureEndpoint: '',
   azureDeployment: '',
@@ -140,6 +140,7 @@ let settings = {
   profile: '',       // personal "About you" memory — tailors composed pages
   mcpServers: [],    // connected MCP servers: {id, name, url, token, enabled} (Claude only)
   notifications: true, // OS notification when a Living page updates in the background
+  remixMinimized: true, // start the floating remix/export bar collapsed to its corner handle
   tabLayout: 'horizontal', // 'horizontal' (top strip) or 'vertical' (side rail)
   sttEndpoint: 'https://api.openai.com/v1/audio/transcriptions', // Whisper-compatible STT
   sttModel: 'whisper-1',
