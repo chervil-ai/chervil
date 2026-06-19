@@ -17,6 +17,22 @@
     <div id="tabstrip">
       <div id="tabs"></div>
       <button id="new-tab" title="New tab (Ctrl+T)">+</button>
+      <button id="tab-actions" title="Tab actions">⋯</button>
+    </div>
+    <div id="tab-select-bar" hidden>
+      <span id="tab-select-count">0 selected</span>
+      <button id="tab-select-all">Select all</button>
+      <button id="tab-select-close" class="danger">Close selected</button>
+      <button id="tab-select-done">Done</button>
+    </div>
+    <div id="tab-menu" class="ctx-menu" hidden>
+      <button data-act="new">New tab</button>
+      <button data-act="close">Close tab</button>
+      <button data-act="others">Close other tabs</button>
+      <button data-act="right">Close tabs to the right</button>
+      <div class="ctx-sep"></div>
+      <button data-act="select">Select tabs…</button>
+      <button data-act="all" class="ctx-danger">Close all tabs</button>
     </div>
 
     <div id="main">

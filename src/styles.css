@@ -714,6 +714,27 @@ html, body {
 }
 .remix-handle[hidden] { display: none; }
 .remix-handle:hover { border-color: var(--accent); }
+
+/* Tab management: context menu + multi-select close */
+#tab-actions { background: none; border: none; color: var(--muted); cursor: pointer; font-size: 16px; padding: 0 8px; }
+#tab-actions:hover { color: var(--text); }
+.ctx-menu { position: fixed; z-index: 1000; min-width: 200px; background: #11141c; border: 1px solid var(--border); border-radius: 10px; padding: 5px; box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5); display: flex; flex-direction: column; }
+.ctx-menu[hidden] { display: none; }
+.ctx-menu button { text-align: left; background: none; border: none; color: var(--text); font-size: 13px; padding: 7px 10px; border-radius: 6px; cursor: pointer; }
+.ctx-menu button:hover:not(:disabled) { background: rgba(255, 255, 255, 0.07); }
+.ctx-menu button:disabled { color: var(--muted); opacity: 0.5; cursor: default; }
+.ctx-menu .ctx-danger { color: #ff8c8c; }
+.ctx-sep { height: 1px; background: var(--border); margin: 4px 2px; }
+#tab-select-bar { display: flex; align-items: center; gap: 8px; padding: 6px 10px; background: rgba(123, 224, 163, 0.10); border-bottom: 1px solid var(--border); font-size: 12px; color: var(--text); }
+#tab-select-bar[hidden] { display: none; }
+#tab-select-bar #tab-select-count { margin-right: auto; color: var(--muted); }
+#tab-select-bar button { background: rgba(255, 255, 255, 0.06); border: 1px solid var(--border); color: var(--text); border-radius: 7px; padding: 4px 10px; font-size: 12px; cursor: pointer; }
+#tab-select-bar button:hover:not(:disabled) { border-color: var(--accent); }
+#tab-select-bar button:disabled { opacity: 0.5; cursor: default; }
+#tab-select-bar button.danger { background: rgba(255, 90, 90, 0.15); border-color: #7a2c2c; color: #ffb0b0; }
+.tab.selecting { cursor: pointer; }
+.tab.sel { outline: 1px solid var(--accent); outline-offset: -1px; background: rgba(123, 224, 163, 0.12); }
+.tab-check { margin-right: 2px; font-size: 12px; }
 .remix-label {
   font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px;
   color: var(--muted); padding: 0 4px; flex: none;

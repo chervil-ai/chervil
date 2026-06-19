@@ -42,6 +42,13 @@ const els = {
   suggestions: document.getElementById('suggestions'),
   tabs: document.getElementById('tabs'),
   newTab: document.getElementById('new-tab'),
+  tabActions: document.getElementById('tab-actions'),
+  tabMenu: document.getElementById('tab-menu'),
+  tabSelectBar: document.getElementById('tab-select-bar'),
+  tabSelectCount: document.getElementById('tab-select-count'),
+  tabSelectAll: document.getElementById('tab-select-all'),
+  tabSelectClose: document.getElementById('tab-select-close'),
+  tabSelectDone: document.getElementById('tab-select-done'),
   back: document.getElementById('back-btn'),
   fwd: document.getElementById('fwd-btn'),
   navTip: document.getElementById('nav-tip'),
@@ -407,6 +414,118 @@ function switchTab(id) {
   scheduleSave();
 }
 
+// ---- Bulk / managed tab close ----
+// Close every tab in `ids` at once, fixing the active tab and cleaning up state.
+function closeTabs(ids) {
+  const idSet = new Set(ids);
+  idSet.delete(undefined);
+  if (!idSet.size) return;
+  const closingActive = idSet.has(activeId);
+  const activeIdx = tabs.findIndex((t) => t.id === activeId);
+  for (const id of idSet) {
+    const idx = tabs.findIndex((t) => t.id === id);
+    if (idx !== -1) tabs.splice(idx, 1);
+    runState.delete(id);
+  }
+  living = living.filter((r) => !idSet.has(r.tabId));
+  if (tabs.length === 0) {
+    newTab(true);
+  } else if (closingActive) {
+    if (previewTimer) { clearTimeout(previewTimer); previewTimer = null; }
+    const next = tabs[Math.min(activeIdx, tabs.length - 1)] || tabs[tabs.length - 1];
+    activeId = next.id;
+    renderConversation();
+    showActiveTabView();
+    refreshComposer();
+  }
+  renderTabs();
+  scheduleSave();
+}
+
+function closeOtherTabs(id) { closeTabs(tabs.filter((t) => t.id !== id).map((t) => t.id)); }
+
+function closeTabsToRight(id) {
+  const i = tabs.findIndex((t) => t.id === id);
+  if (i === -1) return;
+  closeTabs(tabs.slice(i + 1).map((t) => t.id));
+}
+
+function closeAllTabs() {
+  if (tabs.length > 1 && !confirm(`Close all ${tabs.length} tabs? This clears their conversations.`)) return;
+  closeTabs(tabs.map((t) => t.id));
+}
+
+// ---- Tab right-click context menu ----
+let tabMenuTargetId = null;
+function openTabMenu(e, tabId) {
+  e.preventDefault();
+  e.stopPropagation();
+  tabMenuTargetId = tabId;
+  const menu = els.tabMenu;
+  const i = tabs.findIndex((t) => t.id === tabId);
+  menu.querySelector('[data-act="others"]').disabled = tabs.length <= 1;
+  menu.querySelector('[data-act="right"]').disabled = i < 0 || i >= tabs.length - 1;
+  menu.hidden = false;
+  const mw = menu.offsetWidth || 200;
+  const mh = menu.offsetHeight || 220;
+  let x = e.clientX;
+  let y = e.clientY;
+  if (x + mw > window.innerWidth) x = window.innerWidth - mw - 6;
+  if (y + mh > window.innerHeight) y = window.innerHeight - mh - 6;
+  menu.style.left = Math.max(6, x) + 'px';
+  menu.style.top = Math.max(6, y) + 'px';
+}
+function closeTabMenu() { if (els.tabMenu) els.tabMenu.hidden = true; tabMenuTargetId = null; }
+function onTabMenuClick(act) {
+  const id = tabMenuTargetId;
+  closeTabMenu();
+  if (!id) return;
+  if (act === 'new') newTab(true);
+  else if (act === 'close') closeTab(id);
+  else if (act === 'others') closeOtherTabs(id);
+  else if (act === 'right') closeTabsToRight(id);
+  else if (act === 'select') enterTabSelect(id);
+  else if (act === 'all') closeAllTabs();
+}
+
+// ---- Multi-select close mode ----
+function enterTabSelect(preselectId) {
+  tabSelectMode = true;
+  selectedTabIds = new Set(preselectId ? [preselectId] : []);
+  els.tabSelectBar.hidden = false;
+  updateTabSelectBar();
+  renderTabs();
+}
+function exitTabSelect() {
+  tabSelectMode = false;
+  selectedTabIds.clear();
+  els.tabSelectBar.hidden = true;
+  renderTabs();
+}
+function toggleTabSelected(id) {
+  if (selectedTabIds.has(id)) selectedTabIds.delete(id);
+  else selectedTabIds.add(id);
+  updateTabSelectBar();
+  renderTabs();
+}
+function selectAllTabs() {
+  const all = selectedTabIds.size === tabs.length;
+  selectedTabIds = new Set(all ? [] : tabs.map((t) => t.id));
+  updateTabSelectBar();
+  renderTabs();
+}
+function closeSelectedTabs() {
+  if (!selectedTabIds.size) return;
+  const ids = [...selectedTabIds];
+  exitTabSelect();
+  closeTabs(ids);
+}
+function updateTabSelectBar() {
+  els.tabSelectCount.textContent = `${selectedTabIds.size} selected`;
+  els.tabSelectClose.disabled = selectedTabIds.size === 0;
+  els.tabSelectAll.textContent = (tabs.length && selectedTabIds.size === tabs.length) ? 'Select none' : 'Select all';
+}
+
 function tabLabel(tab) {
   if (tab.title && tab.title !== 'New Tab') return tab.title;
   const firstUser = tab.conversation.find((m) => m.role === 'user');
@@ -419,10 +538,20 @@ function renderTabs() {
   els.tabs.innerHTML = '';
   for (const tab of tabs) {
     const el = document.createElement('div');
-    el.className = 'tab' + (tab.id === activeId ? ' active' : '');
+    el.className = 'tab'
+      + (tab.id === activeId ? ' active' : '')
+      + (tabSelectMode ? ' selecting' : '')
+      + (selectedTabIds.has(tab.id) ? ' sel' : '');
     el.title = tabLabel(tab);
     el.dataset.tabId = tab.id;
-    el.draggable = true; // click-hold-drag to reorder, like a browser
+    el.draggable = !tabSelectMode; // click-hold-drag to reorder (off in select mode)
+
+    if (tabSelectMode) {
+      const cb = document.createElement('span');
+      cb.className = 'tab-check';
+      cb.textContent = selectedTabIds.has(tab.id) ? '☑' : '☐';
+      el.appendChild(cb);
+    }
 
     if (isTabBusy(tab.id)) {
       const spin = document.createElement('span');
@@ -435,17 +564,23 @@ function renderTabs() {
     title.textContent = tabLabel(tab);
     el.appendChild(title);
 
-    const close = document.createElement('span');
-    close.className = 'tab-close';
-    close.textContent = '✕';
-    close.addEventListener('click', (e) => {
-      e.stopPropagation();
-      closeTab(tab.id);
-    });
-    el.appendChild(close);
+    if (!tabSelectMode) {
+      const close = document.createElement('span');
+      close.className = 'tab-close';
+      close.textContent = '✕';
+      close.addEventListener('click', (e) => {
+        e.stopPropagation();
+        closeTab(tab.id);
+      });
+      el.appendChild(close);
+    }
 
     // A real drag suppresses the trailing click, so plain clicks still switch tabs.
-    el.addEventListener('click', () => { if (!tabDragId) switchTab(tab.id); });
+    el.addEventListener('click', () => {
+      if (tabSelectMode) { toggleTabSelected(tab.id); return; }
+      if (!tabDragId) switchTab(tab.id);
+    });
+    el.addEventListener('contextmenu', (e) => openTabMenu(e, tab.id));
     el.addEventListener('dragstart', (e) => {
       tabDragId = tab.id;
       el.classList.add('dragging');
@@ -474,6 +609,8 @@ function applyTabLayout() {
 
 // ---- Drag-to-reorder tabs (works horizontally or vertically) ----
 let tabDragId = null;
+let tabSelectMode = false;
+let selectedTabIds = new Set();
 
 // Find the tab the dragged one should be inserted before, based on pointer position.
 function tabDragAfter(x, y) {
@@ -2938,6 +3075,20 @@ els.suggestions.addEventListener('click', (e) => {
 });
 
 els.newTab.addEventListener('click', () => newTab(true));
+els.tabActions.addEventListener('click', (e) => {
+  e.stopPropagation();
+  if (els.tabMenu.hidden) openTabMenu(e, activeId);
+  else closeTabMenu();
+});
+els.tabMenu.addEventListener('click', (e) => {
+  const b = e.target.closest('button[data-act]');
+  if (b && !b.disabled) onTabMenuClick(b.dataset.act);
+});
+els.tabSelectAll.addEventListener('click', selectAllTabs);
+els.tabSelectClose.addEventListener('click', closeSelectedTabs);
+els.tabSelectDone.addEventListener('click', exitTabSelect);
+window.addEventListener('click', () => { if (els.tabMenu && !els.tabMenu.hidden) closeTabMenu(); });
+window.addEventListener('keydown', (e) => { if (e.key === 'Escape') { closeTabMenu(); if (tabSelectMode) exitTabSelect(); } });
 // Tab reorder: allow dropping a dragged tab anywhere along the strip/rail.
 els.tabs.addEventListener('dragover', onTabsDragOver);
 els.tabs.addEventListener('drop', (e) => e.preventDefault());
