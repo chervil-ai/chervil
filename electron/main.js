@@ -637,6 +637,19 @@ ipcMain.handle('chervil:open-agent-file', async (event) => {
   }
 });
 
+// --- List the bundled starter agent files shipped in /agents ------------
+ipcMain.handle('chervil:list-starter-agents', async () => {
+  try {
+    const dir = path.join(__dirname, '..', 'agents');
+    const files = fs.readdirSync(dir)
+      .filter((f) => /\.(md|markdown)$/i.test(f) && f.toLowerCase() !== 'readme.md')
+      .sort();
+    return files.map((f) => ({ filename: f, text: fs.readFileSync(path.join(dir, f), 'utf8') }));
+  } catch {
+    return [];
+  }
+});
+
 // --- Export a composed page as PDF --------------------------------------
 ipcMain.handle('chervil:export-pdf', async (event, payload) => {
   const { html, suggestedName } = payload || {};

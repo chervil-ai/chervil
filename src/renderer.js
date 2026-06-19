@@ -1836,7 +1836,7 @@ function parseAgentFile(text, fallbackName) {
   };
 }
 
-function openAgents() { renderAgents(); els.agentsView.classList.add('open'); }
+function openAgents() { renderAgents(); renderStarterAgents(); els.agentsView.classList.add('open'); }
 function closeAgents() { els.agentsView.classList.remove('open'); }
 function setActiveAgent(id) { activeAgentId = id; scheduleSave(); renderAgents(); updateAgentChip(); }
 
@@ -1934,6 +1934,53 @@ function renderAgents() {
     item.appendChild(main);
     item.appendChild(act);
     item.appendChild(del);
+    list.appendChild(item);
+  }
+}
+
+// Show the bundled /agents starter files with one-click "Add".
+async function renderStarterAgents() {
+  const list = document.getElementById('starter-agents-list');
+  if (!list) return;
+  list.innerHTML = '<div class="sched-empty">Loading…</div>';
+  let files = [];
+  try { files = await window.chervil.listStarterAgents(); } catch { files = []; }
+  list.innerHTML = '';
+  if (!files || !files.length) {
+    const e = document.createElement('div');
+    e.className = 'sched-empty';
+    e.textContent = 'No bundled starter agents found.';
+    list.appendChild(e);
+    return;
+  }
+  for (const f of files) {
+    const a = parseAgentFile(f.text, (f.filename || '').replace(/\.[^.]+$/, ''));
+    if (!a.persona) continue;
+    const item = document.createElement('div');
+    item.className = 'sched-item';
+    const main = document.createElement('div');
+    main.className = 'si-main';
+    const title = document.createElement('div');
+    title.className = 'si-title';
+    title.textContent = a.name;
+    const when = document.createElement('div');
+    when.className = 'si-when';
+    when.textContent = [a.description, a.model ? `model: ${a.model}` : ''].filter(Boolean).join(' · ') || 'persona agent';
+    main.appendChild(title);
+    main.appendChild(when);
+    const add = document.createElement('button');
+    add.className = 'si-btn';
+    add.textContent = agents.some((x) => x.name === a.name) ? 'Add again' : 'Add';
+    add.addEventListener('click', () => {
+      const fresh = parseAgentFile(f.text, (f.filename || '').replace(/\.[^.]+$/, '')); // fresh id
+      agents.push(fresh);
+      scheduleSave();
+      renderAgents();
+      renderStarterAgents();
+      toast(`Added “${fresh.name}”.`);
+    });
+    item.appendChild(main);
+    item.appendChild(add);
     list.appendChild(item);
   }
 }

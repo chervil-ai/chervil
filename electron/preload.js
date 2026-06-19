@@ -79,6 +79,9 @@ contextBridge.exposeInMainWorld('chervil', {
   /** Open a native file picker to import an agent file; returns its text. */
   openAgentFile: () => ipcRenderer.invoke('chervil:open-agent-file'),
 
+  /** List the bundled starter agent files (Markdown) shipped in /agents. */
+  listStarterAgents: () => ipcRenderer.invoke('chervil:list-starter-agents'),
+
   /** Show an OS notification (e.g. a Living page refreshed in the background). */
   notify: (payload) => ipcRenderer.invoke('chervil:notify', payload),
 

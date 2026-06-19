@@ -753,6 +753,7 @@ html, body {
 .tab.sel { outline: 1px solid var(--accent); outline-offset: -1px; background: rgba(123, 224, 163, 0.12); }
 .tab-check { margin-right: 2px; font-size: 12px; }
 #tabstrip, .tab { user-select: none; }
+.agents-subhead { margin: 14px 2px 6px; padding-top: 12px; border-top: 1px solid var(--border); color: var(--muted); font-size: 12px; font-weight: 600; letter-spacing: 0.02em; }
 .remix-label {
   font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px;
   color: var(--muted); padding: 0 4px; flex: none;
