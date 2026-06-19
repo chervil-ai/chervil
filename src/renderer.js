@@ -47,6 +47,8 @@ const els = {
   mapView: document.getElementById('map-view'),
   schedBtn: document.getElementById('sched-btn'),
   schedView: document.getElementById('sched-view'),
+  agentsBtn: document.getElementById('agents-btn'),
+  agentsView: document.getElementById('agents-view'),
   mapClose: document.getElementById('map-close'),
   mapCanvas: document.getElementById('map-canvas'),
   mapEdges: document.getElementById('map-edges'),
@@ -186,6 +188,12 @@ function providerConfig() {
     c.azureDeployment = settings.azureDeployment;
     c.azureApiVersion = settings.azureApiVersion;
   }
+  // An active agent may pin a model (applied only when it matches the current provider).
+  const ag = activeAgent();
+  if (ag && ag.model && (!ag.provider || ag.provider === c.provider)) {
+    c.model = ag.model;
+    if (c.provider === 'ollama') c.ollamaModel = ag.model;
+  }
   return c;
 }
 
@@ -207,6 +215,10 @@ let livingTimer = null;
 // Scheduled agents: run a prompt on a cron-like rule (interval / daily / weekly).
 //   schedule = { id, title, prompt, rule, deep, enabled, lastRun, tabId, entryId, running }
 let schedules = [];
+// Agent files: imported personas/configs that shape Sprig's behavior.
+//   agent = { id, name, description, persona, model, provider, mcp:[names], starters:[] }
+let agents = [];
+let activeAgentId = null;
 const LIVE_INTERVALS = [
   ['off', 'Auto-refresh: off'],
   ['300000', 'every 5 min'],
@@ -1598,6 +1610,128 @@ function addScheduleFromForm() {
   renderSchedules();
 }
 
+// --- Agent files (importable personas / config) -----------------------------
+function activeAgent() { return agents.find((a) => a.id === activeAgentId) || null; }
+function activeAgentPersona() { const a = activeAgent(); return a && a.persona ? a.persona : null; }
+function stripQuotes(s) { return String(s).replace(/^["']|["']$/g, ''); }
+
+// Minimal YAML-frontmatter parser: key: value, key: [a, b], and key:\n  - item lists.
+function parseYamlish(src) {
+  const out = {};
+  let curKey = null;
+  for (const raw of String(src).split('\n')) {
+    if (!raw.trim() || /^\s*#/.test(raw)) continue;
+    const li = raw.match(/^\s*-\s+(.*)$/);
+    if (li && curKey) { (out[curKey] = out[curKey] || []).push(stripQuotes(li[1].trim())); continue; }
+    const kv = raw.match(/^([A-Za-z0-9_]+)\s*:\s*(.*)$/);
+    if (!kv) continue;
+    const k = kv[1];
+    const v = kv[2].trim();
+    if (v === '') { curKey = k; out[k] = []; }
+    else if (v.startsWith('[') && v.endsWith(']')) { out[k] = v.slice(1, -1).split(',').map((x) => stripQuotes(x.trim())).filter(Boolean); curKey = null; }
+    else { out[k] = stripQuotes(v); curKey = null; }
+  }
+  return out;
+}
+
+function parseAgentFile(text, fallbackName) {
+  let fm = {};
+  let body = String(text || '');
+  const m = body.match(/^\s*---\s*\n([\s\S]*?)\n---\s*\n?([\s\S]*)$/);
+  if (m) { fm = parseYamlish(m[1]); body = m[2]; }
+  const list = (v) => (Array.isArray(v) ? v.map(String) : (typeof v === 'string' && v.trim() ? v.split(',').map((s) => s.trim()).filter(Boolean) : []));
+  return {
+    id: uid(),
+    name: String(fm.name || fallbackName || 'Agent').slice(0, 80),
+    description: String(fm.description || '').slice(0, 300),
+    persona: body.trim(),
+    model: fm.model ? String(fm.model) : '',
+    provider: fm.provider ? String(fm.provider).toLowerCase() : '',
+    mcp: list(fm.mcp || fm.mcpServers || fm.mcp_servers),
+    starters: list(fm.starters || fm.starter || fm.examples),
+  };
+}
+
+function openAgents() { renderAgents(); els.agentsView.classList.add('open'); }
+function closeAgents() { els.agentsView.classList.remove('open'); }
+function setActiveAgent(id) { activeAgentId = id; scheduleSave(); renderAgents(); }
+
+async function importAgentFile() {
+  const res = await window.chervil.openAgentFile();
+  if (!res || !res.ok) { if (res && res.error) toast(`Import failed: ${res.error}`); return; }
+  const a = parseAgentFile(res.text, res.name);
+  if (!a.persona) { toast('That file had no agent instructions.'); return; }
+  agents.push(a); scheduleSave(); renderAgents();
+  toast(`Imported agent “${a.name}”.`);
+}
+
+function addAgentFromPaste() {
+  const ta = document.getElementById('agent-paste');
+  const t = (ta.value || '').trim();
+  if (!t) return;
+  const a = parseAgentFile(t, 'Pasted agent');
+  if (!a.persona) { toast('No agent instructions found in the pasted text.'); return; }
+  agents.push(a); ta.value = ''; scheduleSave(); renderAgents();
+}
+
+function renderAgents() {
+  const list = document.getElementById('agents-list');
+  if (!list) return;
+  list.innerHTML = '';
+  if (!agents.length) {
+    const e = document.createElement('div');
+    e.className = 'sched-empty';
+    e.textContent = 'No agents yet. Import an agent file (Markdown + frontmatter) or paste one above.';
+    list.appendChild(e);
+    return;
+  }
+  for (const a of agents) {
+    const item = document.createElement('div');
+    item.className = 'sched-item';
+    const main = document.createElement('div');
+    main.className = 'si-main';
+    const title = document.createElement('div');
+    title.className = 'si-title';
+    title.textContent = (a.id === activeAgentId ? '● ' : '') + a.name;
+    const when = document.createElement('div');
+    when.className = 'si-when';
+    when.textContent = [a.description, a.model ? `model: ${a.model}` : '', (a.mcp && a.mcp.length) ? `mcp: ${a.mcp.join(', ')}` : '']
+      .filter(Boolean).join(' · ') || 'persona agent';
+    main.appendChild(title);
+    main.appendChild(when);
+    if (a.starters && a.starters.length) {
+      const chips = document.createElement('div');
+      chips.className = 'agent-starters';
+      a.starters.slice(0, 5).forEach((s) => {
+        const c = document.createElement('button');
+        c.className = 'si-btn';
+        c.title = s;
+        c.textContent = s.length > 38 ? s.slice(0, 35) + '…' : s;
+        c.addEventListener('click', () => { setActiveAgent(a.id); closeAgents(); newTab(true); handleComposerSubmit(s); });
+        chips.appendChild(c);
+      });
+      main.appendChild(chips);
+    }
+    const act = document.createElement('button');
+    act.className = 'si-btn';
+    act.textContent = a.id === activeAgentId ? 'Deactivate' : 'Activate';
+    act.addEventListener('click', () => setActiveAgent(a.id === activeAgentId ? null : a.id));
+    const del = document.createElement('button');
+    del.className = 'si-btn';
+    del.textContent = 'Delete';
+    del.addEventListener('click', () => {
+      if (activeAgentId === a.id) activeAgentId = null;
+      agents = agents.filter((x) => x.id !== a.id);
+      scheduleSave();
+      renderAgents();
+    });
+    item.appendChild(main);
+    item.appendChild(act);
+    item.appendChild(del);
+    list.appendChild(item);
+  }
+}
+
 // ---- Streaming preview (throttled, active tab only) ----
 function scheduleStreamRender(tabId) {
   if (tabId !== activeId || previewTimer) return;
@@ -1915,6 +2049,7 @@ async function submitQuery(text, opts = {}) {
       profile: settings.profile || null,
       attachments: opts.attachments || [],
       mcpServers: enabledMcpServers(),
+      agent: activeAgentPersona(),
       config: providerConfig(),
     });
 
@@ -2308,9 +2443,14 @@ async function refreshSttKeyStatus() {
 // servers. MCP is Claude-only and remote-URL-only in this build.
 function enabledMcpServers() {
   if (settings.provider !== 'claude') return [];
-  return (settings.mcpServers || [])
-    .filter((s) => s && s.enabled && s.url && s.url.trim())
-    .map((s) => ({ name: s.name || 'mcp', url: s.url.trim(), token: (s.token || '').trim() || undefined, enabled: true }));
+  let servers = (settings.mcpServers || []).filter((s) => s && s.enabled && s.url && s.url.trim());
+  // An active agent can restrict which MCP servers it's allowed to use.
+  const ag = activeAgent();
+  if (ag && Array.isArray(ag.mcp) && ag.mcp.length) {
+    const allow = new Set(ag.mcp.map((n) => String(n).toLowerCase()));
+    servers = servers.filter((s) => allow.has(String(s.name || '').toLowerCase()));
+  }
+  return servers.map((s) => ({ name: s.name || 'mcp', url: s.url.trim(), token: (s.token || '').trim() || undefined, enabled: true }));
 }
 
 function renderMcpServers() {
@@ -2492,7 +2632,7 @@ function scheduleSave() {
   if (saveTimer) clearTimeout(saveTimer);
   saveTimer = setTimeout(() => {
     saveTimer = null;
-    window.chervil.saveState({ tabs, activeId, settings, library, spaces, activeSpaceId, living, schedules });
+    window.chervil.saveState({ tabs, activeId, settings, library, spaces, activeSpaceId, living, schedules, agents, activeAgentId });
   }, 500);
 }
 
@@ -2575,6 +2715,10 @@ async function init() {
     schedules = restored.schedules
       .filter((s) => s && s.prompt && s.rule)
       .map((s) => ({ ...s, running: false }));
+  }
+  if (restored && Array.isArray(restored.agents)) {
+    agents = restored.agents.filter((a) => a && a.persona);
+    activeAgentId = restored.activeAgentId && agents.find((a) => a.id === restored.activeAgentId) ? restored.activeAgentId : null;
   }
   startScheduler();
 
@@ -2741,6 +2885,11 @@ els.schedView.addEventListener('click', (e) => { if (e.target === els.schedView)
 document.getElementById('sched-close').addEventListener('click', closeSched);
 document.getElementById('sched-type').addEventListener('change', onSchedTypeChange);
 document.getElementById('sched-form').addEventListener('submit', (e) => { e.preventDefault(); addScheduleFromForm(); });
+els.agentsBtn.addEventListener('click', openAgents);
+els.agentsView.addEventListener('click', (e) => { if (e.target === els.agentsView) closeAgents(); });
+document.getElementById('agents-close').addEventListener('click', closeAgents);
+document.getElementById('agent-import').addEventListener('click', importAgentFile);
+document.getElementById('agent-add').addEventListener('click', addAgentFromPaste);
 els.mapClose.addEventListener('click', closeMap);
 els.mapView.addEventListener('click', (e) => { if (e.target === els.mapView) closeMap(); });
 
@@ -2896,6 +3045,7 @@ els.synthInput.addEventListener('keydown', (e) => {
 
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') {
+    if (els.agentsView.classList.contains('open')) { closeAgents(); return; }
     if (els.schedView.classList.contains('open')) { closeSched(); return; }
     if (els.mapView.classList.contains('open')) { closeMap(); return; }
     if (els.settingsModal.classList.contains('open')) { closeSettings(); return; }

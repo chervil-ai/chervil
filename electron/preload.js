@@ -73,6 +73,9 @@ contextBridge.exposeInMainWorld('chervil', {
   /** Gemini-native video summary (watches the YouTube video directly). */
   videoGemini: (payload) => ipcRenderer.invoke('chervil:video-gemini', payload),
 
+  /** Open a native file picker to import an agent file; returns its text. */
+  openAgentFile: () => ipcRenderer.invoke('chervil:open-agent-file'),
+
   /** Show an OS notification (e.g. a Living page refreshed in the background). */
   notify: (payload) => ipcRenderer.invoke('chervil:notify', payload),
 

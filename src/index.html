@@ -61,6 +61,7 @@
           <button id="map-btn" class="omni-btn text" title="Thinking canvas — map of this tab's pages">⌗ Map</button>
           <button id="history-btn" class="omni-btn text" title="History &amp; Trash">History</button>
           <button id="sched-btn" class="omni-btn text" title="Scheduled agents">⏰ Schedules</button>
+          <button id="agents-btn" class="omni-btn text" title="Agents — personas &amp; tools">👤 Agents</button>
           <button id="save-btn" class="omni-btn text" title="Save this page to disk" disabled>⤓ Save</button>
           <button id="settings-btn" class="omni-btn" title="Settings">⚙</button>
           <div id="mode-badge" class="badge">ready</div>
@@ -379,6 +380,26 @@
   </div>
 
   <!-- Thinking canvas: a map of the current tab's page tree -->
+  <!-- Agents -->
+  <div id="agents-view" class="sched-view">
+    <div class="sched-panel">
+      <div class="sched-head">
+        <span class="sched-title">👤 Agents</span>
+        <button id="agents-close" class="omni-btn" title="Close">✕</button>
+      </div>
+      <p class="sched-sub">Import an agent file (Markdown + YAML frontmatter) to give Sprig a persona, a default model, allowed MCP servers, and starter prompts. Activate one to apply it to your conversations.</p>
+      <div class="sched-form">
+        <div class="sched-row">
+          <button id="agent-import" type="button" class="sched-add" style="margin-left:0">Import agent file…</button>
+          <span style="color:var(--muted);font-size:12px;">or paste an agent file below</span>
+        </div>
+        <textarea id="agent-paste" rows="5" placeholder="---&#10;name: Morning Briefing&#10;description: Daily AI + security news&#10;model: claude-opus-4-8&#10;mcp: [my-calendar]&#10;starters:&#10;  - Compose today's AI news briefing&#10;---&#10;You are a concise analyst. Cite sources, group by theme, flag anything contested."></textarea>
+        <div class="sched-row"><button id="agent-add" type="button" class="sched-add">Add pasted agent</button></div>
+      </div>
+      <div id="agents-list" class="sched-list"></div>
+    </div>
+  </div>
+
   <!-- Scheduled agents -->
   <div id="sched-view" class="sched-view">
     <div class="sched-panel">

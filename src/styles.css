@@ -545,6 +545,8 @@ html, body {
 }
 .sched-item .si-btn:hover { border-color: var(--accent); }
 .sched-empty { color: var(--muted); font-size: 13px; text-align: center; padding: 16px; }
+.agent-starters { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.agent-starters .si-btn { font-size: 11px; }
 
 /* ---------- Thinking canvas (page map) ---------- */
 .map-view {

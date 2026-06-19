@@ -253,7 +253,7 @@ app.on('window-all-closed', () => {
  * Returns the final result object: a generated page or a navigation directive.
  */
 ipcMain.handle('chervil:ask', async (event, payload) => {
-  const { query, history, requestId, pageContext, allowNavigate, refineMode, spaceContext, deep, verify, profile, attachments, mcpServers } =
+  const { query, history, requestId, pageContext, allowNavigate, refineMode, spaceContext, deep, verify, profile, attachments, mcpServers, agent } =
     payload || {};
   const send = (channel, data) => {
     if (!event.sender.isDestroyed()) event.sender.send(channel, data);
@@ -276,6 +276,7 @@ ipcMain.handle('chervil:ask', async (event, payload) => {
       profile: typeof profile === 'string' ? profile : null,
       attachments: Array.isArray(attachments) ? attachments : [],
       mcpServers: Array.isArray(mcpServers) ? mcpServers : [],
+      agent: typeof agent === 'string' ? agent : null,
       config: providerConfigFrom(payload),
     });
     return { ok: true, result };
@@ -522,6 +523,24 @@ ipcMain.handle('chervil:video-gemini', async (_event, payload) => {
     const watch = `https://www.youtube.com/watch?v=${id}`;
     const { title, summary } = await geminiVideoSummary(watch, cfg);
     return { ok: true, title, summary, url: watch };
+  } catch (err) {
+    return { ok: false, error: String(err && err.message ? err.message : err) };
+  }
+});
+
+// --- Import an agent file (Markdown + frontmatter) -----------------------
+ipcMain.handle('chervil:open-agent-file', async (event) => {
+  const win = BrowserWindow.fromWebContents(event.sender);
+  const { canceled, filePaths } = await dialog.showOpenDialog(win, {
+    title: 'Import agent file',
+    properties: ['openFile'],
+    filters: [{ name: 'Agent files', extensions: ['md', 'markdown', 'agent', 'txt'] }],
+  });
+  if (canceled || !filePaths || !filePaths[0]) return { ok: false, canceled: true };
+  try {
+    const text = fs.readFileSync(filePaths[0], 'utf8');
+    const name = path.basename(filePaths[0]).replace(/\.[^.]+$/, '');
+    return { ok: true, name, text };
   } catch (err) {
     return { ok: false, error: String(err && err.message ? err.message : err) };
   }
