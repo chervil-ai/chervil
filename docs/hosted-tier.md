@@ -5,7 +5,17 @@
 > *require a server you run*. See [capabilities-and-monetization.md](capabilities-and-monetization.md)
 > for the why and [execution-control.md](execution-control.md) for the trust model.
 >
-> Status: proposal / not built. This doc exists to make the decisions before any code.
+> Status: planned, **not building yet (by choice)**. Core decisions locked 2026-06-19.
+
+## Decisions (locked 2026-06-19)
+
+- **Managed inference** is the paid model — Chervil holds provider keys server-side
+  and meters usage; the free tier stays BYO-key. Cap aggressively to control cost.
+- **First paid feature: the Cloud Scheduler (#6)** (after the auth + billing
+  foundation). Video transcription (#5) comes later.
+- **Backend not being built yet** — this is the plan of record; pick it up when ready.
+- Stack/auth/billing as recommended below (Vercel + worker + Postgres + Clerk +
+  Stripe) unless revisited.
 
 ---
 
