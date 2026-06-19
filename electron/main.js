@@ -19,9 +19,20 @@ function keysFile() {
   return path.join(app.getPath('userData'), 'chervil-keys.bin');
 }
 
-// Pre-rename key file; read once for migration if the new one isn't present yet.
+// Before the rename the Electron app used a different name ("parslee", earlier
+// "PingChat"), so user-data lived in a DIFFERENT folder under appData — renaming the
+// package moved getPath('userData'). Look in those old folders so keys/state migrate
+// forward into the current folder instead of being orphaned.
+function legacyDataFile(filename) {
+  const appData = app.getPath('appData');
+  for (const name of ['parslee', 'PingChat', 'pingchat']) {
+    const p = path.join(appData, name, filename);
+    try { if (fs.existsSync(p)) return p; } catch { /* ignore */ }
+  }
+  return '';
+}
 function legacyKeysFile() {
-  return path.join(app.getPath('userData'), 'parslee-keys.bin');
+  return legacyDataFile('parslee-keys.bin') || legacyDataFile('pingchat-keys.bin');
 }
 
 // provider -> key, for this session. Anthropic's .env key seeds "claude".
@@ -353,9 +364,9 @@ function stateFile() {
   return path.join(app.getPath('userData'), 'chervil-state.json');
 }
 
-// Pre-rename state file; migrated forward on the first save once the new file exists.
+// Pre-rename state file (in the old per-app folder); migrated forward on first save.
 function legacyStateFile() {
-  return path.join(app.getPath('userData'), 'parslee-state.json');
+  return legacyDataFile('parslee-state.json') || legacyDataFile('pingchat-state.json');
 }
 
 ipcMain.handle('chervil:load-state', async () => {
