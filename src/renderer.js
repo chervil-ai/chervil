@@ -588,9 +588,10 @@ function renderPageHtml(html, scrollY = 0) {
   const restore = scrollY > 0
     ? `<script>try{window.scrollTo(0,${Math.round(scrollY)});}catch(e){}</script>`
     : '';
-  // Small bottom breathing room. (The remix bar no longer overlaps content — the page
-  // frame is shrunk to sit above it in setRemixVisible — so no large reserve is needed.)
-  const clearance = '<style>body{padding-bottom:24px !important;}</style>';
+  // Bottom breathing room so the floating remix bar doesn't sit on a flowing page's
+  // last lines. (Slide decks handle this themselves by centering content within the
+  // viewport — see the Slides remix request.)
+  const clearance = '<style>body{padding-bottom:140px !important;}</style>';
   els.frame.setAttribute('srcdoc', html + clearance + CHERVIL_RUNTIME + restore);
 }
 
@@ -635,7 +636,7 @@ const REMIX = {
   summary:   { label: 'Summarize',  query: 'Summarize the page I am viewing into a tight, well-structured overview that captures the key points and takeaways.' },
   simplify:  { label: 'Simplify',   query: 'Rewrite the page I am viewing in plain, simple language anyone can understand (like explaining to a smart 12-year-old), while keeping the substance.' },
   deeper:    { label: 'Go deeper',  query: 'Expand the page I am viewing into a more detailed, comprehensive version — add depth, nuance, examples, and useful context.' },
-  slides:    { label: 'Slides',     query: 'Turn the page I am viewing into a self-contained slide deck that shows ONE slide at a time (one key idea per slide, a clear heading, concise bullets). Support BOTH on-screen Previous/Next buttons AND Left/Right arrow keys, and show a visible slide counter like "3 / 8". Keep all navigation controls, hints, and the counter in the TOP or upper-center area of each slide — do NOT pin them to the very bottom edge, because the bottom ~180px may be covered by the app toolbar. Each slide must fit within the viewport without requiring scrolling.' },
+  slides:    { label: 'Slides',     query: 'Turn the page I am viewing into a self-contained slide deck that shows ONE slide at a time (one key idea per slide, a clear heading, concise bullets). Support BOTH on-screen Previous/Next buttons AND Left/Right arrow keys, and show a visible slide counter like "3 / 8" — keep these controls in the TOP area, never pinned to the bottom edge. Every slide must fill the full viewport height with the deck background and VERTICALLY CENTER its content, so a slide with little content does not leave large empty or white areas. Keep slide content in the central area — clear of the top nav and clear of the bottom ~140px, where an app toolbar floats. Each slide should fit the viewport without scrolling.' },
   keypoints: { label: 'Key points', query: 'Distill the page I am viewing into the essential key points as a clean, scannable bullet list with brief context for each.' },
 };
 
@@ -650,21 +651,8 @@ function remix(kind) {
 
 function setRemixVisible(show) {
   els.remixBar.hidden = !show;
-  if (show) {
-    updateLiveControls(); updateSourcesButton();
-    // Shrink the page frame to sit ABOVE the floating remix bar so the bar never
-    // covers page content. Measured after layout so it adapts to the bar wrapping
-    // to 2–3 rows; the page scrolls within the shorter frame.
-    requestAnimationFrame(() => {
-      const h = els.remixBar.offsetHeight || 0;
-      els.frame.style.bottom = h ? (h + 28) + 'px' : '';
-      els.frame.style.height = h ? 'auto' : '';
-    });
-  } else {
-    stopAudio(); els.sourcesPanel.hidden = true;
-    els.frame.style.bottom = '';
-    els.frame.style.height = '';
-  }
+  if (show) { updateLiveControls(); updateSourcesButton(); }
+  else { stopAudio(); els.sourcesPanel.hidden = true; }
 }
 
 // ---- Trust layer: Verify + Sources ----
