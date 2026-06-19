@@ -622,6 +622,64 @@ ipcMain.handle('chervil:export-xlsx', async (event, payload) => {
   }
 });
 
+// --- Export a composed page as an image (PNG/JPG) -----------------------
+// Renders the page in an off-screen window and captures the FULL scrollable
+// page (Chromium's captureBeyondViewport), not just the visible fold.
+ipcMain.handle('chervil:export-image', async (event, payload) => {
+  const { html, suggestedName, format } = payload || {};
+  if (!html) return { ok: false, error: 'Nothing to export.' };
+  const ext = format === 'jpg' ? 'jpg' : 'png';
+  const win = BrowserWindow.fromWebContents(event.sender);
+  const safe = String(suggestedName || 'chervil-page')
+    .replace(/[^a-z0-9\-_ ]+/gi, '').trim().slice(0, 80) || 'chervil-page';
+  const { canceled, filePath } = await dialog.showSaveDialog(win, {
+    title: 'Export image',
+    defaultPath: `${safe}.${ext}`,
+    filters: [{ name: ext.toUpperCase(), extensions: [ext] }],
+  });
+  if (canceled || !filePath) return { ok: false, canceled: true };
+
+  const tmp = path.join(os.tmpdir(), `chervil-img-${Date.now()}.html`);
+  const shot = new BrowserWindow({
+    show: false,
+    width: 1280,
+    height: 900,
+    webPreferences: { sandbox: true, javascript: true },
+  });
+  let attached = false;
+  try {
+    fs.writeFileSync(tmp, html, 'utf8');
+    await shot.loadFile(tmp);
+    // Render off-screen so the page paints (a surface exists) without a visible flash.
+    shot.setBounds({ x: -32000, y: 0, width: 1280, height: 900 });
+    shot.showInactive();
+    await new Promise((r) => setTimeout(r, 900)); // let images/fonts/layout settle
+    let buf;
+    try {
+      shot.webContents.debugger.attach('1.3');
+      attached = true;
+      const res = await shot.webContents.debugger.sendCommand('Page.captureScreenshot', {
+        format: ext === 'jpg' ? 'jpeg' : 'png',
+        quality: 92,
+        captureBeyondViewport: true, // capture the full scrollable page
+      });
+      buf = Buffer.from(res.data, 'base64');
+    } catch {
+      // Fallback: capture just the visible viewport.
+      const img = await shot.webContents.capturePage();
+      buf = ext === 'jpg' ? img.toJPEG(92) : img.toPNG();
+    }
+    fs.writeFileSync(filePath, buf);
+    return { ok: true, path: filePath };
+  } catch (err) {
+    return { ok: false, error: String(err && err.message ? err.message : err) };
+  } finally {
+    try { if (attached) shot.webContents.debugger.detach(); } catch { /* ignore */ }
+    try { shot.destroy(); } catch { /* ignore */ }
+    try { fs.unlinkSync(tmp); } catch { /* ignore */ }
+  }
+});
+
 // --- Save a composed page to disk ---------------------------------------
 ipcMain.handle('chervil:save-page', async (event, payload) => {
   const { html, suggestedName } = payload || {};

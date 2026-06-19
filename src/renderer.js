@@ -2615,11 +2615,23 @@ async function exportCurrentXlsx() {
   else if (res && !res.canceled) addMessage(tab, 'bot', `Couldn't export Excel: ${res.error || 'unknown error'}`, 'error');
 }
 
+async function exportCurrentImage(format) {
+  const tab = activeTab();
+  const entry = currentEntry(tab);
+  if (!entry || entry.kind !== 'page') return;
+  toast(`Rendering ${format.toUpperCase()}…`);
+  const res = await window.chervil.exportImage({ html: entry.html, suggestedName: entry.title, format });
+  if (res && res.ok) addMessage(tab, 'bot', `Exported ${format.toUpperCase()} to ${res.path}`);
+  else if (res && !res.canceled) addMessage(tab, 'bot', `Couldn't export image: ${res.error || 'unknown error'}`, 'error');
+}
+
 // The remix-bar "⤓ Export…" dropdown routes to the chosen format, then resets.
 function onExportSelect(e) {
   const v = e.target.value;
   e.target.value = '';
   if (v === 'pdf') exportCurrentPdf();
+  else if (v === 'png') exportCurrentImage('png');
+  else if (v === 'jpg') exportCurrentImage('jpg');
   else if (v === 'pptx') exportCurrentPptx();
   else if (v === 'docx') exportCurrentDocx();
   else if (v === 'xlsx') exportCurrentXlsx();
