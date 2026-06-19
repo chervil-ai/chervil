@@ -588,8 +588,9 @@ function renderPageHtml(html, scrollY = 0) {
   const restore = scrollY > 0
     ? `<script>try{window.scrollTo(0,${Math.round(scrollY)});}catch(e){}</script>`
     : '';
-  // Extra bottom scroll room so the floating remix bar never hides the page's last lines.
-  const clearance = '<style>body{padding-bottom:170px !important;}</style>';
+  // Small bottom breathing room. (The remix bar no longer overlaps content — the page
+  // frame is shrunk to sit above it in setRemixVisible — so no large reserve is needed.)
+  const clearance = '<style>body{padding-bottom:24px !important;}</style>';
   els.frame.setAttribute('srcdoc', html + clearance + CHERVIL_RUNTIME + restore);
 }
 
@@ -649,8 +650,21 @@ function remix(kind) {
 
 function setRemixVisible(show) {
   els.remixBar.hidden = !show;
-  if (show) { updateLiveControls(); updateSourcesButton(); }
-  else { stopAudio(); els.sourcesPanel.hidden = true; }
+  if (show) {
+    updateLiveControls(); updateSourcesButton();
+    // Shrink the page frame to sit ABOVE the floating remix bar so the bar never
+    // covers page content. Measured after layout so it adapts to the bar wrapping
+    // to 2–3 rows; the page scrolls within the shorter frame.
+    requestAnimationFrame(() => {
+      const h = els.remixBar.offsetHeight || 0;
+      els.frame.style.bottom = h ? (h + 28) + 'px' : '';
+      els.frame.style.height = h ? 'auto' : '';
+    });
+  } else {
+    stopAudio(); els.sourcesPanel.hidden = true;
+    els.frame.style.bottom = '';
+    els.frame.style.height = '';
+  }
 }
 
 // ---- Trust layer: Verify + Sources ----
