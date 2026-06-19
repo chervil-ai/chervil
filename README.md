@@ -5,7 +5,7 @@
 > Treat this as a preview, not a stable release. No packaged installer yet — run
 > from source (below).
 
-📣 **Launch announcement:** [Coming Soon — Chervil: The Web Comes to You](https://rodtrent.substack.com/p/coming-soon-parslee-the-web-comes)
+🌐 **Website:** [getchervil.com](https://getchervil.com) &nbsp;·&nbsp; 📣 **Announcement:** [Coming Soon — Chervil: The Web Comes to You](https://rodtrent.substack.com/p/coming-soon-parslee-the-web-comes)
 
 **Chervil replaces the browse-and-skim loop with a conversation.** Instead of ten
 blue links, you talk to **Sprig** — an assistant that searches the live web, then
