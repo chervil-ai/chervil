@@ -481,6 +481,52 @@ ipcMain.handle('chervil:video-transcript', async (_event, url) => {
   }
 });
 
+// Gemini watches a YouTube video natively (audio + visual) — no caption scraping.
+async function geminiVideoSummary(url, cfg) {
+  const key = cfg.apiKey;
+  if (!key) throw new Error('No Gemini API key set (Settings → Provider).');
+  const model = cfg.model || 'gemini-2.0-flash';
+  const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(key)}`;
+  const promptText = 'Watch this video and produce a faithful, detailed summary.\n'
+    + 'The FIRST line must be exactly: "TITLE: <the video\'s title>".\n'
+    + 'Then a 2–3 sentence overview, then "Key takeaways:" as a bullet list, then "Highlights:" '
+    + 'as timestamped lines formatted "[m:ss] description" for the most important moments. '
+    + 'Base everything on the actual video; do not invent.';
+  const body = { contents: [{ parts: [{ fileData: { fileUri: url } }, { text: promptText }] }] };
+  let res;
+  try {
+    res = await fetch(endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  } catch {
+    throw new Error('Couldn’t reach the Gemini API.');
+  }
+  if (!res.ok) {
+    const t = await res.text().catch(() => '');
+    throw new Error(`Gemini error ${res.status}: ${t.slice(0, 200)}`);
+  }
+  const j = await res.json().catch(() => null);
+  const parts = j && j.candidates && j.candidates[0] && j.candidates[0].content && j.candidates[0].content.parts;
+  const text = Array.isArray(parts) ? parts.map((p) => p.text || '').join('').trim() : '';
+  if (!text) throw new Error('Gemini returned no summary (the video may be too long, private, or unsupported).');
+  let title = 'Video';
+  let summary = text;
+  const m = text.match(/^\s*TITLE:\s*(.+)$/im);
+  if (m) { title = m[1].trim(); summary = text.replace(m[0], '').trim(); }
+  return { title, summary };
+}
+
+ipcMain.handle('chervil:video-gemini', async (_event, payload) => {
+  try {
+    const id = youtubeId(payload && payload.url);
+    if (!id) throw new Error('That doesn’t look like a YouTube video URL.');
+    const cfg = providerConfigFrom(payload);
+    const watch = `https://www.youtube.com/watch?v=${id}`;
+    const { title, summary } = await geminiVideoSummary(watch, cfg);
+    return { ok: true, title, summary, url: watch };
+  } catch (err) {
+    return { ok: false, error: String(err && err.message ? err.message : err) };
+  }
+});
+
 // --- Export a composed page as PDF --------------------------------------
 ipcMain.handle('chervil:export-pdf', async (event, payload) => {
   const { html, suggestedName } = payload || {};

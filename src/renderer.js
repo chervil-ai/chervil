@@ -1710,7 +1710,9 @@ function extractYouTubeUrl(text) {
   return m ? m[0] : null;
 }
 
-// Summarize a video by fetching its transcript, then composing a timestamped summary page.
+// Summarize a video, then compose a timestamped summary page. On the Gemini
+// provider Sprig watches the video natively (audio+visual); otherwise it fetches
+// the YouTube captions.
 async function summarizeVideo(tab, url) {
   if (!tab || isTabBusy(tab.id)) return;
   els.prompt.value = '';
@@ -1718,17 +1720,43 @@ async function summarizeVideo(tab, url) {
   addMessage(tab, 'user', `🎬 Summarize video: ${url}`);
   if (tab.title === 'New Tab') tab.title = 'Video summary';
   renderTabs();
-  if (tab.id === activeId) { setStatus('Sprig is fetching the transcript…'); setBadge('working', 'transcript'); els.send.disabled = true; }
-  let res = null;
-  try { res = await window.chervil.videoTranscript(url); } catch { /* handled below */ }
-  if (tab.id === activeId) { clearStatus(); els.send.disabled = false; }
-  if (!res || !res.ok) {
-    addMessage(tab, 'bot', `Couldn’t summarize that video — ${(res && res.error) || 'no transcript available'}. (Only videos with captions are supported for now.)`, 'error');
+  const cfg = providerConfig();
+  const gemini = cfg.provider === 'gemini';
+  if (tab.id === activeId) {
+    setStatus(gemini ? 'Sprig is watching the video with Gemini…' : 'Sprig is fetching the transcript…');
+    setBadge('working', gemini ? 'watching' : 'transcript');
+    els.send.disabled = true;
+  }
+  let title = '';
+  let content = '';
+  let srcUrl = url;
+  let truncated = false;
+  let label = 'transcript';
+  try {
+    if (gemini) {
+      const r = await window.chervil.videoGemini({ url, config: cfg });
+      if (!r || !r.ok) throw new Error((r && r.error) || 'Gemini could not summarize the video');
+      title = r.title || 'Video';
+      content = r.summary;
+      srcUrl = r.url || url;
+      label = 'Gemini video summary';
+    } else {
+      const r = await window.chervil.videoTranscript(url);
+      if (!r || !r.ok) throw new Error((r && r.error) || 'no transcript available');
+      title = r.title;
+      content = r.transcript;
+      srcUrl = r.url;
+      truncated = r.truncated;
+    }
+  } catch (err) {
+    if (tab.id === activeId) { clearStatus(); els.send.disabled = false; }
+    addMessage(tab, 'bot', `Couldn’t summarize that video — ${err.message}.${gemini ? '' : ' (On this provider, only videos with captions are supported — switch to Gemini for caption-free videos.)'}`, 'error');
     return;
   }
-  const prompt = `Summarize this YouTube video titled “${res.title}” (${res.url}). Produce a clean, well-structured page: a 2–3 sentence overview, the key takeaways as bullets, and a “Timestamped highlights” section that links the most important moments as ${res.url}&t=SECONDSs (convert each [m:ss] marker to total seconds). ${res.truncated ? 'The transcript was long and has been truncated — summarize what is present and say so.' : ''} Use ONLY the transcript below; do not invent details.`;
-  const attachments = [{ name: 'transcript.txt', kind: 'text', text: `Transcript of “${res.title}” (${res.url}):\n\n${res.transcript}` }];
-  submitQuery(prompt, { tab, attachments, allowNavigate: false, skipFollowup: true, skipUserMessage: true, displayText: `Summarize video: ${res.title}` });
+  if (tab.id === activeId) { clearStatus(); els.send.disabled = false; }
+  const prompt = `Turn the following ${label} of the YouTube video “${title}” (${srcUrl}) into a clean, well-structured page: a 2–3 sentence overview, the key takeaways as bullets, and a “Timestamped highlights” section linking the most important moments as ${srcUrl}&t=SECONDSs (convert each [m:ss] marker to total seconds). ${truncated ? 'The source was long and truncated — summarize what is present and say so.' : ''} Use ONLY the material below; do not invent details.`;
+  const attachments = [{ name: 'video.txt', kind: 'text', text: `${label} of “${title}” (${srcUrl}):\n\n${content}` }];
+  submitQuery(prompt, { tab, attachments, allowNavigate: false, skipFollowup: true, skipUserMessage: true, displayText: `Summarize video: ${title}` });
 }
 
 function handleComposerSubmit(text) {

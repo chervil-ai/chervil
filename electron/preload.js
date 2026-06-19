@@ -70,6 +70,9 @@ contextBridge.exposeInMainWorld('chervil', {
   /** Fetch a video's transcript (YouTube captions) for summarization. */
   videoTranscript: (url) => ipcRenderer.invoke('chervil:video-transcript', url),
 
+  /** Gemini-native video summary (watches the YouTube video directly). */
+  videoGemini: (payload) => ipcRenderer.invoke('chervil:video-gemini', payload),
+
   /** Show an OS notification (e.g. a Living page refreshed in the background). */
   notify: (payload) => ipcRenderer.invoke('chervil:notify', payload),
 
