@@ -1702,6 +1702,35 @@ function stripWake(text) {
 
 // Entry point from the composer/keyboard. Routes through the follow-up "ask"
 // prompt when appropriate, otherwise submits directly.
+// Pull a YouTube video URL out of a message (watch / youtu.be / shorts / embed / live).
+function extractYouTubeUrl(text) {
+  const m = String(text || '').match(
+    /https?:\/\/(?:www\.)?(?:youtube\.com\/(?:watch\?[^\s]*v=|shorts\/|embed\/|live\/)|youtu\.be\/)[^\s)]+/i
+  );
+  return m ? m[0] : null;
+}
+
+// Summarize a video by fetching its transcript, then composing a timestamped summary page.
+async function summarizeVideo(tab, url) {
+  if (!tab || isTabBusy(tab.id)) return;
+  els.prompt.value = '';
+  resetPromptHeight();
+  addMessage(tab, 'user', `🎬 Summarize video: ${url}`);
+  if (tab.title === 'New Tab') tab.title = 'Video summary';
+  renderTabs();
+  if (tab.id === activeId) { setStatus('Sprig is fetching the transcript…'); setBadge('working', 'transcript'); els.send.disabled = true; }
+  let res = null;
+  try { res = await window.chervil.videoTranscript(url); } catch { /* handled below */ }
+  if (tab.id === activeId) { clearStatus(); els.send.disabled = false; }
+  if (!res || !res.ok) {
+    addMessage(tab, 'bot', `Couldn’t summarize that video — ${(res && res.error) || 'no transcript available'}. (Only videos with captions are supported for now.)`, 'error');
+    return;
+  }
+  const prompt = `Summarize this YouTube video titled “${res.title}” (${res.url}). Produce a clean, well-structured page: a 2–3 sentence overview, the key takeaways as bullets, and a “Timestamped highlights” section that links the most important moments as ${res.url}&t=SECONDSs (convert each [m:ss] marker to total seconds). ${res.truncated ? 'The transcript was long and has been truncated — summarize what is present and say so.' : ''} Use ONLY the transcript below; do not invent details.`;
+  const attachments = [{ name: 'transcript.txt', kind: 'text', text: `Transcript of “${res.title}” (${res.url}):\n\n${res.transcript}` }];
+  submitQuery(prompt, { tab, attachments, allowNavigate: false, skipFollowup: true, skipUserMessage: true, displayText: `Summarize video: ${res.title}` });
+}
+
 function handleComposerSubmit(text) {
   const tab = activeTab();
   if (!tab || isTabBusy(tab.id) || agentRunning) return;
@@ -1715,6 +1744,14 @@ function handleComposerSubmit(text) {
 
   // On a live site, the composer drives the web agent instead of composing a page.
   const cur = currentEntry(tab);
+
+  // Video summary: a YouTube URL in the message (or while viewing one) + a summarize intent.
+  const ytUrl = extractYouTubeUrl(query) || (cur && cur.kind === 'navigate' ? extractYouTubeUrl(cur.url) : null);
+  if (ytUrl && /(summ|tl;?dr|recap|key ?points|key takeaways|digest)/i.test(query)) {
+    summarizeVideo(tab, ytUrl);
+    return;
+  }
+
   if (cur && cur.kind === 'navigate') { startAgent(query); return; }
 
   // Deep Dive always composes a fresh research report (no in-place refine).
@@ -1819,7 +1856,7 @@ async function submitQuery(text, opts = {}) {
 
   const atts = opts.attachments || [];
   const attNote = atts.length ? `   📎 ${atts.map((a) => a.name).join(', ')}` : '';
-  addMessage(tab, 'user', (opts.displayText || query) + attNote);
+  if (!opts.skipUserMessage) addMessage(tab, 'user', (opts.displayText || query) + attNote);
   if (tab.title === 'New Tab') {
     const label = opts.displayText || query;
     tab.title = label.length > 40 ? label.slice(0, 37) + '…' : label;

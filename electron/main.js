@@ -402,6 +402,85 @@ ipcMain.handle('chervil:list-models', async (_event, payload) => {
   }
 });
 
+// --- Summarize a video: fetch its transcript (YouTube captions) ----------
+function youtubeId(url) {
+  try {
+    const u = new URL(url);
+    const host = u.hostname.replace(/^www\./, '');
+    if (host === 'youtu.be') return u.pathname.slice(1).split('/')[0] || null;
+    if (host.endsWith('youtube.com')) {
+      if (u.searchParams.get('v')) return u.searchParams.get('v');
+      const m = u.pathname.match(/\/(?:shorts|embed|live)\/([^/?]+)/);
+      if (m) return m[1];
+    }
+  } catch { /* not a URL */ }
+  return null;
+}
+
+function fmtTime(sec) {
+  sec = Math.max(0, Math.round(sec));
+  const h = Math.floor(sec / 3600);
+  const m = Math.floor((sec % 3600) / 60);
+  const s = sec % 60;
+  return (h ? h + ':' + String(m).padStart(2, '0') : String(m)) + ':' + String(s).padStart(2, '0');
+}
+
+function decodeEntities(t) {
+  return String(t)
+    .replace(/&amp;/g, '&').replace(/&#39;/g, "'").replace(/&quot;/g, '"')
+    .replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+    .replace(/&#(\d+);/g, (_, n) => String.fromCharCode(+n));
+}
+
+async function fetchYouTubeTranscript(url) {
+  const id = youtubeId(url);
+  if (!id) throw new Error('That doesn’t look like a YouTube video URL.');
+  const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36';
+  const headers = { 'User-Agent': UA, 'Accept-Language': 'en-US,en;q=0.9' };
+  let html;
+  try {
+    html = await (await fetch(`https://www.youtube.com/watch?v=${id}&hl=en`, { headers })).text();
+  } catch {
+    throw new Error('Couldn’t reach YouTube.');
+  }
+  const titleM = html.match(/<title>([^<]*)<\/title>/);
+  const title = titleM ? decodeEntities(titleM[1]).replace(/\s*-\s*YouTube\s*$/, '').trim() : 'YouTube video';
+  const capM = html.match(/"captionTracks":(\[.*?\])/);
+  if (!capM) throw new Error('No captions/transcript are available for this video.');
+  let tracks;
+  try { tracks = JSON.parse(capM[1]); } catch { throw new Error('Couldn’t parse the caption list.'); }
+  if (!Array.isArray(tracks) || !tracks.length) throw new Error('This video has no captions.');
+  const track = tracks.find((t) => /^en/i.test(t.languageCode || '')) || tracks[0];
+  let capUrl = String(track.baseUrl || '');
+  if (!capUrl) throw new Error('No caption track URL found.');
+  capUrl += (capUrl.includes('?') ? '&' : '?') + 'fmt=json3';
+  let data;
+  try {
+    data = await (await fetch(capUrl, { headers })).json();
+  } catch {
+    throw new Error('Couldn’t download the transcript.');
+  }
+  const segs = [];
+  for (const ev of (data && data.events) || []) {
+    if (!ev.segs) continue;
+    const text = ev.segs.map((s) => s.utf8 || '').join('').replace(/\s+/g, ' ').trim();
+    if (text) segs.push({ start: (ev.tStartMs || 0) / 1000, text });
+  }
+  if (!segs.length) throw new Error('The transcript came back empty.');
+  let body = segs.map((s) => `[${fmtTime(s.start)}] ${s.text}`).join('\n');
+  let truncated = false;
+  if (body.length > 28000) { body = body.slice(0, 28000); truncated = true; } // keep under the text-attachment cap
+  return { id, title, url: `https://www.youtube.com/watch?v=${id}`, transcript: body, truncated };
+}
+
+ipcMain.handle('chervil:video-transcript', async (_event, url) => {
+  try {
+    return { ok: true, ...(await fetchYouTubeTranscript(url)) };
+  } catch (err) {
+    return { ok: false, error: String(err && err.message ? err.message : err) };
+  }
+});
+
 // --- Export a composed page as PDF --------------------------------------
 ipcMain.handle('chervil:export-pdf', async (event, payload) => {
   const { html, suggestedName } = payload || {};

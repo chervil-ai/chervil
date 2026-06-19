@@ -64,6 +64,9 @@ contextBridge.exposeInMainWorld('chervil', {
   /** Transcribe recorded mic audio via the configured Whisper-compatible STT. */
   transcribe: (payload) => ipcRenderer.invoke('chervil:transcribe', payload),
 
+  /** Fetch a video's transcript (YouTube captions) for summarization. */
+  videoTranscript: (url) => ipcRenderer.invoke('chervil:video-transcript', url),
+
   /** Show an OS notification (e.g. a Living page refreshed in the background). */
   notify: (payload) => ipcRenderer.invoke('chervil:notify', payload),
 
