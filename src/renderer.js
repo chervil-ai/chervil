@@ -21,6 +21,7 @@ const els = {
   verifyBtn: document.getElementById('verify-btn'),
   sourcesBtn: document.getElementById('sources-btn'),
   pdfBtn: document.getElementById('pdf-btn'),
+  pptxBtn: document.getElementById('pptx-btn'),
   sourcesPanel: document.getElementById('sources-panel'),
   sourcesList: document.getElementById('sources-list'),
   sourcesClose: document.getElementById('sources-close'),
@@ -2362,6 +2363,16 @@ async function exportCurrentPdf() {
   else if (res && !res.canceled) addMessage(tab, 'bot', `Couldn't export PDF: ${res.error || 'unknown error'}`, 'error');
 }
 
+async function exportCurrentPptx() {
+  const tab = activeTab();
+  const entry = currentEntry(tab);
+  if (!entry || entry.kind !== 'page') return;
+  toast('Building PowerPoint…');
+  const res = await window.chervil.exportPptx({ html: entry.html, suggestedName: entry.title, config: providerConfig() });
+  if (res && res.ok) addMessage(tab, 'bot', `Exported PowerPoint to ${res.path}`);
+  else if (res && !res.canceled) addMessage(tab, 'bot', `Couldn't export PowerPoint: ${res.error || 'unknown error'}`, 'error');
+}
+
 // ---- Helpers ----
 function hostOf(url) {
   try { return new URL(url).hostname.replace(/^www\./, ''); }
@@ -2447,6 +2458,7 @@ els.audioStop.addEventListener('click', stopAudio);
 els.verifyBtn.addEventListener('click', verifyPage);
 els.sourcesBtn.addEventListener('click', toggleSourcesPanel);
 els.pdfBtn.addEventListener('click', exportCurrentPdf);
+els.pptxBtn.addEventListener('click', exportCurrentPptx);
 els.sourcesClose.addEventListener('click', () => { els.sourcesPanel.hidden = true; });
 els.liveSelect.addEventListener('change', onLiveSelectChange);
 els.voiceSelect.addEventListener('change', () => { settings.voiceURI = els.voiceSelect.value; scheduleSave(); });

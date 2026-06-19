@@ -18,7 +18,8 @@
   "license": "MIT",
   "dependencies": {
     "@anthropic-ai/sdk": "^0.69.0",
-    "dotenv": "^17.0.0"
+    "dotenv": "^17.0.0",
+    "pptxgenjs": "^4.0.1"
   },
   "devDependencies": {
     "electron": "^39.8.5"

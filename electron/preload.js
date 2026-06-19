@@ -52,6 +52,9 @@ contextBridge.exposeInMainWorld('chervil', {
   /** Export a composed page as PDF via a native save dialog. */
   exportPdf: (payload) => ipcRenderer.invoke('chervil:export-pdf', payload),
 
+  /** Export a composed page as an editable PowerPoint (.pptx) with speaker notes. */
+  exportPptx: (payload) => ipcRenderer.invoke('chervil:export-pptx', payload),
+
   /** Transcribe recorded mic audio via the configured Whisper-compatible STT. */
   transcribe: (payload) => ipcRenderer.invoke('chervil:transcribe', payload),
 

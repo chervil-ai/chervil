@@ -10,7 +10,7 @@ const { app, BrowserWindow, ipcMain, dialog, safeStorage, Notification } = requi
 // renders as mojibake in the Windows console).
 require('dotenv').config({ path: path.join(__dirname, '..', '.env'), quiet: true });
 
-const { runAgent, runAppletAsk, runListModels, runAgentStep } = require('../lib/agent');
+const { runAgent, runAppletAsk, runListModels, runAgentStep, runExtractSlides } = require('../lib/agent');
 
 let mainWindow = null;
 
@@ -331,6 +331,47 @@ ipcMain.handle('chervil:export-pdf', async (event, payload) => {
   } finally {
     try { printWin.destroy(); } catch { /* ignore */ }
     try { fs.unlinkSync(tmp); } catch { /* ignore */ }
+  }
+});
+
+// --- Export a composed page as an editable PowerPoint (.pptx) ------------
+// The model turns the page into structured slides (title/bullets/notes), then
+// PptxGenJS builds a real .pptx — speaker notes included — saved via a dialog.
+ipcMain.handle('chervil:export-pptx', async (event, payload) => {
+  const { html, suggestedName } = payload || {};
+  if (!html) return { ok: false, error: 'Nothing to export.' };
+  const win = BrowserWindow.fromWebContents(event.sender);
+  const safe = String(suggestedName || 'chervil-deck')
+    .replace(/[^a-z0-9\-_ ]+/gi, '').trim().slice(0, 80) || 'chervil-deck';
+  try {
+    const slides = await runExtractSlides({ html, title: suggestedName || '', config: providerConfigFrom(payload) });
+    const { canceled, filePath } = await dialog.showSaveDialog(win, {
+      title: 'Export PowerPoint',
+      defaultPath: `${safe}.pptx`,
+      filters: [{ name: 'PowerPoint', extensions: ['pptx'] }],
+    });
+    if (canceled || !filePath) return { ok: false, canceled: true };
+    const PptxGenJS = require('pptxgenjs');
+    const pptx = new PptxGenJS();
+    pptx.layout = 'LAYOUT_WIDE';
+    slides.forEach((s, i) => {
+      const slide = pptx.addSlide();
+      slide.background = { color: '0B0D12' };
+      slide.addText(s.title || `Slide ${i + 1}`, {
+        x: 0.5, y: 0.4, w: 12.3, h: 1.0, fontSize: i === 0 ? 36 : 28, bold: true, color: 'FFFFFF',
+      });
+      if (s.bullets.length) {
+        slide.addText(
+          s.bullets.map((t) => ({ text: t, options: { bullet: true } })),
+          { x: 0.7, y: 1.7, w: 11.9, h: 5.2, fontSize: 18, color: 'E6E6E6', valign: 'top', lineSpacingMultiple: 1.2 }
+        );
+      }
+      if (s.notes) slide.addNotes(s.notes);
+    });
+    await pptx.writeFile({ fileName: filePath });
+    return { ok: true, path: filePath };
+  } catch (err) {
+    return { ok: false, error: String(err && err.message ? err.message : err) };
   }
 });
 
