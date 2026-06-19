@@ -252,6 +252,21 @@ const CHERVIL_RUNTIME = `<script>(function(){
     delete pending[d.id];
     if(d.ok) p.resolve(d.result); else p.reject(new Error(d.error || 'Sprig error'));
   });
+  // Keyboard scroll forwarded from the parent (PageDown/Up, Space, Home/End, arrows)
+  // when focus is outside the page frame — so nav keys scroll the composed page
+  // without having to click into it first.
+  window.addEventListener('message', function(e){
+    var d = e.data;
+    if(!d || d.__chervil !== true || d.type !== 'scrollkey') return;
+    var h = window.innerHeight || 600;
+    var max = (document.documentElement && document.documentElement.scrollHeight) || 0;
+    if(d.key === 'PageDown' || d.key === 'Space') window.scrollBy(0, Math.round(h * 0.9));
+    else if(d.key === 'PageUp' || d.key === 'ShiftSpace') window.scrollBy(0, -Math.round(h * 0.9));
+    else if(d.key === 'ArrowDown') window.scrollBy(0, 60);
+    else if(d.key === 'ArrowUp') window.scrollBy(0, -60);
+    else if(d.key === 'Home') window.scrollTo(0, 0);
+    else if(d.key === 'End') window.scrollTo(0, max);
+  });
   function call(name, args){
     return new Promise(function(resolve, reject){
       var id = 'c' + (++seq);
@@ -2589,6 +2604,30 @@ window.addEventListener('message', (e) => {
   if (d.type === 'link' && d.href) { handleLinkClick(d.href, d.text || ''); return; }
   if (d.type === 'tool') { handleAppletTool(e.source, d); return; }
   if (d.type === 'scroll' && typeof d.y === 'number') { previewScrollY = d.y; return; }
+});
+
+// Keyboard scrolling for composed pages. A sandboxed iframe only scrolls via the
+// keyboard when ITS document has focus (i.e. after a click). On a freshly composed
+// page focus is still on the parent window, so PageDown/Space/arrows did nothing.
+// Forward those keys into the page frame (which scrolls itself) — but only when the
+// page is actually showing and focus isn't in the composer or another control.
+document.addEventListener('keydown', (e) => {
+  if (els.frame.hidden || !els.overlay.hidden) return;     // not viewing a composed page
+  const ae = document.activeElement;
+  if (ae && ae !== document.body) return;                  // composer/control/page has focus — leave it
+  let key;
+  if (e.key === 'PageDown') key = 'PageDown';
+  else if (e.key === 'PageUp') key = 'PageUp';
+  else if (e.key === 'Home') key = 'Home';
+  else if (e.key === 'End') key = 'End';
+  else if (e.key === 'ArrowDown') key = 'ArrowDown';
+  else if (e.key === 'ArrowUp') key = 'ArrowUp';
+  else if (e.key === ' ') key = e.shiftKey ? 'ShiftSpace' : 'Space';
+  else return;
+  const win = els.frame.contentWindow;
+  if (!win) return;
+  e.preventDefault();
+  win.postMessage({ __chervil: true, type: 'scrollkey', key }, '*');
 });
 
 // An applet inside a composed page asked Sprig for something. Run it and post the
