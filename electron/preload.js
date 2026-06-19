@@ -55,6 +55,12 @@ contextBridge.exposeInMainWorld('chervil', {
   /** Export a composed page as an editable PowerPoint (.pptx) with speaker notes. */
   exportPptx: (payload) => ipcRenderer.invoke('chervil:export-pptx', payload),
 
+  /** Export a composed page as a Word document (.docx). */
+  exportDocx: (payload) => ipcRenderer.invoke('chervil:export-docx', payload),
+
+  /** Export a composed page as an Excel workbook (.xlsx). */
+  exportXlsx: (payload) => ipcRenderer.invoke('chervil:export-xlsx', payload),
+
   /** Transcribe recorded mic audio via the configured Whisper-compatible STT. */
   transcribe: (payload) => ipcRenderer.invoke('chervil:transcribe', payload),
 

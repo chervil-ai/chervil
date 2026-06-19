@@ -10,7 +10,7 @@ const { app, BrowserWindow, ipcMain, dialog, safeStorage, Notification } = requi
 // renders as mojibake in the Windows console).
 require('dotenv').config({ path: path.join(__dirname, '..', '.env'), quiet: true });
 
-const { runAgent, runAppletAsk, runListModels, runAgentStep, runExtractSlides } = require('../lib/agent');
+const { runAgent, runAppletAsk, runListModels, runAgentStep, runExtractSlides, runExtractDoc, runExtractSheets } = require('../lib/agent');
 
 let mainWindow = null;
 
@@ -369,6 +369,68 @@ ipcMain.handle('chervil:export-pptx', async (event, payload) => {
       if (s.notes) slide.addNotes(s.notes);
     });
     await pptx.writeFile({ fileName: filePath });
+    return { ok: true, path: filePath };
+  } catch (err) {
+    return { ok: false, error: String(err && err.message ? err.message : err) };
+  }
+});
+
+// --- Export a composed page as a Word document (.docx) -------------------
+ipcMain.handle('chervil:export-docx', async (event, payload) => {
+  const { html, suggestedName } = payload || {};
+  if (!html) return { ok: false, error: 'Nothing to export.' };
+  const win = BrowserWindow.fromWebContents(event.sender);
+  const safe = String(suggestedName || 'chervil-doc')
+    .replace(/[^a-z0-9\-_ ]+/gi, '').trim().slice(0, 80) || 'chervil-doc';
+  try {
+    const docData = await runExtractDoc({ html, title: suggestedName || '', config: providerConfigFrom(payload) });
+    const { canceled, filePath } = await dialog.showSaveDialog(win, {
+      title: 'Export Word document',
+      defaultPath: `${safe}.docx`,
+      filters: [{ name: 'Word', extensions: ['docx'] }],
+    });
+    if (canceled || !filePath) return { ok: false, canceled: true };
+    const { Document, Packer, Paragraph, HeadingLevel } = require('docx');
+    const children = [new Paragraph({ text: docData.title, heading: HeadingLevel.TITLE })];
+    docData.sections.forEach((s) => {
+      if (s.heading) children.push(new Paragraph({ text: s.heading, heading: HeadingLevel.HEADING_1 }));
+      s.paragraphs.forEach((p) => children.push(new Paragraph({ text: p })));
+    });
+    const doc = new Document({ sections: [{ children }] });
+    const buf = await Packer.toBuffer(doc);
+    fs.writeFileSync(filePath, buf);
+    return { ok: true, path: filePath };
+  } catch (err) {
+    return { ok: false, error: String(err && err.message ? err.message : err) };
+  }
+});
+
+// --- Export a composed page as an Excel workbook (.xlsx) -----------------
+ipcMain.handle('chervil:export-xlsx', async (event, payload) => {
+  const { html, suggestedName } = payload || {};
+  if (!html) return { ok: false, error: 'Nothing to export.' };
+  const win = BrowserWindow.fromWebContents(event.sender);
+  const safe = String(suggestedName || 'chervil-data')
+    .replace(/[^a-z0-9\-_ ]+/gi, '').trim().slice(0, 80) || 'chervil-data';
+  try {
+    const sheets = await runExtractSheets({ html, title: suggestedName || '', config: providerConfigFrom(payload) });
+    const { canceled, filePath } = await dialog.showSaveDialog(win, {
+      title: 'Export Excel workbook',
+      defaultPath: `${safe}.xlsx`,
+      filters: [{ name: 'Excel', extensions: ['xlsx'] }],
+    });
+    if (canceled || !filePath) return { ok: false, canceled: true };
+    const ExcelJS = require('exceljs');
+    const wb = new ExcelJS.Workbook();
+    sheets.forEach((sh, i) => {
+      const ws = wb.addWorksheet(sh.name || `Sheet${i + 1}`);
+      if (sh.columns.length) {
+        const header = ws.addRow(sh.columns);
+        header.font = { bold: true };
+      }
+      sh.rows.forEach((r) => ws.addRow(r));
+    });
+    await wb.xlsx.writeFile(filePath);
     return { ok: true, path: filePath };
   } catch (err) {
     return { ok: false, error: String(err && err.message ? err.message : err) };

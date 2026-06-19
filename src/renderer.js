@@ -20,8 +20,7 @@ const els = {
   remixBar: document.getElementById('remix-bar'),
   verifyBtn: document.getElementById('verify-btn'),
   sourcesBtn: document.getElementById('sources-btn'),
-  pdfBtn: document.getElementById('pdf-btn'),
-  pptxBtn: document.getElementById('pptx-btn'),
+  exportSelect: document.getElementById('export-select'),
   sourcesPanel: document.getElementById('sources-panel'),
   sourcesList: document.getElementById('sources-list'),
   sourcesClose: document.getElementById('sources-close'),
@@ -2373,6 +2372,36 @@ async function exportCurrentPptx() {
   else if (res && !res.canceled) addMessage(tab, 'bot', `Couldn't export PowerPoint: ${res.error || 'unknown error'}`, 'error');
 }
 
+async function exportCurrentDocx() {
+  const tab = activeTab();
+  const entry = currentEntry(tab);
+  if (!entry || entry.kind !== 'page') return;
+  toast('Building Word document…');
+  const res = await window.chervil.exportDocx({ html: entry.html, suggestedName: entry.title, config: providerConfig() });
+  if (res && res.ok) addMessage(tab, 'bot', `Exported Word document to ${res.path}`);
+  else if (res && !res.canceled) addMessage(tab, 'bot', `Couldn't export Word doc: ${res.error || 'unknown error'}`, 'error');
+}
+
+async function exportCurrentXlsx() {
+  const tab = activeTab();
+  const entry = currentEntry(tab);
+  if (!entry || entry.kind !== 'page') return;
+  toast('Building Excel workbook…');
+  const res = await window.chervil.exportXlsx({ html: entry.html, suggestedName: entry.title, config: providerConfig() });
+  if (res && res.ok) addMessage(tab, 'bot', `Exported Excel workbook to ${res.path}`);
+  else if (res && !res.canceled) addMessage(tab, 'bot', `Couldn't export Excel: ${res.error || 'unknown error'}`, 'error');
+}
+
+// The remix-bar "⤓ Export…" dropdown routes to the chosen format, then resets.
+function onExportSelect(e) {
+  const v = e.target.value;
+  e.target.value = '';
+  if (v === 'pdf') exportCurrentPdf();
+  else if (v === 'pptx') exportCurrentPptx();
+  else if (v === 'docx') exportCurrentDocx();
+  else if (v === 'xlsx') exportCurrentXlsx();
+}
+
 // ---- Helpers ----
 function hostOf(url) {
   try { return new URL(url).hostname.replace(/^www\./, ''); }
@@ -2457,8 +2486,7 @@ els.audioToggle.addEventListener('click', toggleAudio);
 els.audioStop.addEventListener('click', stopAudio);
 els.verifyBtn.addEventListener('click', verifyPage);
 els.sourcesBtn.addEventListener('click', toggleSourcesPanel);
-els.pdfBtn.addEventListener('click', exportCurrentPdf);
-els.pptxBtn.addEventListener('click', exportCurrentPptx);
+els.exportSelect.addEventListener('change', onExportSelect);
 els.sourcesClose.addEventListener('click', () => { els.sourcesPanel.hidden = true; });
 els.liveSelect.addEventListener('change', onLiveSelectChange);
 els.voiceSelect.addEventListener('change', () => { settings.voiceURI = els.voiceSelect.value; scheduleSave(); });
