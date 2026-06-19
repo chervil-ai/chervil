@@ -151,7 +151,7 @@ const MODEL_SETTING = {
   claude: 'claudeModel', grok: 'grokModel', gemini: 'geminiModel', azure: 'azureModel', ollama: 'ollamaModel',
 };
 const MODEL_PLACEHOLDER = {
-  claude: 'claude-sonnet-4-6', grok: 'grok-3', gemini: 'gemini-2.0-flash', azure: '(uses deployment)', ollama: 'gemma3:4b',
+  claude: 'claude-sonnet-4-6', grok: 'grok-3', gemini: 'gemini-2.5-flash', azure: '(uses deployment)', ollama: 'gemma3:4b',
 };
 // Suggested models per provider for the dropdown (a "Custom…" entry is appended so
 // you can always type your own model id).
@@ -166,9 +166,8 @@ const MODEL_OPTIONS = {
     ['grok-2-latest', 'grok-2-latest'],
   ],
   gemini: [
-    ['gemini-2.0-flash', 'gemini-2.0-flash — fast & cheap'],
-    ['gemini-1.5-pro', 'gemini-1.5-pro'],
-    ['gemini-1.5-flash', 'gemini-1.5-flash'],
+    ['gemini-2.5-flash', 'gemini-2.5-flash — fast & cheap'],
+    ['gemini-2.5-pro', 'gemini-2.5-pro — top quality'],
   ],
   ollama: [
     ['gemma3:4b', 'gemma3:4b'],

@@ -486,7 +486,7 @@ ipcMain.handle('chervil:video-transcript', async (_event, url) => {
 async function geminiVideoSummary(url, cfg) {
   const key = cfg.apiKey;
   if (!key) throw new Error('No Gemini API key set (Settings → Provider).');
-  const model = cfg.model || 'gemini-2.0-flash';
+  const model = cfg.model || 'gemini-2.5-flash';
   const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(key)}`;
   const promptText = 'Watch this video and produce a faithful, detailed summary.\n'
     + 'The FIRST line must be exactly: "TITLE: <the video\'s title>".\n'
