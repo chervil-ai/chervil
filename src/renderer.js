@@ -18,6 +18,8 @@ const els = {
   webview: document.getElementById('web-view'),
   overlay: document.getElementById('overlay'),
   remixBar: document.getElementById('remix-bar'),
+  remixMin: document.getElementById('remix-min'),
+  remixHandle: document.getElementById('remix-handle'),
   verifyBtn: document.getElementById('verify-btn'),
   sourcesBtn: document.getElementById('sources-btn'),
   exportSelect: document.getElementById('export-select'),
@@ -667,9 +669,27 @@ function remix(kind) {
 }
 
 function setRemixVisible(show) {
-  els.remixBar.hidden = !show;
+  const min = !!settings.remixMinimized;
+  els.remixBar.hidden = !show || min;
+  if (els.remixHandle) els.remixHandle.hidden = !show || !min;
   if (show) { updateLiveControls(); updateSourcesButton(); }
   else { stopAudio(); els.sourcesPanel.hidden = true; }
+}
+
+// Collapse the floating remix bar to a small corner handle (and back). Persisted.
+function minimizeRemix() {
+  settings.remixMinimized = true;
+  els.remixBar.hidden = true;
+  if (els.remixHandle) els.remixHandle.hidden = false;
+  scheduleSave();
+}
+function expandRemix() {
+  settings.remixMinimized = false;
+  if (els.remixHandle) els.remixHandle.hidden = true;
+  els.remixBar.hidden = false;
+  updateLiveControls();
+  updateSourcesButton();
+  scheduleSave();
 }
 
 // ---- Trust layer: Verify + Sources ----
@@ -2945,6 +2965,8 @@ els.audioStop.addEventListener('click', stopAudio);
 els.verifyBtn.addEventListener('click', verifyPage);
 els.sourcesBtn.addEventListener('click', toggleSourcesPanel);
 els.exportSelect.addEventListener('change', onExportSelect);
+els.remixMin.addEventListener('click', minimizeRemix);
+els.remixHandle.addEventListener('click', expandRemix);
 els.sourcesClose.addEventListener('click', () => { els.sourcesPanel.hidden = true; });
 els.liveSelect.addEventListener('change', onLiveSelectChange);
 els.voiceSelect.addEventListener('change', () => { settings.voiceURI = els.voiceSelect.value; scheduleSave(); });

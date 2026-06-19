@@ -96,6 +96,7 @@
 
         <!-- Remix bar: transform the current composed page -->
         <div id="remix-bar" hidden>
+          <button id="remix-min" class="remix-btn remix-min" title="Minimize this bar">▾</button>
           <span class="remix-label">Remix</span>
           <button class="remix-btn" data-remix="summary">Summarize</button>
           <button class="remix-btn" data-remix="simplify">Simplify</button>
@@ -126,6 +127,9 @@
           </select>
           <span id="live-status" class="live-status" hidden></span>
         </div>
+
+        <!-- Collapsed remix-bar handle (re-expands the bar) -->
+        <button id="remix-handle" class="remix-handle" hidden title="Show page actions">✦ Remix</button>
 
         <!-- Sources / "show your work" panel -->
         <div id="sources-panel" hidden>
