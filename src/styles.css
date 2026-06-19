@@ -547,6 +547,10 @@ html, body {
 .sched-empty { color: var(--muted); font-size: 13px; text-align: center; padding: 16px; }
 .agent-starters { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
 .agent-starters .si-btn { font-size: 11px; }
+#agent-chip { display: flex; align-items: center; gap: 8px; margin: 0 14px 8px; padding: 6px 10px; background: rgba(123, 224, 163, 0.12); border: 1px solid #2c5a40; border-radius: 10px; font-size: 12px; color: #cfe9d9; }
+#agent-chip[hidden] { display: none; }
+.agent-chip-x { margin-left: auto; background: transparent; border: none; color: var(--muted); cursor: pointer; font-size: 12px; line-height: 1; }
+.agent-chip-x:hover { color: #fff; }
 
 /* ---------- Thinking canvas (page map) ---------- */
 .map-view {

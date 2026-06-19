@@ -33,6 +33,7 @@
       <div id="conversation" aria-live="polite"></div>
 
       <div id="attach-chips" hidden></div>
+      <div id="agent-chip" hidden></div>
       <form id="composer" autocomplete="off">
         <textarea id="prompt" rows="1"
                   placeholder="Hey Sprig, ask…"
@@ -438,6 +439,11 @@
           <label><input type="checkbox" value="5" /> Fri</label>
           <label><input type="checkbox" value="6" /> Sat</label>
           <label><input type="checkbox" value="0" /> Sun</label>
+        </div>
+        <div class="sched-row">
+          <label>Run as agent
+            <select id="sched-agent"><option value="">None (default Sprig)</option></select>
+          </label>
         </div>
         <div class="sched-row">
           <label class="sched-deep"><input id="sched-deep" type="checkbox" /> Deep Dive (thorough, cited)</label>

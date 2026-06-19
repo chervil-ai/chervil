@@ -49,6 +49,7 @@ const els = {
   schedView: document.getElementById('sched-view'),
   agentsBtn: document.getElementById('agents-btn'),
   agentsView: document.getElementById('agents-view'),
+  agentChip: document.getElementById('agent-chip'),
   mapClose: document.getElementById('map-close'),
   mapCanvas: document.getElementById('map-canvas'),
   mapEdges: document.getElementById('map-edges'),
@@ -178,7 +179,7 @@ const MODEL_OPTIONS = {
 const CUSTOM_MODEL = '__custom__';
 
 // The provider config sent to the agent with each request.
-function providerConfig() {
+function providerConfig(agentOverride) {
   const p = settings.provider;
   const c = { provider: p, model: settings[MODEL_SETTING[p]] };
   if (p === 'ollama') { c.ollamaModel = settings.ollamaModel; c.ollamaUrl = settings.ollamaUrl; }
@@ -188,7 +189,7 @@ function providerConfig() {
     c.azureApiVersion = settings.azureApiVersion;
   }
   // An active agent may pin a model (applied only when it matches the current provider).
-  const ag = activeAgent();
+  const ag = agentOverride || activeAgent();
   if (ag && ag.model && (!ag.provider || ag.provider === c.provider)) {
     c.model = ag.model;
     if (c.provider === 'ollama') c.ollamaModel = ag.model;
@@ -953,7 +954,7 @@ async function runSchedule(sch) {
   try {
     const before = currentEntry(tab);
     await submitQuery(sch.prompt, {
-      tab, skipFollowup: true, allowNavigate: false, deep: !!sch.deep, background: true, displayText: sch.prompt,
+      tab, skipFollowup: true, allowNavigate: false, deep: !!sch.deep, background: true, agentId: sch.agentId || null, displayText: sch.prompt,
     });
     const after = currentEntry(tab);
     if (after && after !== before && after.kind === 'page') {
@@ -1510,7 +1511,20 @@ function openMap() { renderMap(); els.mapView.classList.add('open'); }
 function closeMap() { els.mapView.classList.remove('open'); }
 
 // --- Scheduled agents UI ----------------------------------------------------
-function openSched() { renderSchedules(); els.schedView.classList.add('open'); }
+function openSched() { populateSchedAgentSelect(); renderSchedules(); els.schedView.classList.add('open'); }
+function populateSchedAgentSelect() {
+  const sel = document.getElementById('sched-agent');
+  if (!sel) return;
+  const cur = sel.value;
+  sel.innerHTML = '<option value="">None (default Sprig)</option>';
+  for (const a of agents) {
+    const o = document.createElement('option');
+    o.value = a.id;
+    o.textContent = a.name;
+    sel.appendChild(o);
+  }
+  if (cur && agents.find((a) => a.id === cur)) sel.value = cur;
+}
 function closeSched() { els.schedView.classList.remove('open'); }
 function renderSchedulesIfOpen() { if (els.schedView && els.schedView.classList.contains('open')) renderSchedules(); }
 
@@ -1550,7 +1564,9 @@ function renderSchedules() {
     title.textContent = (sch.deep ? '🔬 ' : '') + (sch.title || sch.prompt);
     const when = document.createElement('div');
     when.className = 'si-when';
+    const agName = sch.agentId ? ((agents.find((a) => a.id === sch.agentId) || {}).name || '') : '';
     when.textContent = ruleSummary(sch)
+      + (agName ? ` · as ${agName}` : '')
       + (sch.enabled ? '' : ' · paused')
       + (sch.running ? ' · running…' : '')
       + (sch.lastRun ? ' · last ' + new Date(sch.lastRun).toLocaleString() : '');
@@ -1593,6 +1609,7 @@ function addScheduleFromForm() {
   const intervalMs = parseInt(document.getElementById('sched-interval').value, 10) || 3600000;
   const deep = document.getElementById('sched-deep').checked;
   const days = Array.from(document.querySelectorAll('#sched-days input:checked')).map((c) => parseInt(c.value, 10));
+  const agentId = document.getElementById('sched-agent').value || null;
   const rule = type === 'interval'
     ? { type, intervalMs }
     : type === 'weekly'
@@ -1601,7 +1618,7 @@ function addScheduleFromForm() {
   schedules.push({
     id: uid(),
     title: prompt.length > 40 ? prompt.slice(0, 37) + '…' : prompt,
-    prompt, rule, deep, enabled: true, lastRun: 0, tabId: null, entryId: null, running: false,
+    prompt, rule, deep, agentId, enabled: true, lastRun: 0, tabId: null, entryId: null, running: false,
   });
   startScheduler();
   scheduleSave();
@@ -1653,7 +1670,29 @@ function parseAgentFile(text, fallbackName) {
 
 function openAgents() { renderAgents(); els.agentsView.classList.add('open'); }
 function closeAgents() { els.agentsView.classList.remove('open'); }
-function setActiveAgent(id) { activeAgentId = id; scheduleSave(); renderAgents(); }
+function setActiveAgent(id) { activeAgentId = id; scheduleSave(); renderAgents(); updateAgentChip(); }
+
+// Show the active agent as a dismissible chip above the composer.
+function updateAgentChip() {
+  const el = els.agentChip;
+  if (!el) return;
+  const a = activeAgent();
+  if (!a) { el.hidden = true; el.innerHTML = ''; return; }
+  el.hidden = false;
+  el.innerHTML = '';
+  const label = document.createElement('span');
+  label.textContent = `👤 ${a.name}`;
+  label.title = 'Active agent — click to manage';
+  label.style.cursor = 'pointer';
+  label.addEventListener('click', openAgents);
+  const x = document.createElement('button');
+  x.className = 'agent-chip-x';
+  x.textContent = '✕';
+  x.title = 'Deactivate agent';
+  x.addEventListener('click', (e) => { e.stopPropagation(); setActiveAgent(null); });
+  el.appendChild(label);
+  el.appendChild(x);
+}
 
 async function importAgentFile() {
   const res = await window.chervil.openAgentFile();
@@ -1978,6 +2017,8 @@ async function submitQuery(text, opts = {}) {
   const tab = opts.tab || activeTab();
   if (!tab || isTabBusy(tab.id)) return;
   const isActive = () => tab.id === activeId;
+  // Effective agent: a per-run override (e.g. a scheduled "run as" agent) or the active one.
+  const runAgentObj = opts.agentId ? (agents.find((a) => a.id === opts.agentId) || null) : activeAgent();
 
   // Decide refine vs new + whether to send the current page as context.
   const curEntry = currentEntry(tab);
@@ -2047,9 +2088,9 @@ async function submitQuery(text, opts = {}) {
       verify,
       profile: settings.profile || null,
       attachments: opts.attachments || [],
-      mcpServers: enabledMcpServers(),
-      agent: activeAgentPersona(),
-      config: providerConfig(),
+      mcpServers: enabledMcpServers(runAgentObj),
+      agent: runAgentObj ? runAgentObj.persona : null,
+      config: providerConfig(runAgentObj),
     });
 
     if (isActive() && previewTimer) { clearTimeout(previewTimer); previewTimer = null; }
@@ -2440,11 +2481,11 @@ async function refreshSttKeyStatus() {
 // Only enabled servers with a URL are sent. MCP tools run server-side as part of
 // the request, so the opt-in list IS the trust gate — we recommend trusted/read-only
 // servers. MCP is Claude-only and remote-URL-only in this build.
-function enabledMcpServers() {
+function enabledMcpServers(agentOverride) {
   if (settings.provider !== 'claude') return [];
   let servers = (settings.mcpServers || []).filter((s) => s && s.enabled && s.url && s.url.trim());
   // An active agent can restrict which MCP servers it's allowed to use.
-  const ag = activeAgent();
+  const ag = agentOverride || activeAgent();
   if (ag && Array.isArray(ag.mcp) && ag.mcp.length) {
     const allow = new Set(ag.mcp.map((n) => String(n).toLowerCase()));
     servers = servers.filter((s) => allow.has(String(s.name || '').toLowerCase()));
@@ -2719,6 +2760,7 @@ async function init() {
     agents = restored.agents.filter((a) => a && a.persona);
     activeAgentId = restored.activeAgentId && agents.find((a) => a.id === restored.activeAgentId) ? restored.activeAgentId : null;
   }
+  updateAgentChip();
   startScheduler();
 
   applyTabLayout();
