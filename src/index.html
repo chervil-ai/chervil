@@ -60,6 +60,7 @@
         <div id="omni-actions">
           <button id="map-btn" class="omni-btn text" title="Thinking canvas — map of this tab's pages">⌗ Map</button>
           <button id="history-btn" class="omni-btn text" title="History &amp; Trash">History</button>
+          <button id="sched-btn" class="omni-btn text" title="Scheduled agents">⏰ Schedules</button>
           <button id="save-btn" class="omni-btn text" title="Save this page to disk" disabled>⤓ Save</button>
           <button id="settings-btn" class="omni-btn" title="Settings">⚙</button>
           <div id="mode-badge" class="badge">ready</div>
@@ -376,6 +377,55 @@
   </div>
 
   <!-- Thinking canvas: a map of the current tab's page tree -->
+  <!-- Scheduled agents -->
+  <div id="sched-view" class="sched-view">
+    <div class="sched-panel">
+      <div class="sched-head">
+        <span class="sched-title">⏰ Scheduled agents</span>
+        <button id="sched-close" class="omni-btn" title="Close">✕</button>
+      </div>
+      <p class="sched-sub">Sprig runs a prompt on a schedule and notifies you when the page is ready. Runs in the background while Chervil sits in the tray.</p>
+
+      <form id="sched-form" class="sched-form" autocomplete="off">
+        <textarea id="sched-prompt" rows="2" placeholder="What should Sprig do on a schedule? e.g. “Compose an AI news briefing for today”"></textarea>
+        <div class="sched-row">
+          <label>When
+            <select id="sched-type">
+              <option value="daily">Every day at…</option>
+              <option value="weekly">Specific days at…</option>
+              <option value="interval">Every…</option>
+            </select>
+          </label>
+          <label id="sched-time-wrap">Time <input id="sched-time" type="time" value="08:00" /></label>
+          <label id="sched-interval-wrap" hidden>Interval
+            <select id="sched-interval">
+              <option value="1800000">30 min</option>
+              <option value="3600000">1 hour</option>
+              <option value="10800000">3 hours</option>
+              <option value="21600000">6 hours</option>
+              <option value="43200000">12 hours</option>
+            </select>
+          </label>
+        </div>
+        <div id="sched-days" class="sched-days" hidden>
+          <label><input type="checkbox" value="1" /> Mon</label>
+          <label><input type="checkbox" value="2" /> Tue</label>
+          <label><input type="checkbox" value="3" /> Wed</label>
+          <label><input type="checkbox" value="4" /> Thu</label>
+          <label><input type="checkbox" value="5" /> Fri</label>
+          <label><input type="checkbox" value="6" /> Sat</label>
+          <label><input type="checkbox" value="0" /> Sun</label>
+        </div>
+        <div class="sched-row">
+          <label class="sched-deep"><input id="sched-deep" type="checkbox" /> Deep Dive (thorough, cited)</label>
+          <button type="submit" class="sched-add">Add schedule</button>
+        </div>
+      </form>
+
+      <div id="sched-list" class="sched-list"></div>
+    </div>
+  </div>
+
   <div id="map-view" class="map-view">
     <div class="map-head">
       <span class="map-title">⌗ Thinking canvas</span>

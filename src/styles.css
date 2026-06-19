@@ -452,6 +452,100 @@ html, body {
 .omni-btn:hover:not(:disabled) { border-color: var(--accent); }
 .omni-btn:disabled { opacity: 0.35; cursor: default; }
 
+/* ---------- Scheduled agents ---------- */
+.sched-view {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: none;
+  align-items: flex-start;
+  justify-content: center;
+  background: rgba(8, 10, 14, 0.92);
+  backdrop-filter: blur(4px);
+  overflow-y: auto;
+}
+.sched-view.open { display: flex; }
+.sched-panel {
+  width: 640px;
+  max-width: calc(100% - 40px);
+  margin: 48px 0;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 20px;
+}
+.sched-head { display: flex; align-items: center; justify-content: space-between; }
+.sched-title { font-size: 18px; font-weight: 700; }
+.sched-sub { color: var(--muted); font-size: 13px; margin: 8px 0 16px; }
+.sched-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 14px;
+  background: var(--bg);
+}
+.sched-form textarea {
+  width: 100%;
+  box-sizing: border-box;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  color: var(--text);
+  padding: 10px 12px;
+  font: inherit;
+  resize: vertical;
+}
+.sched-row { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+.sched-row label { font-size: 13px; color: var(--muted); display: flex; align-items: center; gap: 6px; }
+.sched-form select,
+.sched-form input[type="time"] {
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text);
+  padding: 6px 8px;
+  font: inherit;
+}
+.sched-days { display: flex; flex-wrap: wrap; gap: 12px; }
+.sched-days label { font-size: 12px; color: var(--text); }
+.sched-deep { flex: 1; color: var(--text) !important; }
+.sched-add {
+  margin-left: auto;
+  background: linear-gradient(135deg, var(--accent), var(--accent-2));
+  color: #fff;
+  border: none;
+  border-radius: 10px;
+  padding: 8px 16px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.sched-list { margin-top: 16px; display: flex; flex-direction: column; gap: 10px; }
+.sched-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 12px 14px;
+  background: var(--bg);
+}
+.sched-item .si-main { flex: 1; min-width: 0; }
+.sched-item .si-title { font-size: 14px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sched-item .si-when { font-size: 12px; color: var(--muted); margin-top: 2px; }
+.sched-item .si-btn {
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 8px;
+  padding: 5px 10px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.sched-item .si-btn:hover { border-color: var(--accent); }
+.sched-empty { color: var(--muted); font-size: 13px; text-align: center; padding: 16px; }
+
 /* ---------- Thinking canvas (page map) ---------- */
 .map-view {
   position: fixed;

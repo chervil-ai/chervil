@@ -45,6 +45,8 @@ const els = {
   navTip: document.getElementById('nav-tip'),
   mapBtn: document.getElementById('map-btn'),
   mapView: document.getElementById('map-view'),
+  schedBtn: document.getElementById('sched-btn'),
+  schedView: document.getElementById('sched-view'),
   mapClose: document.getElementById('map-close'),
   mapCanvas: document.getElementById('map-canvas'),
   mapEdges: document.getElementById('map-edges'),
@@ -202,6 +204,9 @@ let activeSpaceId = null;
 //   record = { id, tabId, entryId, query, intervalMs, lastRun, title, refreshing }
 let living = [];
 let livingTimer = null;
+// Scheduled agents: run a prompt on a cron-like rule (interval / daily / weekly).
+//   schedule = { id, title, prompt, rule, deep, enabled, lastRun, tabId, entryId, running }
+let schedules = [];
 const LIVE_INTERVALS = [
   ['off', 'Auto-refresh: off'],
   ['300000', 'every 5 min'],
@@ -872,16 +877,90 @@ function intervalLabel(ms) {
 }
 
 function startScheduler() {
-  if (livingTimer || !living.length) return;
-  livingTimer = setInterval(tickLiving, 30000); // check due pages every 30s
+  if (livingTimer) return;
+  if (!living.length && !schedules.length) return;
+  livingTimer = setInterval(schedulerTick, 30000); // check living pages + schedules every 30s
+}
+
+// Master 30s tick: drives both Living-page refresh and scheduled agents.
+function schedulerTick() {
+  if (!living.length && !schedules.length) { clearInterval(livingTimer); livingTimer = null; return; }
+  tickLiving();
+  tickSchedules();
 }
 
 function tickLiving() {
-  if (!living.length) { clearInterval(livingTimer); livingTimer = null; return; }
   const now = Date.now();
   for (const rec of living.slice()) {
     if (!rec.refreshing && now - (rec.lastRun || 0) >= rec.intervalMs) refreshLiving(rec);
   }
+}
+
+// --- Scheduled agents: run a prompt on a cron-like rule ----------------------
+function tickSchedules() {
+  const now = Date.now();
+  for (const sch of schedules.slice()) {
+    if (!sch.running && scheduleDue(sch, now)) runSchedule(sch);
+  }
+}
+
+// Is this schedule due to fire right now? (interval = elapsed; daily/weekly = past
+// today's time slot and not yet run for it).
+function scheduleDue(sch, now) {
+  if (!sch || !sch.enabled) return false;
+  const r = sch.rule || {};
+  if (r.type === 'interval') {
+    const ms = r.intervalMs || 0;
+    return ms > 0 && (now - (sch.lastRun || 0)) >= ms;
+  }
+  if (r.type !== 'daily' && r.type !== 'weekly') return false;
+  if (r.type === 'weekly') {
+    const days = Array.isArray(r.days) ? r.days : [];
+    if (!days.includes(new Date(now).getDay())) return false;
+  }
+  const parts = String(r.time || '09:00').split(':');
+  const target = new Date(now);
+  target.setHours(parseInt(parts[0], 10) || 0, parseInt(parts[1], 10) || 0, 0, 0);
+  const t = target.getTime();
+  return now >= t && (sch.lastRun || 0) < t;
+}
+
+// Run a scheduled prompt: compose a fresh page in the schedule's dedicated tab, then notify.
+async function runSchedule(sch) {
+  if (sch.running) return;
+  let tab = tabs.find((t) => t.id === sch.tabId);
+  if (!tab) {
+    tab = newTab(false);
+    tab.title = sch.title || (sch.prompt.length > 32 ? sch.prompt.slice(0, 29) + '…' : sch.prompt);
+    sch.tabId = tab.id;
+    renderTabs();
+  }
+  if (isTabBusy(tab.id)) return; // try again next tick
+  sch.running = true;
+  sch.lastRun = Date.now();
+  renderSchedulesIfOpen();
+  try {
+    const before = currentEntry(tab);
+    await submitQuery(sch.prompt, {
+      tab, skipFollowup: true, allowNavigate: false, deep: !!sch.deep, background: true, displayText: sch.prompt,
+    });
+    const after = currentEntry(tab);
+    if (after && after !== before && after.kind === 'page') {
+      sch.entryId = after.id;
+      if (settings.notifications && window.chervil.notify) {
+        window.chervil.notify({
+          title: 'Chervil · scheduled update',
+          body: `“${after.title || sch.title || 'Your page'}” is ready.`,
+          tabId: tab.id,
+          entryId: after.id,
+        });
+      }
+      toast(`Scheduled: “${after.title || sch.title || 'page'}” is ready.`);
+    }
+  } catch { /* ignore a failed run; retry next slot */ }
+  sch.running = false;
+  renderSchedulesIfOpen();
+  scheduleSave();
 }
 
 // Quietly re-run a living page's query and replace its content in place. Runs
@@ -1419,6 +1498,106 @@ function jumpToNode(tab, id) {
 function openMap() { renderMap(); els.mapView.classList.add('open'); }
 function closeMap() { els.mapView.classList.remove('open'); }
 
+// --- Scheduled agents UI ----------------------------------------------------
+function openSched() { renderSchedules(); els.schedView.classList.add('open'); }
+function closeSched() { els.schedView.classList.remove('open'); }
+function renderSchedulesIfOpen() { if (els.schedView && els.schedView.classList.contains('open')) renderSchedules(); }
+
+function ruleSummary(sch) {
+  const r = sch.rule || {};
+  if (r.type === 'interval') {
+    const m = { 1800000: 'every 30 min', 3600000: 'every hour', 10800000: 'every 3 hours', 21600000: 'every 6 hours', 43200000: 'every 12 hours' };
+    return m[r.intervalMs] || 'on an interval';
+  }
+  if (r.type === 'daily') return `every day at ${r.time}`;
+  if (r.type === 'weekly') {
+    const names = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+    const d = (r.days || []).slice().sort((a, b) => a - b).map((x) => names[x]).join(', ');
+    return `${d || 'no days'} at ${r.time}`;
+  }
+  return '';
+}
+
+function renderSchedules() {
+  const list = document.getElementById('sched-list');
+  if (!list) return;
+  list.innerHTML = '';
+  if (!schedules.length) {
+    const e = document.createElement('div');
+    e.className = 'sched-empty';
+    e.textContent = 'No scheduled agents yet. Add one above.';
+    list.appendChild(e);
+    return;
+  }
+  for (const sch of schedules) {
+    const item = document.createElement('div');
+    item.className = 'sched-item';
+    const main = document.createElement('div');
+    main.className = 'si-main';
+    const title = document.createElement('div');
+    title.className = 'si-title';
+    title.textContent = (sch.deep ? '🔬 ' : '') + (sch.title || sch.prompt);
+    const when = document.createElement('div');
+    when.className = 'si-when';
+    when.textContent = ruleSummary(sch)
+      + (sch.enabled ? '' : ' · paused')
+      + (sch.running ? ' · running…' : '')
+      + (sch.lastRun ? ' · last ' + new Date(sch.lastRun).toLocaleString() : '');
+    main.appendChild(title);
+    main.appendChild(when);
+
+    const runBtn = document.createElement('button');
+    runBtn.className = 'si-btn';
+    runBtn.textContent = 'Run now';
+    runBtn.addEventListener('click', () => runSchedule(sch));
+    const tog = document.createElement('button');
+    tog.className = 'si-btn';
+    tog.textContent = sch.enabled ? 'Pause' : 'Resume';
+    tog.addEventListener('click', () => { sch.enabled = !sch.enabled; scheduleSave(); renderSchedules(); });
+    const del = document.createElement('button');
+    del.className = 'si-btn';
+    del.textContent = 'Delete';
+    del.addEventListener('click', () => { schedules = schedules.filter((s) => s.id !== sch.id); scheduleSave(); renderSchedules(); });
+
+    item.appendChild(main);
+    item.appendChild(runBtn);
+    item.appendChild(tog);
+    item.appendChild(del);
+    list.appendChild(item);
+  }
+}
+
+function onSchedTypeChange() {
+  const type = document.getElementById('sched-type').value;
+  document.getElementById('sched-time-wrap').hidden = type === 'interval';
+  document.getElementById('sched-interval-wrap').hidden = type !== 'interval';
+  document.getElementById('sched-days').hidden = type !== 'weekly';
+}
+
+function addScheduleFromForm() {
+  const prompt = document.getElementById('sched-prompt').value.trim();
+  if (!prompt) return;
+  const type = document.getElementById('sched-type').value;
+  const time = document.getElementById('sched-time').value || '08:00';
+  const intervalMs = parseInt(document.getElementById('sched-interval').value, 10) || 3600000;
+  const deep = document.getElementById('sched-deep').checked;
+  const days = Array.from(document.querySelectorAll('#sched-days input:checked')).map((c) => parseInt(c.value, 10));
+  const rule = type === 'interval'
+    ? { type, intervalMs }
+    : type === 'weekly'
+      ? { type, time, days: days.length ? days : [1, 2, 3, 4, 5] }
+      : { type: 'daily', time };
+  schedules.push({
+    id: uid(),
+    title: prompt.length > 40 ? prompt.slice(0, 37) + '…' : prompt,
+    prompt, rule, deep, enabled: true, lastRun: 0, tabId: null, entryId: null, running: false,
+  });
+  startScheduler();
+  scheduleSave();
+  document.getElementById('sched-prompt').value = '';
+  renderSchedules();
+}
+
 // ---- Streaming preview (throttled, active tab only) ----
 function scheduleStreamRender(tabId) {
   if (tabId !== activeId || previewTimer) return;
@@ -1633,8 +1812,10 @@ async function submitQuery(text, opts = {}) {
   if (tab.id === activeId) previewScrollY = 0;
   reqToTab.set(requestId, tab.id);
 
-  els.prompt.value = '';
-  resetPromptHeight();
+  if (!opts.background) {
+    els.prompt.value = '';
+    resetPromptHeight();
+  }
 
   const atts = opts.attachments || [];
   const attNote = atts.length ? `   📎 ${atts.map((a) => a.name).join(', ')}` : '';
@@ -2246,7 +2427,7 @@ function scheduleSave() {
   if (saveTimer) clearTimeout(saveTimer);
   saveTimer = setTimeout(() => {
     saveTimer = null;
-    window.chervil.saveState({ tabs, activeId, settings, library, spaces, activeSpaceId, living });
+    window.chervil.saveState({ tabs, activeId, settings, library, spaces, activeSpaceId, living, schedules });
   }, 500);
 }
 
@@ -2324,8 +2505,13 @@ async function init() {
     living = restored.living.filter((r) => r && r.entryId && r.intervalMs);
     // Reset the clock so pages don't all refresh at once on launch (avoids a cost burst).
     for (const r of living) { r.refreshing = false; r.lastRun = Date.now(); }
-    startScheduler();
   }
+  if (restored && Array.isArray(restored.schedules)) {
+    schedules = restored.schedules
+      .filter((s) => s && s.prompt && s.rule)
+      .map((s) => ({ ...s, running: false }));
+  }
+  startScheduler();
 
   applyTabLayout();
   renderTabs();
@@ -2473,6 +2659,11 @@ for (const btn of [els.back, els.fwd]) {
 
 // Thinking canvas (page map)
 els.mapBtn.addEventListener('click', openMap);
+els.schedBtn.addEventListener('click', openSched);
+els.schedView.addEventListener('click', (e) => { if (e.target === els.schedView) closeSched(); });
+document.getElementById('sched-close').addEventListener('click', closeSched);
+document.getElementById('sched-type').addEventListener('change', onSchedTypeChange);
+document.getElementById('sched-form').addEventListener('submit', (e) => { e.preventDefault(); addScheduleFromForm(); });
 els.mapClose.addEventListener('click', closeMap);
 els.mapView.addEventListener('click', (e) => { if (e.target === els.mapView) closeMap(); });
 
@@ -2628,6 +2819,7 @@ els.synthInput.addEventListener('keydown', (e) => {
 
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') {
+    if (els.schedView.classList.contains('open')) { closeSched(); return; }
     if (els.mapView.classList.contains('open')) { closeMap(); return; }
     if (els.settingsModal.classList.contains('open')) { closeSettings(); return; }
     if (els.libraryDrawer.classList.contains('open')) { closeDrawer(); return; }
