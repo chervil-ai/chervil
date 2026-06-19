@@ -16,6 +16,11 @@ let mainWindow = null;
 
 // --- Bring-your-own API keys (per provider, encrypted at rest via safeStorage) ---
 function keysFile() {
+  return path.join(app.getPath('userData'), 'chervil-keys.bin');
+}
+
+// Pre-rename key file; read once for migration if the new one isn't present yet.
+function legacyKeysFile() {
   return path.join(app.getPath('userData'), 'parslee-keys.bin');
 }
 
@@ -25,7 +30,8 @@ let savedKeys = {};
 function loadSavedKeys() {
   if (process.env.ANTHROPIC_API_KEY) savedKeys.claude = process.env.ANTHROPIC_API_KEY;
   try {
-    const p = keysFile();
+    let p = keysFile();
+    if (!fs.existsSync(p) && fs.existsSync(legacyKeysFile())) p = legacyKeysFile();
     if (fs.existsSync(p) && safeStorage.isEncryptionAvailable()) {
       const obj = JSON.parse(safeStorage.decryptString(fs.readFileSync(p)));
       if (obj && typeof obj === 'object') savedKeys = { ...savedKeys, ...obj };
@@ -69,7 +75,7 @@ function createWindow() {
     minWidth: 900,
     minHeight: 600,
     backgroundColor: '#0b0d12',
-    title: 'Parslee',
+    title: 'Chervil',
     // Sprig as the window/taskbar icon (multi-resolution .ico).
     icon: path.join(__dirname, '..', 'build', 'icon.ico'),
     webPreferences: {
@@ -87,7 +93,7 @@ function createWindow() {
 
   mainWindow.loadFile(path.join(__dirname, '..', 'src', 'index.html'));
 
-  // Allow microphone access for voice input, but ONLY for Parslee's own UI
+  // Allow microphone access for voice input, but ONLY for Chervil's own UI
   // (the file:// origin) — never auto-grant mic/camera to remote sites embedded
   // in the <webview>. Benign browsing permissions (fullscreen, pointer lock) stay
   // allowed so embedded real sites still work; sensitive ones (geolocation,
@@ -110,9 +116,9 @@ function createWindow() {
 
 app.whenReady().then(() => {
   // Windows shows the AppUserModelID as the toast/notification source; set it so
-  // Living-page notifications appear as "Parslee" (with the app icon) rather than
+  // Living-page notifications appear as "Chervil" (with the app icon) rather than
   // the generic electron.app.* identity.
-  if (process.platform === 'win32') app.setAppUserModelId('com.parslee.app');
+  if (process.platform === 'win32') app.setAppUserModelId('com.chervil.app');
   loadSavedKeys();
   createWindow();
 
@@ -129,7 +135,7 @@ app.on('window-all-closed', () => {
  * The renderer asks a question; we run the agent and stream progress back.
  * Returns the final result object: a generated page or a navigation directive.
  */
-ipcMain.handle('parslee:ask', async (event, payload) => {
+ipcMain.handle('chervil:ask', async (event, payload) => {
   const { query, history, requestId, pageContext, allowNavigate, refineMode, spaceContext, deep, verify, profile, attachments, mcpServers } =
     payload || {};
   const send = (channel, data) => {
@@ -142,8 +148,8 @@ ipcMain.handle('parslee:ask', async (event, payload) => {
       history: Array.isArray(history) ? history : [],
       // Stream events are tagged with requestId so the renderer can route them to the
       // right tab — multiple tabs can generate concurrently.
-      onStatus: (status) => send('parslee:status', { requestId, status }),
-      onText: (delta) => send('parslee:chunk', { requestId, delta }),
+      onStatus: (status) => send('chervil:status', { requestId, status }),
+      onText: (delta) => send('chervil:chunk', { requestId, delta }),
       pageContext: pageContext || null,
       allowNavigate: allowNavigate !== false,
       refineMode: refineMode || null,
@@ -162,7 +168,7 @@ ipcMain.handle('parslee:ask', async (event, payload) => {
 });
 
 // --- Applet bridge: a composed page asks Sprig for live data -------------
-ipcMain.handle('parslee:applet-ask', async (_event, payload) => {
+ipcMain.handle('chervil:applet-ask', async (_event, payload) => {
   try {
     const { prompt } = payload || {};
     const res = await runAppletAsk({ prompt, config: providerConfigFrom(payload) });
@@ -174,14 +180,14 @@ ipcMain.handle('parslee:applet-ask', async (_event, payload) => {
 
 // --- System notifications: a Living page changed in the background -------
 // The renderer fires this from refreshLiving when a page's content changed and
-// the window isn't focused. Clicking the toast focuses Parslee and asks the
+// the window isn't focused. Clicking the toast focuses Chervil and asks the
 // renderer to jump to the page that updated.
-ipcMain.handle('parslee:notify', async (_event, payload) => {
+ipcMain.handle('chervil:notify', async (_event, payload) => {
   try {
     if (!Notification.isSupported()) return { ok: false, error: 'unsupported' };
     const { title, body, tabId, entryId } = payload || {};
     const n = new Notification({
-      title: String(title || 'Parslee'),
+      title: String(title || 'Chervil'),
       body: String(body || ''),
       icon: path.join(__dirname, '..', 'build', 'icon.ico'),
       silent: false,
@@ -192,7 +198,7 @@ ipcMain.handle('parslee:notify', async (_event, payload) => {
         mainWindow.show();
         mainWindow.focus();
         if (!mainWindow.webContents.isDestroyed()) {
-          mainWindow.webContents.send('parslee:notification-click', { tabId, entryId });
+          mainWindow.webContents.send('chervil:notification-click', { tabId, entryId });
         }
       }
     });
@@ -204,21 +210,21 @@ ipcMain.handle('parslee:notify', async (_event, payload) => {
 });
 
 // --- Bring-your-own API key IPC (per provider) ---------------------------
-ipcMain.handle('parslee:get-key-status', async () => {
+ipcMain.handle('chervil:get-key-status', async () => {
   const status = {};
   for (const p of ['claude', 'grok', 'gemini', 'azure', 'stt']) status[p] = !!savedKeys[p];
   status.claudeFromEnv = !!process.env.ANTHROPIC_API_KEY && savedKeys.claude === process.env.ANTHROPIC_API_KEY;
   return status;
 });
 
-ipcMain.handle('parslee:set-api-key', async (_event, payload) => {
+ipcMain.handle('chervil:set-api-key', async (_event, payload) => {
   const provider = payload && typeof payload.provider === 'string' ? payload.provider : '';
   const key = payload && typeof payload.apiKey === 'string' ? payload.apiKey.trim() : '';
   return setKey(provider, key);
 });
 
 // Web-agent: decide the next action on a live site.
-ipcMain.handle('parslee:agent-step', async (_event, payload) => {
+ipcMain.handle('chervil:agent-step', async (_event, payload) => {
   try {
     const { task, pageState, steps } = payload || {};
     const action = await runAgentStep({ task, pageState, steps, config: providerConfigFrom(payload) });
@@ -232,7 +238,7 @@ ipcMain.handle('parslee:agent-step', async (_event, payload) => {
 // The renderer records the mic and sends the audio bytes here; we POST them as
 // multipart/form-data to a configurable OpenAI-Whisper-compatible endpoint
 // (OpenAI, Groq, Azure, or a local whisper server) using the saved 'stt' key.
-ipcMain.handle('parslee:transcribe', async (_event, payload) => {
+ipcMain.handle('chervil:transcribe', async (_event, payload) => {
   try {
     const { audio, mimeType, filename, endpoint, model } = payload || {};
     if (!audio) return { ok: false, error: 'No audio captured.' };
@@ -270,7 +276,7 @@ ipcMain.handle('parslee:transcribe', async (_event, payload) => {
 });
 
 // Live model list for the Settings dropdown (free metadata call).
-ipcMain.handle('parslee:list-models', async (_event, payload) => {
+ipcMain.handle('chervil:list-models', async (_event, payload) => {
   try {
     const models = await runListModels({ config: providerConfigFrom(payload) });
     return { ok: true, models: Array.isArray(models) ? models : [] };
@@ -280,12 +286,12 @@ ipcMain.handle('parslee:list-models', async (_event, payload) => {
 });
 
 // --- Export a composed page as PDF --------------------------------------
-ipcMain.handle('parslee:export-pdf', async (event, payload) => {
+ipcMain.handle('chervil:export-pdf', async (event, payload) => {
   const { html, suggestedName } = payload || {};
   if (!html) return { ok: false, error: 'Nothing to export.' };
   const win = BrowserWindow.fromWebContents(event.sender);
-  const safe = String(suggestedName || 'parslee-page')
-    .replace(/[^a-z0-9\-_ ]+/gi, '').trim().slice(0, 80) || 'parslee-page';
+  const safe = String(suggestedName || 'chervil-page')
+    .replace(/[^a-z0-9\-_ ]+/gi, '').trim().slice(0, 80) || 'chervil-page';
 
   const { canceled, filePath } = await dialog.showSaveDialog(win, {
     title: 'Export PDF',
@@ -295,7 +301,7 @@ ipcMain.handle('parslee:export-pdf', async (event, payload) => {
   if (canceled || !filePath) return { ok: false, canceled: true };
 
   // Render the (self-contained) page HTML in a hidden window, then print it to PDF.
-  const tmp = path.join(os.tmpdir(), `parslee-export-${Date.now()}.html`);
+  const tmp = path.join(os.tmpdir(), `chervil-export-${Date.now()}.html`);
   const printWin = new BrowserWindow({
     show: false,
     webPreferences: { sandbox: true, javascript: true },
@@ -318,14 +324,14 @@ ipcMain.handle('parslee:export-pdf', async (event, payload) => {
 });
 
 // --- Save a composed page to disk ---------------------------------------
-ipcMain.handle('parslee:save-page', async (event, payload) => {
+ipcMain.handle('chervil:save-page', async (event, payload) => {
   const { html, suggestedName } = payload || {};
   if (!html) return { ok: false, error: 'Nothing to save.' };
   const win = BrowserWindow.fromWebContents(event.sender);
-  const safe = String(suggestedName || 'parslee-page')
+  const safe = String(suggestedName || 'chervil-page')
     .replace(/[^a-z0-9\-_ ]+/gi, '')
     .trim()
-    .slice(0, 80) || 'parslee-page';
+    .slice(0, 80) || 'chervil-page';
 
   const { canceled, filePath } = await dialog.showSaveDialog(win, {
     title: 'Save page',
@@ -344,12 +350,18 @@ ipcMain.handle('parslee:save-page', async (event, payload) => {
 
 // --- Persist & restore session state (tabs, prompts, pages) --------------
 function stateFile() {
+  return path.join(app.getPath('userData'), 'chervil-state.json');
+}
+
+// Pre-rename state file; migrated forward on the first save once the new file exists.
+function legacyStateFile() {
   return path.join(app.getPath('userData'), 'parslee-state.json');
 }
 
-ipcMain.handle('parslee:load-state', async () => {
+ipcMain.handle('chervil:load-state', async () => {
   try {
-    const p = stateFile();
+    let p = stateFile();
+    if (!fs.existsSync(p) && fs.existsSync(legacyStateFile())) p = legacyStateFile();
     if (!fs.existsSync(p)) return null;
     return JSON.parse(fs.readFileSync(p, 'utf8'));
   } catch {
@@ -357,7 +369,7 @@ ipcMain.handle('parslee:load-state', async () => {
   }
 });
 
-ipcMain.handle('parslee:save-state', async (_event, state) => {
+ipcMain.handle('chervil:save-state', async (_event, state) => {
   try {
     fs.writeFileSync(stateFile(), JSON.stringify(state), 'utf8');
     return { ok: true };

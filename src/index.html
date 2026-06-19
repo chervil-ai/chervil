@@ -4,11 +4,11 @@
   <meta charset="utf-8" />
   <!-- 'unsafe-inline' for script-src lets composed pages (rendered in the sandboxed
        srcdoc iframe, which inherits this CSP) run their own inline JS + the injected
-       Parslee bridge runtime. Isolation is provided by the iframe sandbox, not this CSP;
+       Chervil bridge runtime. Isolation is provided by the iframe sandbox, not this CSP;
        the renderer itself has no inline-script injection surface. -->
   <meta http-equiv="Content-Security-Policy"
         content="default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; script-src 'self' 'unsafe-inline';" />
-  <title>Parslee</title>
+  <title>Chervil</title>
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
@@ -25,7 +25,7 @@
       <header id="brand">
         <img class="logo-img" src="sprig-badge.jpg" alt="Sprig" />
         <div class="brand-text">
-          <div class="brand-name">Parslee</div>
+          <div class="brand-name">Chervil</div>
           <div class="brand-tag">chatting with Sprig</div>
         </div>
       </header>
@@ -54,7 +54,7 @@
       <div id="omnibar">
         <button id="back-btn" class="omni-btn" title="Back" disabled>‹</button>
         <button id="fwd-btn" class="omni-btn" title="Forward" disabled>›</button>
-        <div id="page-title">Welcome to Parslee</div>
+        <div id="page-title">Welcome to Chervil</div>
         <div id="omni-actions">
           <button id="map-btn" class="omni-btn text" title="Thinking canvas — map of this tab's pages">⌗ Map</button>
           <button id="history-btn" class="omni-btn text" title="History &amp; Trash">History</button>
@@ -75,7 +75,7 @@
         <!-- First-run / loading overlay -->
         <div id="overlay">
           <div class="overlay-card">
-            <img class="overlay-sprig" src="sprig-hero.jpg" alt="Sprig, the Parslee mascot" />
+            <img class="overlay-sprig" src="sprig-hero.jpg" alt="Sprig, the Chervil mascot" />
             <h1>Meet Sprig</h1>
             <p class="overlay-sub">Your guide to the agentic web — just ask.</p>
             <p class="overlay-hint">Just say <strong>“Hey Sprig, …”</strong> followed by what you want.
@@ -146,7 +146,7 @@
         <h3>When you click a link in a composed page</h3>
         <label class="opt">
           <input type="radio" name="linkBehavior" value="smart" />
-          <span><strong>Smart</strong><small>Let Parslee decide — open real apps/sites live, compose a page for topics.</small></span>
+          <span><strong>Smart</strong><small>Let Chervil decide — open real apps/sites live, compose a page for topics.</small></span>
         </label>
         <label class="opt">
           <input type="radio" name="linkBehavior" value="live" />
@@ -154,7 +154,7 @@
         </label>
         <label class="opt">
           <input type="radio" name="linkBehavior" value="compose" />
-          <span><strong>Compose a Parslee page</strong><small>Always compose a fresh page about the link.</small></span>
+          <span><strong>Compose a Chervil page</strong><small>Always compose a fresh page about the link.</small></span>
         </label>
       </section>
 
@@ -162,7 +162,7 @@
         <h3>When you send a follow-up about the current page</h3>
         <label class="opt">
           <input type="radio" name="followupMode" value="auto" />
-          <span><strong>Let the model decide</strong><small>Parslee refines the page or makes a new one based on your message.</small></span>
+          <span><strong>Let the model decide</strong><small>Chervil refines the page or makes a new one based on your message.</small></span>
         </label>
         <label class="opt">
           <input type="radio" name="followupMode" value="ask" />
@@ -188,7 +188,7 @@
         </label>
         <label class="opt">
           <input type="radio" name="provider" value="azure" />
-          <span><strong>Azure AI Foundry</strong><small><b>Gain:</b> enterprise/compliance, runs in your own Azure with many hosted models. <b>Lose:</b> no live web grounding or Deep Dive in Parslee yet; needs your endpoint, deployment &amp; key.</small></span>
+          <span><strong>Azure AI Foundry</strong><small><b>Gain:</b> enterprise/compliance, runs in your own Azure with many hosted models. <b>Lose:</b> no live web grounding or Deep Dive in Chervil yet; needs your endpoint, deployment &amp; key.</small></span>
         </label>
         <label class="opt">
           <input type="radio" name="provider" value="ollama" />
@@ -302,10 +302,10 @@
 
       <section class="setting-group">
         <h3>Notifications</h3>
-        <p class="group-hint">Living pages (the ● live control on a composed page) auto-refresh on a schedule. Parslee keeps refreshing them even when minimized or in the background.</p>
+        <p class="group-hint">Living pages (the ● live control on a composed page) auto-refresh on a schedule. Chervil keeps refreshing them even when minimized or in the background.</p>
         <label class="toggle-row">
           <input id="notify-toggle" type="checkbox" />
-          <span>Show a system notification when a Living page updates while Parslee isn't focused. Click the notification to jump to the page.</span>
+          <span>Show a system notification when a Living page updates while Chervil isn't focused. Click the notification to jump to the page.</span>
         </label>
       </section>
 

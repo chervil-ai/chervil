@@ -226,10 +226,10 @@ const MAX_LIBRARY = 100;
 const DOCTYPE_RE = /<!DOCTYPE html>|<html[\s>]/i;
 
 // Injected into every composed page. Two jobs:
-//   1. Route link clicks back to Parslee (instead of navigating the sandboxed iframe).
-//   2. Expose a live tool bridge — window.parslee.ask(...) — so a composed page can
+//   1. Route link clicks back to Chervil (instead of navigating the sandboxed iframe).
+//   2. Expose a live tool bridge — window.chervil.ask(...) — so a composed page can
 //      call Sprig at runtime and build interactive "applets".
-const PARSLEE_RUNTIME = `<script>(function(){
+const CHERVIL_RUNTIME = `<script>(function(){
   // 1. Link interception.
   document.addEventListener('click', function(e){
     var a = e.target && e.target.closest ? e.target.closest('a') : null;
@@ -239,14 +239,14 @@ const PARSLEE_RUNTIME = `<script>(function(){
     var href = a.href;
     if(!/^https?:/i.test(href)) return;
     e.preventDefault();
-    try { parent.postMessage({ __parslee:true, type:'link', href: href, text: (a.textContent||'').trim() }, '*'); } catch(_){}
+    try { parent.postMessage({ __chervil:true, type:'link', href: href, text: (a.textContent||'').trim() }, '*'); } catch(_){}
   }, true);
 
   // 2. Two-way tool bridge.
   var pending = {}, seq = 0;
   window.addEventListener('message', function(e){
     var d = e.data;
-    if(!d || d.__parslee !== true || d.type !== 'tool-result') return;
+    if(!d || d.__chervil !== true || d.type !== 'tool-result') return;
     var p = pending[d.id];
     if(!p) return;
     delete pending[d.id];
@@ -256,15 +256,17 @@ const PARSLEE_RUNTIME = `<script>(function(){
     return new Promise(function(resolve, reject){
       var id = 'c' + (++seq);
       pending[id] = { resolve: resolve, reject: reject };
-      try { parent.postMessage({ __parslee:true, type:'tool', id:id, name:name, args:args||{} }, '*'); }
+      try { parent.postMessage({ __chervil:true, type:'tool', id:id, name:name, args:args||{} }, '*'); }
       catch(err){ delete pending[id]; reject(err); return; }
       setTimeout(function(){ if(pending[id]){ delete pending[id]; reject(new Error('Sprig timed out')); } }, 90000);
     });
   }
-  window.parslee = {
+  window.chervil = {
     call: call,
     ask: function(prompt){ return call('ask', { prompt: String(prompt || '') }); }
   };
+  // Back-compat: pages composed before the Chervil rename call window.parslee.*
+  try { window.parslee = window.chervil; } catch(e){}
 
   // 3. Report scroll position so streaming re-renders can preserve it.
   var _ss;
@@ -272,7 +274,7 @@ const PARSLEE_RUNTIME = `<script>(function(){
     if(_ss) return;
     _ss = setTimeout(function(){
       _ss = null;
-      try { parent.postMessage({ __parslee:true, type:'scroll', y: (window.scrollY || window.pageYOffset || 0) }, '*'); } catch(e){}
+      try { parent.postMessage({ __chervil:true, type:'scroll', y: (window.scrollY || window.pageYOffset || 0) }, '*'); } catch(e){}
     }, 100);
   }, { passive: true });
 })();</script>`;
@@ -566,14 +568,14 @@ function renderPageHtml(html, scrollY = 0) {
   els.webview.removeAttribute('src');
   els.frame.hidden = false;
   els.overlay.hidden = true;
-  // Append the Parslee runtime (link routing + applet bridge), plus an optional
+  // Append the Chervil runtime (link routing + applet bridge), plus an optional
   // scroll restore so the page doesn't jump to the top on each streaming re-render.
   const restore = scrollY > 0
     ? `<script>try{window.scrollTo(0,${Math.round(scrollY)});}catch(e){}</script>`
     : '';
   // Extra bottom scroll room so the floating remix bar never hides the page's last lines.
   const clearance = '<style>body{padding-bottom:170px !important;}</style>';
-  els.frame.setAttribute('srcdoc', html + clearance + PARSLEE_RUNTIME + restore);
+  els.frame.setAttribute('srcdoc', html + clearance + CHERVIL_RUNTIME + restore);
 }
 
 function renderSite(url) {
@@ -591,7 +593,7 @@ function renderCurrentPage() {
 
   if (!entry) {
     showOverlay();
-    els.pageTitle.textContent = 'Welcome to Parslee';
+    els.pageTitle.textContent = 'Welcome to Chervil';
     setBadge('', 'ready');
     els.save.disabled = true;
     setRemixVisible(false);
@@ -603,7 +605,7 @@ function renderCurrentPage() {
     setRemixVisible(false);
   } else {
     renderPageHtml(entry.html);
-    els.pageTitle.textContent = entry.title || 'Parslee page';
+    els.pageTitle.textContent = entry.title || 'Chervil page';
     setBadge('page', 'composed');
     els.save.disabled = false;
     setRemixVisible(true);
@@ -878,7 +880,7 @@ async function refreshLiving(rec) {
   rec.lastRun = Date.now();
   updateLiveControls();
   try {
-    const resp = await window.parslee.ask({
+    const resp = await window.chervil.ask({
       query: rec.query,
       history: [],
       requestId: uid(), // not registered for streaming — quiet refresh
@@ -898,9 +900,9 @@ async function refreshLiving(rec) {
         // If the user isn't looking (window minimized/unfocused), raise an OS
         // notification so background refreshes don't go unnoticed.
         const unattended = typeof document !== 'undefined' && (document.hidden || !document.hasFocus());
-        if (settings.notifications && unattended && window.parslee.notify) {
-          window.parslee.notify({
-            title: 'Parslee · page updated',
+        if (settings.notifications && unattended && window.chervil.notify) {
+          window.chervil.notify({
+            title: 'Chervil · page updated',
             body: `Sprig refreshed “${entry.title}”.`,
             tabId: tab.id,
             entryId: entry.id,
@@ -1008,7 +1010,7 @@ async function onVoiceStop() {
   try {
     const b64 = arrayBufferToBase64(await blob.arrayBuffer());
     const ext = /mp4/.test(type) ? 'mp4' : /ogg/.test(type) ? 'ogg' : 'webm';
-    const resp = await window.parslee.transcribe({
+    const resp = await window.chervil.transcribe({
       audio: b64,
       mimeType: type,
       filename: 'speech.' + ext,
@@ -1153,7 +1155,7 @@ async function startAgent(task) {
       if (!state) { clearStatus(); addMessage(tab, 'bot', 'I couldn’t read this page (it may block automation).', 'error'); break; }
 
       setStatus('Sprig is deciding the next step…');
-      const resp = await window.parslee.agentStep({ task, pageState: state, steps, config: providerConfig() });
+      const resp = await window.chervil.agentStep({ task, pageState: state, steps, config: providerConfig() });
       clearStatus();
       if (!resp.ok) { addMessage(tab, 'bot', resp.error || 'Agent error.', 'error'); break; }
 
@@ -1637,7 +1639,7 @@ async function submitQuery(text, opts = {}) {
   }
 
   try {
-    const resp = await window.parslee.ask({
+    const resp = await window.chervil.ask({
       query,
       history: sentHistory,
       requestId,
@@ -2030,7 +2032,7 @@ function applySettingsToUI() {
 async function refreshSttKeyStatus() {
   if (!els.sttKeyStatus) return;
   try {
-    const st = await window.parslee.getKeyStatus();
+    const st = await window.chervil.getKeyStatus();
     const has = st && st.stt;
     els.sttKeyStatus.textContent = has ? 'A transcription key is saved.' : 'No transcription key saved yet.';
     els.sttKeyStatus.className = 'field-note' + (has ? ' ok' : '');
@@ -2186,7 +2188,7 @@ function rebuildModelSelect() {
 // Pull the live model list from the provider and repopulate if it's still showing.
 function fetchModelsFor(p) {
   if (p === 'azure') return; // Azure is deployment-based — no model list
-  window.parslee.listModels(providerConfig()).then((res) => {
+  window.chervil.listModels(providerConfig()).then((res) => {
     if (res && res.ok && Array.isArray(res.models) && res.models.length) {
       liveModels[p] = res.models;
       if (settings.provider === p && els.settingsModal.classList.contains('open')) {
@@ -2199,7 +2201,7 @@ function fetchModelsFor(p) {
 function refreshKeyStatus() {
   const p = settings.provider;
   if (p === 'ollama') { els.apiKeyStatus.textContent = ''; return; }
-  window.parslee.getKeyStatus().then((s) => {
+  window.chervil.getKeyStatus().then((s) => {
     const has = s && s[p];
     if (has) {
       els.apiKeyStatus.textContent = (p === 'claude' && s.claudeFromEnv)
@@ -2227,7 +2229,7 @@ function scheduleSave() {
   if (saveTimer) clearTimeout(saveTimer);
   saveTimer = setTimeout(() => {
     saveTimer = null;
-    window.parslee.saveState({ tabs, activeId, settings, library, spaces, activeSpaceId, living });
+    window.chervil.saveState({ tabs, activeId, settings, library, spaces, activeSpaceId, living });
   }, 500);
 }
 
@@ -2259,7 +2261,7 @@ function sanitizeTab(t) {
 async function init() {
   let restored = null;
   try {
-    restored = await window.parslee.loadState();
+    restored = await window.chervil.loadState();
   } catch { /* ignore */ }
 
   if (restored && Array.isArray(restored.tabs) && restored.tabs.length) {
@@ -2322,7 +2324,7 @@ async function saveCurrentPage() {
   const entry = currentEntry(tab);
   if (!entry || entry.kind !== 'page') return;
 
-  const res = await window.parslee.savePage({
+  const res = await window.chervil.savePage({
     html: entry.html,
     suggestedName: entry.title,
   });
@@ -2338,7 +2340,7 @@ async function exportCurrentPdf() {
   const entry = currentEntry(tab);
   if (!entry || entry.kind !== 'page') return;
   toast('Exporting PDF…');
-  const res = await window.parslee.exportPdf({ html: entry.html, suggestedName: entry.title });
+  const res = await window.chervil.exportPdf({ html: entry.html, suggestedName: entry.title });
   if (res && res.ok) addMessage(tab, 'bot', `Exported PDF to ${res.path}`);
   else if (res && !res.canceled) addMessage(tab, 'bot', `Couldn't export PDF: ${res.error || 'unknown error'}`, 'error');
 }
@@ -2481,7 +2483,7 @@ if (els.sttKeySave) els.sttKeySave.addEventListener('click', async () => {
   els.sttKeyStatus.textContent = 'Saving…';
   els.sttKeyStatus.className = 'field-note';
   try {
-    const res = await window.parslee.setApiKey('stt', els.sttKeyInput.value.trim());
+    const res = await window.chervil.setApiKey('stt', els.sttKeyInput.value.trim());
     if (res && res.ok) {
       els.sttKeyInput.value = '';
       if (res.warn) { els.sttKeyStatus.textContent = res.warn; els.sttKeyStatus.className = 'field-note warn'; }
@@ -2518,7 +2520,7 @@ els.apiKeySave.addEventListener('click', async () => {
   els.apiKeyStatus.textContent = 'Saving…';
   els.apiKeyStatus.className = 'field-note';
   try {
-    const res = await window.parslee.setApiKey(settings.provider, els.apiKeyInput.value.trim());
+    const res = await window.chervil.setApiKey(settings.provider, els.apiKeyInput.value.trim());
     els.apiKeyInput.value = '';
     refreshKeyStatus();
     if (res && res.warn) { els.apiKeyStatus.textContent = res.warn; els.apiKeyStatus.className = 'field-note warn'; }
@@ -2583,7 +2585,7 @@ document.addEventListener('keydown', (e) => {
 // applet tool calls.
 window.addEventListener('message', (e) => {
   const d = e.data;
-  if (!d || d.__parslee !== true) return;
+  if (!d || d.__chervil !== true) return;
   if (d.type === 'link' && d.href) { handleLinkClick(d.href, d.text || ''); return; }
   if (d.type === 'tool') { handleAppletTool(e.source, d); return; }
   if (d.type === 'scroll' && typeof d.y === 'number') { previewScrollY = d.y; return; }
@@ -2594,14 +2596,14 @@ window.addEventListener('message', (e) => {
 async function handleAppletTool(source, msg) {
   const reply = (payload) => {
     try {
-      if (source) source.postMessage({ __parslee: true, type: 'tool-result', id: msg.id, ...payload }, '*');
+      if (source) source.postMessage({ __chervil: true, type: 'tool-result', id: msg.id, ...payload }, '*');
     } catch { /* ignore */ }
   };
   try {
     if (msg.name === 'ask') {
       const prompt = String((msg.args && msg.args.prompt) || '').trim();
       if (!prompt) return reply({ ok: false, error: 'Empty request.' });
-      const res = await window.parslee.appletAsk({ prompt, config: providerConfig() });
+      const res = await window.chervil.appletAsk({ prompt, config: providerConfig() });
       if (res && res.ok) reply({ ok: true, result: { text: res.text, sources: res.sources || [] } });
       else reply({ ok: false, error: (res && res.error) || 'Sprig could not answer.' });
     } else {
@@ -2613,7 +2615,7 @@ async function handleAppletTool(source, msg) {
 }
 
 // Streamed status updates, routed to the originating tab.
-window.parslee.onStatus(({ requestId, status } = {}) => {
+window.chervil.onStatus(({ requestId, status } = {}) => {
   const tabId = reqToTab.get(requestId);
   if (!tabId) return;
   const rs = runStateFor(tabId);
@@ -2627,7 +2629,7 @@ window.parslee.onStatus(({ requestId, status } = {}) => {
 });
 
 // Streamed HTML deltas, routed to the originating tab.
-window.parslee.onChunk(({ requestId, delta } = {}) => {
+window.chervil.onChunk(({ requestId, delta } = {}) => {
   const tabId = reqToTab.get(requestId);
   if (!tabId) return;
   const rs = runStateFor(tabId);
@@ -2641,8 +2643,8 @@ window.parslee.onChunk(({ requestId, delta } = {}) => {
 });
 
 // Clicking a background notification jumps to the page that updated.
-if (window.parslee.onNotificationClick) {
-  window.parslee.onNotificationClick(({ tabId, entryId } = {}) => {
+if (window.chervil.onNotificationClick) {
+  window.chervil.onNotificationClick(({ tabId, entryId } = {}) => {
     const tab = tabs.find((t) => t.id === tabId);
     if (!tab) return;
     if (entryId && tab.pages.some((p) => p.id === entryId)) tab.currentId = entryId;
