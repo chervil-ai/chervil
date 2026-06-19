@@ -634,7 +634,7 @@ const REMIX = {
   summary:   { label: 'Summarize',  query: 'Summarize the page I am viewing into a tight, well-structured overview that captures the key points and takeaways.' },
   simplify:  { label: 'Simplify',   query: 'Rewrite the page I am viewing in plain, simple language anyone can understand (like explaining to a smart 12-year-old), while keeping the substance.' },
   deeper:    { label: 'Go deeper',  query: 'Expand the page I am viewing into a more detailed, comprehensive version — add depth, nuance, examples, and useful context.' },
-  slides:    { label: 'Slides',     query: 'Turn the page I am viewing into a slide-deck-style page: a sequence of slides, one key idea per slide, with concise bullets and clear headings.' },
+  slides:    { label: 'Slides',     query: 'Turn the page I am viewing into a self-contained slide deck that shows ONE slide at a time (one key idea per slide, a clear heading, concise bullets). Support BOTH on-screen Previous/Next buttons AND Left/Right arrow keys, and show a visible slide counter like "3 / 8". Keep all navigation controls, hints, and the counter in the TOP or upper-center area of each slide — do NOT pin them to the very bottom edge, because the bottom ~180px may be covered by the app toolbar. Each slide must fit within the viewport without requiring scrolling.' },
   keypoints: { label: 'Key points', query: 'Distill the page I am viewing into the essential key points as a clean, scannable bullet list with brief context for each.' },
 };
 
