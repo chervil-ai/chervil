@@ -174,7 +174,7 @@ const MODEL_OPTIONS = {
     ['claude-opus-4-8', 'Claude Opus 4.8 — top quality'],
   ],
   grok: [
-    ['grok-4.3', 'grok-4.3 — recommended (Live Search)'],
+    ['grok-4.3', 'grok-4.3 — recommended (web search)'],
     ['grok-4.20-0309-reasoning', 'grok-4.20 — reasoning'],
     ['grok-4.20-0309-non-reasoning', 'grok-4.20 — non-reasoning'],
   ],

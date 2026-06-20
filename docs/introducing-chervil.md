@@ -155,7 +155,7 @@ Love a page Sprig made? **Save** it to disk as standalone HTML, or **export it a
 Chervil doesn't lock you into one model or one company. It's built around a **pluggable provider system** with genuine bring-your-own-API support:
 
 - **Claude (Anthropic)** — the flagship experience: top-quality composition, live web grounding via search *and* fetch, the full two-phase Deep Dive, and image-rich pages.
-- **Grok (xAI)** — fast reasoning with live web grounding via xAI's Live Search (web, news, and X), with citations.
+- **Grok (xAI)** — fast reasoning with live web grounding via xAI's Agent Tools API (server-side web and X search), with citations.
 - **Gemini (Google)** — huge context, low cost, and live grounding via Google Search.
 - **Azure AI Foundry** — enterprise and compliance, running in your own Azure with your hosted models.
 - **Ollama** — completely free, completely private, running offline on your own machine.
