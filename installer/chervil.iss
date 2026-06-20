@@ -128,15 +128,14 @@ begin
   for i := 1 to Length(S) do
   begin
     c := S[i];
-    case c of
-      '"': r := r + '\"';
-      '\': r := r + '\\';
-      #10: r := r + '\n';
-      #13: r := r + '\r';
-      #9:  r := r + '\t';
-    else
-      r := r + c;
-    end;
+    { Avoid Pascal #nn char literals at line start — ISPP reads a leading
+      '#' as a preprocessor directive. Compare with Ord() instead. }
+    if c = '"' then r := r + '\"'
+    else if c = '\' then r := r + '\\'
+    else if Ord(c) = 10 then r := r + '\n'
+    else if Ord(c) = 13 then r := r + '\r'
+    else if Ord(c) = 9 then r := r + '\t'
+    else r := r + c;
   end;
   Result := r;
 end;
