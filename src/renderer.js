@@ -135,7 +135,7 @@ let settings = {
   followupMode: 'auto',
   provider: 'claude',
   claudeModel: 'claude-sonnet-4-6',
-  grokModel: 'grok-3',
+  grokModel: 'grok-4.3',
   geminiModel: 'gemini-2.5-flash',
   azureModel: '',
   azureEndpoint: '',
@@ -163,7 +163,7 @@ const MODEL_SETTING = {
   claude: 'claudeModel', grok: 'grokModel', gemini: 'geminiModel', azure: 'azureModel', ollama: 'ollamaModel',
 };
 const MODEL_PLACEHOLDER = {
-  claude: 'claude-sonnet-4-6', grok: 'grok-3', gemini: 'gemini-2.5-flash', azure: '(uses deployment)', ollama: 'gemma3:4b',
+  claude: 'claude-sonnet-4-6', grok: 'grok-4.3', gemini: 'gemini-2.5-flash', azure: '(uses deployment)', ollama: 'gemma3:4b',
 };
 // Suggested models per provider for the dropdown (a "Custom…" entry is appended so
 // you can always type your own model id).
@@ -174,8 +174,9 @@ const MODEL_OPTIONS = {
     ['claude-opus-4-8', 'Claude Opus 4.8 — top quality'],
   ],
   grok: [
-    ['grok-3', 'grok-3'],
-    ['grok-2-latest', 'grok-2-latest'],
+    ['grok-4.3', 'grok-4.3 — recommended (Live Search)'],
+    ['grok-4.20-0309-reasoning', 'grok-4.20 — reasoning'],
+    ['grok-4.20-0309-non-reasoning', 'grok-4.20 — non-reasoning'],
   ],
   gemini: [
     ['gemini-2.5-flash', 'gemini-2.5-flash — fast & cheap'],
@@ -3040,6 +3041,12 @@ async function init() {
 
   if (restored && restored.settings) {
     settings = { ...settings, ...restored.settings };
+    // xAI retired the grok-2/grok-3 families (and the early grok-4 *-fast aliases),
+    // redirecting them to grok-4.3; the dead aliases also don't honor Live Search.
+    // Migrate a saved stale model to the current default so web grounding works.
+    if (settings.grokModel && /^grok-(2|3|beta|code-fast|4-fast|4-1-fast|4-0709)/.test(settings.grokModel)) {
+      settings.grokModel = 'grok-4.3';
+    }
     // Tolerate older/corrupt state: MCP servers must be a clean array of records.
     settings.mcpServers = Array.isArray(settings.mcpServers)
       ? settings.mcpServers.filter((s) => s && s.url).map((s) => ({
