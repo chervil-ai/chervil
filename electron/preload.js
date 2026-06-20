@@ -82,6 +82,12 @@ contextBridge.exposeInMainWorld('chervil', {
   /** List the bundled starter agent files (Markdown) shipped in /agents. */
   listStarterAgents: () => ipcRenderer.invoke('chervil:list-starter-agents'),
 
+  /** Distill a prompt session into a reusable agent (name/persona/starters). */
+  synthesizeAgent: (payload) => ipcRenderer.invoke('chervil:synthesize-agent', payload),
+
+  /** Save an agent as a shareable Markdown file via a native save dialog. */
+  saveAgentFile: (payload) => ipcRenderer.invoke('chervil:save-agent-file', payload),
+
   /** Show an OS notification (e.g. a Living page refreshed in the background). */
   notify: (payload) => ipcRenderer.invoke('chervil:notify', payload),
 

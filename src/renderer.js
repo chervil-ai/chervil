@@ -1881,6 +1881,91 @@ function addAgentFromPaste() {
   agents.push(a); ta.value = ''; scheduleSave(); renderAgents();
 }
 
+// Render an agent back to the importable Markdown + frontmatter format so it can
+// be shared. Inverse of parseAgentFile.
+function serializeAgentFile(a) {
+  // Values live on a single frontmatter line; flatten newlines and avoid the
+  // quote char the minimal YAML reader strips.
+  const esc = (s) => String(s == null ? '' : s).replace(/"/g, "'").replace(/\r?\n/g, ' ').trim();
+  const lines = ['---'];
+  lines.push(`name: ${esc(a.name) || 'Agent'}`);
+  if (a.description) lines.push(`description: ${esc(a.description)}`);
+  if (a.model) lines.push(`model: ${esc(a.model)}`);
+  if (a.provider) lines.push(`provider: ${esc(a.provider)}`);
+  if (a.mcp && a.mcp.length) lines.push(`mcp: [${a.mcp.map(esc).join(', ')}]`);
+  if (a.starters && a.starters.length) {
+    lines.push('starters:');
+    a.starters.forEach((s) => lines.push(`  - ${esc(s)}`));
+  }
+  lines.push('---', '', String(a.persona || '').trim(), '');
+  return lines.join('\n');
+}
+
+async function exportAgent(a) {
+  if (!window.chervil.saveAgentFile) { toast('Export isn’t available in this build.'); return; }
+  const text = serializeAgentFile(a);
+  const safe = (a.name || 'agent').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'agent';
+  const res = await window.chervil.saveAgentFile({ text, suggestedName: safe });
+  if (res && res.ok) toast(`Exported “${a.name}”.`);
+  else if (res && res.error) toast(`Export failed: ${res.error}`);
+}
+
+// Flatten a tab's conversation into a transcript the model can distill into an agent.
+function sessionTranscript(tab) {
+  const lines = [];
+  for (const h of (tab && tab.history) || []) {
+    const c = String(h.content || '').trim();
+    if (c) lines.push(`${h.role === 'user' ? 'User' : 'Sprig'}: ${c}`);
+  }
+  return lines.join('\n');
+}
+
+// Turn the active prompt session into a reusable Agent. Uses the model to distill
+// a persona; falls back to a session-seeded persona when synthesis is unavailable
+// (e.g. a compose-only provider or an offline error).
+async function createAgentFromSession() {
+  const tab = activeTab();
+  const userPrompts = [...new Set(
+    (((tab && tab.history) || []).filter((h) => h.role === 'user').map((h) => String(h.content || '').trim()).filter(Boolean)),
+  )];
+  if (!userPrompts.length) { toast('Ask Sprig something first, then turn the session into an agent.'); return; }
+
+  const transcript = sessionTranscript(tab);
+  toast('Distilling this session into an agent…');
+
+  let synth = null;
+  try {
+    if (window.chervil.synthesizeAgent) {
+      const res = await window.chervil.synthesizeAgent({ session: transcript, config: providerConfig() });
+      if (res && res.ok && res.agent && res.agent.persona) synth = res.agent;
+      else if (res && res.error) toast(`Couldn’t auto-distill (${res.error}); built one from your prompts.`);
+    }
+  } catch { /* fall through to the mechanical fallback */ }
+
+  const fallbackName = (tab && tab.title && tab.title !== 'New Tab') ? tab.title : 'Session agent';
+  const a = synth ? {
+    id: uid(),
+    name: (synth.name || '').slice(0, 80) || fallbackName,
+    description: (synth.description || '').slice(0, 300),
+    persona: String(synth.persona || '').trim(),
+    model: '', provider: '', mcp: [],
+    starters: (synth.starters && synth.starters.length ? synth.starters : userPrompts).slice(0, 5),
+  } : {
+    id: uid(),
+    name: fallbackName,
+    description: userPrompts[0].slice(0, 140),
+    persona: `You are a specialist assistant distilled from an earlier session. The user repeatedly asked for help like this:\n${userPrompts.slice(0, 8).map((p) => `- ${p}`).join('\n')}\n\nStay focused on that kind of task. Be concise and practical, cite sources for factual claims, state assumptions when a request is ambiguous, and proactively offer the next useful step.`,
+    model: '', provider: '', mcp: [],
+    starters: userPrompts.slice(0, 5),
+  };
+
+  agents.push(a);
+  scheduleSave();
+  openAgents();
+  renderAgents();
+  toast(`Created agent “${a.name}”. Review and tweak it below.`);
+}
+
 function renderAgents() {
   const list = document.getElementById('agents-list');
   if (!list) return;
@@ -1923,6 +2008,11 @@ function renderAgents() {
     act.className = 'si-btn';
     act.textContent = a.id === activeAgentId ? 'Deactivate' : 'Activate';
     act.addEventListener('click', () => setActiveAgent(a.id === activeAgentId ? null : a.id));
+    const exp = document.createElement('button');
+    exp.className = 'si-btn';
+    exp.textContent = 'Export';
+    exp.title = 'Save as a shareable agent file';
+    exp.addEventListener('click', () => exportAgent(a));
     const del = document.createElement('button');
     del.className = 'si-btn';
     del.textContent = 'Delete';
@@ -1934,6 +2024,7 @@ function renderAgents() {
     });
     item.appendChild(main);
     item.appendChild(act);
+    item.appendChild(exp);
     item.appendChild(del);
     list.appendChild(item);
   }
@@ -2369,6 +2460,21 @@ async function submitQuery(text, opts = {}) {
         content: `[${isRefine ? 'Refined' : 'Displayed'} a page titled "${result.title}"]`,
       });
       addToLibrary(tab, result, query);
+
+      // If the user stepped away while this composed (minimized to tray / window
+      // unfocused), raise an OS notification so a finished page doesn't sit
+      // unseen. Scheduled/background runs notify via runSchedule, so skip those
+      // here to avoid a double toast.
+      const unattended = typeof document !== 'undefined' && (document.hidden || !document.hasFocus());
+      if (!opts.background && settings.notifications && unattended && window.chervil.notify) {
+        const notifyEntry = isRefine ? curEntry : currentEntry(tab);
+        window.chervil.notify({
+          title: 'Chervil · page ready',
+          body: `“${result.title || tab.title || 'Your page'}” is ready.`,
+          tabId: tab.id,
+          entryId: notifyEntry ? notifyEntry.id : null,
+        });
+      }
     }
 
     renderTabs();
@@ -3176,6 +3282,10 @@ els.agentsView.addEventListener('click', (e) => { if (e.target === els.agentsVie
 document.getElementById('agents-close').addEventListener('click', closeAgents);
 document.getElementById('agent-import').addEventListener('click', importAgentFile);
 document.getElementById('agent-add').addEventListener('click', addAgentFromPaste);
+{
+  const fromSession = document.getElementById('agent-from-session');
+  if (fromSession) fromSession.addEventListener('click', createAgentFromSession);
+}
 els.mapClose.addEventListener('click', closeMap);
 els.mapView.addEventListener('click', (e) => { if (e.target === els.mapView) closeMap(); });
 

@@ -10,7 +10,7 @@ const { app, BrowserWindow, ipcMain, dialog, safeStorage, Notification, Tray, Me
 // renders as mojibake in the Windows console).
 require('dotenv').config({ path: path.join(__dirname, '..', '.env'), quiet: true });
 
-const { runAgent, runAppletAsk, runListModels, runAgentStep, runExtractSlides, runExtractDoc, runExtractSheets } = require('../lib/agent');
+const { runAgent, runAppletAsk, runListModels, runAgentStep, runExtractSlides, runExtractDoc, runExtractSheets, runSynthesizeAgent } = require('../lib/agent');
 
 let mainWindow = null;
 let tray = null;
@@ -315,10 +315,15 @@ ipcMain.on('chervil:quick-submit', (_event, text) => {
 });
 
 app.whenReady().then(() => {
-  // Windows shows the AppUserModelID as the toast/notification source; set it so
-  // Living-page notifications appear as "Chervil" (with the app icon) rather than
-  // the generic electron.app.* identity.
-  if (process.platform === 'win32') app.setAppUserModelId('com.chervil.app');
+  // Windows prints the AppUserModelID verbatim as the toast/notification source
+  // *unless* an installed Start Menu shortcut maps that ID to a display name. We
+  // ship from source (no installer/shortcut yet), so use a human-readable ID —
+  // otherwise toasts read "com.chervil.app" instead of "Chervil". When a packaged
+  // installer lands, set this to match the shortcut's AUMID.
+  if (process.platform === 'win32') {
+    app.setName('Chervil');
+    app.setAppUserModelId('Chervil');
+  }
   loadSavedKeys();
   createWindow();
   createTray();
@@ -647,6 +652,39 @@ ipcMain.handle('chervil:list-starter-agents', async () => {
     return files.map((f) => ({ filename: f, text: fs.readFileSync(path.join(dir, f), 'utf8') }));
   } catch {
     return [];
+  }
+});
+
+// --- Synthesize a reusable agent from a prompt session ------------------
+ipcMain.handle('chervil:synthesize-agent', async (_event, payload) => {
+  const { session } = payload || {};
+  if (!session || !String(session).trim()) return { ok: false, error: 'Nothing to learn from yet.' };
+  try {
+    const agent = await runSynthesizeAgent({ session, config: providerConfigFrom(payload) });
+    return { ok: true, agent };
+  } catch (err) {
+    return { ok: false, error: String(err && err.message ? err.message : err) };
+  }
+});
+
+// --- Export a single agent as a shareable Markdown file -----------------
+ipcMain.handle('chervil:save-agent-file', async (event, payload) => {
+  const { text, suggestedName } = payload || {};
+  if (!text) return { ok: false, error: 'Nothing to export.' };
+  const win = BrowserWindow.fromWebContents(event.sender);
+  const safe = String(suggestedName || 'agent')
+    .replace(/[^a-z0-9\-_ ]+/gi, '').trim().slice(0, 80) || 'agent';
+  const { canceled, filePath } = await dialog.showSaveDialog(win, {
+    title: 'Export agent file',
+    defaultPath: `${safe}.md`,
+    filters: [{ name: 'Agent file', extensions: ['md', 'markdown', 'agent'] }],
+  });
+  if (canceled || !filePath) return { ok: false, canceled: true };
+  try {
+    fs.writeFileSync(filePath, text, 'utf8');
+    return { ok: true, path: filePath };
+  } catch (err) {
+    return { ok: false, error: String(err && err.message ? err.message : err) };
   }
 });
 

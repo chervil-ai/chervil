@@ -347,7 +347,7 @@
         <p class="group-hint">Living pages (the ● live control on a composed page) auto-refresh on a schedule. Chervil keeps refreshing them even when minimized or in the background.</p>
         <label class="toggle-row">
           <input id="notify-toggle" type="checkbox" />
-          <span>Show a system notification when a Living page updates while Chervil isn't focused. Click the notification to jump to the page.</span>
+          <span>Show a system notification when a page finishes composing — or a Living page updates — while Chervil is minimized or unfocused. Click the notification to jump to the page.</span>
         </label>
       </section>
 
@@ -419,6 +419,10 @@
       </div>
       <p class="sched-sub">Import an agent file (Markdown + YAML frontmatter) to give Sprig a persona, a default model, allowed MCP servers, and starter prompts. Activate one to apply it to your conversations.</p>
       <div class="sched-form">
+        <div class="sched-row">
+          <button id="agent-from-session" type="button" class="sched-add" style="margin-left:0">✨ Create agent from this session</button>
+          <span style="color:var(--muted);font-size:12px;">turns the active tab's conversation into a reusable agent</span>
+        </div>
         <div class="sched-row">
           <button id="agent-import" type="button" class="sched-add" style="margin-left:0">Import agent file…</button>
           <span style="color:var(--muted);font-size:12px;">or paste an agent file below</span>

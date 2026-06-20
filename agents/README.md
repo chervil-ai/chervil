@@ -24,3 +24,17 @@ You are ... (the persona, voice, priorities, and rules)
 ```
 
 The examples in this folder are starting points — copy and tweak them.
+
+## Create one from a session
+
+Don't want to write frontmatter by hand? In **👤 Agents**, click **✨ Create
+agent from this session** — Chervil distills the active tab's conversation into a
+reusable persona (name, description, instructions, and starter prompts) you can
+then review and edit. (Falls back to a prompt-seeded persona if your provider
+can't synthesize.)
+
+## Share one
+
+Each agent has an **Export** button (in **👤 Agents**) that writes it back out as
+a Markdown + frontmatter file in this same format — hand it to someone else and
+they can import it.
