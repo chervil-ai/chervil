@@ -6,6 +6,29 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.1] — 2026-06-20
+
+First packaged **Windows installer** (Inno Setup), plus new providers and a
+hands-free listening mode.
+
+### Added
+- **Windows installer** — a setup wizard that can set your API keys, a default
+  provider, an "About you" profile, and run-at-startup on first launch. Built and
+  published by CI on a version tag. Run-from-source still works.
+- **OpenAI provider** — alongside Claude/Grok/Gemini/Azure/Ollama, with live web
+  grounding (Responses API web search) and citations.
+- **"Hey Sprig" listening mode** (opt-in) — on-device wake-word detection
+  (Picovoice Porcupine) pops the quick-ask bar and captures a spoken request.
+- **Build an agent from a session**, and **export agents** to share.
+
+### Changed
+- **Grok** moved to xAI's Agent Tools API on `/v1/responses` (Live Search was
+  deprecated) and refreshed to current `grok-4.x` models.
+
+### Fixed
+- Local-time clocks/pages (was UTC); notification on compose-finish while
+  minimized; notification source name ("Chervil", not `com.chervil.app`).
+
 ## [0.1.0] — 2026-06-19
 
 First public, build-in-public alpha. Run from source; no packaged installer yet.
