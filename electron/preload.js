@@ -85,6 +85,17 @@ contextBridge.exposeInMainWorld('chervil', {
   /** Distill a prompt session into a reusable agent (name/persona/starters). */
   synthesizeAgent: (payload) => ipcRenderer.invoke('chervil:synthesize-agent', payload),
 
+  /** "Hey Sprig" wake mode: pop the Quick-Ask bar in a listening state. */
+  wakeListening: () => ipcRenderer.send('chervil:wake-listening'),
+  /** Wake mode: capture finished — hide the listening bar. */
+  wakeDone: () => ipcRenderer.send('chervil:wake-done'),
+  /** Bring the main window forward (used after a wake command produced a request). */
+  showMain: () => ipcRenderer.send('chervil:show-main'),
+  /** Get the Porcupine params model as base64 (engine init from file:// needs base64). */
+  wakeModel: () => ipcRenderer.invoke('chervil:wake-model'),
+  /** Import a custom wake-word keyword (.ppn) → { ok, name, base64 }. */
+  openWakeKeyword: () => ipcRenderer.invoke('chervil:open-wake-keyword'),
+
   /** Save an agent as a shareable Markdown file via a native save dialog. */
   saveAgentFile: (payload) => ipcRenderer.invoke('chervil:save-agent-file', payload),
 

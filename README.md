@@ -35,11 +35,12 @@ right at home.)*
 - **Living pages** — schedule a page to re-ground itself and notify you when it changes.
 - **Agentic web actions** — Sprig can operate real sites for you, with hard safety gates (see [SECURITY.md](SECURITY.md)).
 - **Quick-ask** — a global hotkey opens a floating ask bar; Chervil lives in the tray, always a keystroke away.
+- **"Hey Sprig" listening** — opt-in hands-free wake phrase that pops the quick-ask bar and captures your spoken request. Wake-word detection is fully on-device (Picovoice Porcupine) — audio never leaves your machine until you speak a command. Needs a free Picovoice key; the literal "Hey Sprig" phrase uses a custom keyword file (built-in words work out of the box).
 - **Scheduled agents** — run prompts on a daily/weekly/interval schedule in the background, optionally "as" a chosen agent.
 - **Agent files** — import a persona (instructions, model, tools, starters) to make Sprig a specialist. Starters in [`/agents`](agents).
 - **Video summaries** — summarize YouTube videos from captions, or watched natively on Gemini.
 - **Export anywhere** — turn any page into PDF, PowerPoint, Word, Excel, an image, or an animated GIF.
-- **Bring your own AI** — pluggable providers: Claude, Grok, Gemini, Azure AI Foundry, and local Ollama.
+- **Bring your own AI** — pluggable providers: Claude, Grok, Gemini, OpenAI, Azure AI Foundry, and local Ollama.
 
 ## Run from source
 
@@ -57,14 +58,14 @@ Environment variables also work (a `.env` is supported):
 
 | Variable | Default | Notes |
 |----------|---------|-------|
-| `CHERVIL_PROVIDER` | `claude` | Model backend: `claude`, `grok`, `gemini`, `azure`, `ollama`. |
+| `CHERVIL_PROVIDER` | `claude` | Model backend: `claude`, `grok`, `gemini`, `openai`, `azure`, `ollama`. |
 | `CHERVIL_MODEL` | `claude-sonnet-4-6` | Use `claude-opus-4-8` for maximum quality at higher latency. |
 | `CHERVIL_EFFORT` | `low` | How hard the model deliberates (`low`/`medium`/`high`). |
 | `ANTHROPIC_API_KEY` | — | Claude — the only provider with the full Deep Dive + web grounding (search *and* fetch). |
 
 > Provider notes: Claude has the richest experience (live grounding + two-phase
-> Deep Dive). Grok and Gemini support live grounding. Azure and Ollama are
-> compose-only (no live web search).
+> Deep Dive). Grok, Gemini, and OpenAI support live grounding. Azure and Ollama
+> are compose-only (no live web search).
 >
 > **Env vars:** `CHERVIL_*` is the primary prefix. The older `PARSLEE_*` (and
 > legacy `PINGCHAT_*`) names are still read as fallbacks, so existing `.env`

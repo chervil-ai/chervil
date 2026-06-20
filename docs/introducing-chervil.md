@@ -157,6 +157,7 @@ Chervil doesn't lock you into one model or one company. It's built around a **pl
 - **Claude (Anthropic)** — the flagship experience: top-quality composition, live web grounding via search *and* fetch, the full two-phase Deep Dive, and image-rich pages.
 - **Grok (xAI)** — fast reasoning with live web grounding via xAI's Agent Tools API (server-side web and X search), with citations.
 - **Gemini (Google)** — huge context, low cost, and live grounding via Google Search.
+- **OpenAI** — strong general reasoning with live web grounding via the Responses API's web search, with citations.
 - **Azure AI Foundry** — enterprise and compliance, running in your own Azure with your hosted models.
 - **Ollama** — completely free, completely private, running offline on your own machine.
 

@@ -10,4 +10,6 @@ contextBridge.exposeInMainWorld('quick', {
   hide: () => ipcRenderer.send('chervil:quick-hide'),
   /** Called when the bar is (re)shown, so it can refocus + clear. */
   onShow: (cb) => ipcRenderer.on('chervil:quick-show', () => cb()),
+  /** Wake mode: summoned by "Hey Sprig" — Sprig is listening for a spoken request. */
+  onListening: (cb) => ipcRenderer.on('chervil:quick-listening', () => cb()),
 });

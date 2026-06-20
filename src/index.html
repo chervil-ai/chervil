@@ -7,7 +7,7 @@
        Chervil bridge runtime. Isolation is provided by the iframe sandbox, not this CSP;
        the renderer itself has no inline-script injection surface. -->
   <meta http-equiv="Content-Security-Policy"
-        content="default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; script-src 'self' 'unsafe-inline';" />
+        content="default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval' blob:; worker-src 'self' blob:; child-src 'self' blob:; connect-src 'self' blob:; media-src 'self' blob:;" />
   <title>Chervil</title>
   <link rel="stylesheet" href="styles.css" />
 </head>
@@ -207,7 +207,7 @@
 
       <section class="setting-group">
         <h3>Provider &amp; model — bring your own API</h3>
-        <p class="group-hint">Switch providers to save money, work offline, or use a model you prefer. Each has trade-offs — pick what fits the task. Claude, Grok, and Gemini do live web grounding (real, cited sources); Azure and Ollama compose from the model's own knowledge. Claude also offers the full two-phase Deep Dive.</p>
+        <p class="group-hint">Switch providers to save money, work offline, or use a model you prefer. Each has trade-offs — pick what fits the task. Claude, Grok, Gemini, and OpenAI do live web grounding (real, cited sources); Azure and Ollama compose from the model's own knowledge. Claude also offers the full two-phase Deep Dive.</p>
 
         <label class="opt">
           <input type="radio" name="provider" value="claude" />
@@ -220,6 +220,10 @@
         <label class="opt">
           <input type="radio" name="provider" value="gemini" />
           <span><strong>Gemini (Google)</strong><small><b>Gain:</b> live web grounding via Google Search, huge context, fast &amp; low-cost, and native video summarization (watches the video); uses your Google AI key. <b>Lose:</b> no two-phase Deep Dive (Verify still works, grounded).</small></span>
+        </label>
+        <label class="opt">
+          <input type="radio" name="provider" value="openai" />
+          <span><strong>OpenAI</strong><small><b>Gain:</b> live web grounding via OpenAI's Responses web search (with citations), strong general reasoning; uses your OpenAI key. <b>Lose:</b> no two-phase Deep Dive (Verify still works, grounded).</small></span>
         </label>
         <label class="opt">
           <input type="radio" name="provider" value="azure" />
@@ -349,6 +353,39 @@
           <input id="notify-toggle" type="checkbox" />
           <span>Show a system notification when a page finishes composing — or a Living page updates — while Chervil is minimized or unfocused. Click the notification to jump to the page.</span>
         </label>
+      </section>
+
+      <section class="setting-group">
+        <h3>Listening — “Hey Sprig”</h3>
+        <p class="group-hint">Let Chervil listen for a wake phrase and pop the Quick-Ask bar so you can speak a request hands-free. Wake-word detection runs <strong>fully on-device</strong> (Picovoice Porcupine) — your mic audio never leaves the machine until you actually speak a command, which is then transcribed by your configured voice-input service above. Needs a free <a href="https://console.picovoice.ai/" target="_blank" rel="noreferrer">Picovoice</a> access key.</p>
+        <label class="toggle-row">
+          <input id="wake-toggle" type="checkbox" />
+          <span>Listen for the wake phrase in the background (even when Chervil is in the tray).</span>
+        </label>
+        <div class="prov-block">
+          <label class="field">
+            <span class="field-label">Picovoice access key</span>
+            <input id="wake-key" type="password" placeholder="paste Picovoice access key…" autocomplete="off" spellcheck="false" />
+            <small id="wake-status" class="field-note"></small>
+          </label>
+          <div class="field">
+            <span class="field-label">Wake word</span>
+            <select id="wake-keyword">
+              <option value="custom">Hey Sprig (custom — load a .ppn below)</option>
+              <option value="Computer">Computer</option>
+              <option value="Jarvis">Jarvis</option>
+              <option value="Bumblebee">Bumblebee</option>
+              <option value="Picovoice">Picovoice</option>
+              <option value="Alexa">Alexa</option>
+              <option value="Terminator">Terminator</option>
+            </select>
+            <span class="field-row">
+              <button id="wake-import" type="button" class="lib-btn">Load “Hey Sprig” keyword file…</button>
+              <small id="wake-keyword-note" class="field-note"></small>
+            </span>
+            <small class="field-note">The literal “Hey Sprig” phrase needs a custom keyword file (<code>.ppn</code>, WebAssembly target) generated free at the Picovoice console. Until then, pick a built-in word above to try the feature.</small>
+          </div>
+        </div>
       </section>
 
       <section class="setting-group">
@@ -514,6 +551,11 @@
     <div class="drop-card">📎 Drop files to attach<small>text, CSV, images, PDF</small></div>
   </div>
 
+  <!-- Wake-word engine (Picovoice Porcupine, offline) — vendored IIFE bundles
+       expose window.PorcupineWeb / window.WebVoiceProcessor for src/wake.js. -->
+  <script src="vendor/porcupine-web.min.js"></script>
+  <script src="vendor/web-voice-processor.min.js"></script>
+  <script src="wake.js"></script>
   <script src="renderer.js"></script>
 </body>
 </html>

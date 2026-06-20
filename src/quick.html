@@ -73,7 +73,14 @@
     if (closeBtn) closeBtn.addEventListener('click', () => { if (window.quick) window.quick.hide(); });
     function focusInput() { try { q.focus(); q.select(); } catch (e) {} }
     // Refocus + clear each time the bar is summoned.
-    if (window.quick && window.quick.onShow) window.quick.onShow(() => { q.value = ''; setTimeout(focusInput, 30); });
+    if (window.quick && window.quick.onShow) window.quick.onShow(() => {
+      q.value = ''; q.placeholder = 'Hey Sprig, ask…'; setTimeout(focusInput, 30);
+    });
+    // Wake mode: show a "listening" cue (the spoken request is captured + composed
+    // by the main window; this bar is the visible affordance).
+    if (window.quick && window.quick.onListening) window.quick.onListening(() => {
+      q.value = ''; q.placeholder = '🎙️ Listening… speak your request';
+    });
     focusInput();
     q.addEventListener('keydown', (e) => {
       if (e.key === 'Enter') {

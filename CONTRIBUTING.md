@@ -35,8 +35,9 @@ Chervil is a standard Electron three-layer app:
   - `claude.js` — Claude (the only provider with server-side web search + fetch,
     the two-phase Deep Dive, applet `quickAsk`, and the agentic `complete()` loop).
   - `ollama.js` — local Ollama (compose-only).
-  - `openai-compatible.js` — Grok, Gemini, Azure via an OpenAI-style API
-    (Grok/Gemini support live grounding; Azure is compose-only).
+  - `openai-compatible.js` — Grok, Gemini, OpenAI, Azure via an OpenAI-style API
+    (Grok/OpenAI ground via the Responses API, Gemini via native Google Search;
+    Azure is compose-only).
 
 Data flow for a typical request: renderer collects `settings` + query →
 `preload` IPC → `main` handler → `lib/agent.js` → a provider in `lib/models/` →

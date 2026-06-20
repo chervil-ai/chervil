@@ -25,6 +25,8 @@
     "pptxgenjs": "^4.0.1"
   },
   "devDependencies": {
-    "electron": "^39.8.5"
+    "electron": "^39.8.5",
+    "@picovoice/porcupine-web": "^4.0.0",
+    "@picovoice/web-voice-processor": "^4.0.10"
   }
 }

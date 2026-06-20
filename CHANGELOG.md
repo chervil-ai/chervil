@@ -35,8 +35,8 @@ First public, build-in-public alpha. Run from source; no packaged installer yet.
   natively when on Gemini.
 - **Export anywhere** — PDF, PowerPoint (.pptx), Word (.docx), Excel (.xlsx),
   image (PNG / JPG), and animated GIF.
-- **Bring your own AI** — pluggable providers: Claude, Grok, Gemini, Azure AI
-  Foundry, and local Ollama; native grounding for Claude / Grok / Gemini.
+- **Bring your own AI** — pluggable providers: Claude, Grok, Gemini, OpenAI, Azure
+  AI Foundry, and local Ollama; native grounding for Claude / Grok / Gemini / OpenAI.
 - **Voice input** — dictate prompts via a Whisper-compatible endpoint.
 - API keys encrypted at rest via OS-native storage; never round-tripped through
   the UI.

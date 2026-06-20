@@ -43,6 +43,7 @@ let savedKeys = {};
 
 function loadSavedKeys() {
   if (process.env.ANTHROPIC_API_KEY) savedKeys.claude = process.env.ANTHROPIC_API_KEY;
+  if (process.env.OPENAI_API_KEY) savedKeys.openai = process.env.OPENAI_API_KEY;
   try {
     let p = keysFile();
     if (!fs.existsSync(p) && fs.existsSync(legacyKeysFile())) p = legacyKeysFile();
@@ -314,6 +315,47 @@ ipcMain.on('chervil:quick-submit', (_event, text) => {
   }
 });
 
+// --- "Hey Sprig" wake mode --------------------------------------------------
+// Wake-word detection runs in the main renderer (Porcupine, on-device). When it
+// fires, the renderer pops the Quick-Ask bar as a "listening" affordance, then
+// captures + transcribes the spoken command itself and composes via the normal path.
+ipcMain.on('chervil:wake-listening', () => {
+  showQuick();
+  if (quickWindow && !quickWindow.webContents.isDestroyed()) {
+    quickWindow.webContents.send('chervil:quick-listening');
+  }
+});
+ipcMain.on('chervil:wake-done', () => hideQuick());
+ipcMain.on('chervil:show-main', () => showMain());
+
+// The renderer initializes Porcupine from base64 (publicPath uses fetch(), which
+// Chromium blocks on file://), so hand it the vendored params model as base64.
+ipcMain.handle('chervil:wake-model', async () => {
+  try {
+    const p = path.join(__dirname, '..', 'src', 'vendor', 'porcupine_params.pv');
+    return { ok: true, base64: fs.readFileSync(p).toString('base64') };
+  } catch (err) {
+    return { ok: false, error: String(err && err.message ? err.message : err) };
+  }
+});
+
+// Import a custom "Hey Sprig" keyword (.ppn) and return it as base64.
+ipcMain.handle('chervil:open-wake-keyword', async (event) => {
+  const win = BrowserWindow.fromWebContents(event.sender);
+  const { canceled, filePaths } = await dialog.showOpenDialog(win, {
+    title: 'Load wake-word keyword file',
+    properties: ['openFile'],
+    filters: [{ name: 'Porcupine keyword', extensions: ['ppn'] }],
+  });
+  if (canceled || !filePaths || !filePaths[0]) return { ok: false, canceled: true };
+  try {
+    const name = path.basename(filePaths[0]).replace(/\.[^.]+$/, '');
+    return { ok: true, name, base64: fs.readFileSync(filePaths[0]).toString('base64') };
+  } catch (err) {
+    return { ok: false, error: String(err && err.message ? err.message : err) };
+  }
+});
+
 app.whenReady().then(() => {
   // Windows prints the AppUserModelID verbatim as the toast/notification source
   // *unless* an installed Start Menu shortcut maps that ID to a display name. We
@@ -426,7 +468,7 @@ ipcMain.handle('chervil:notify', async (_event, payload) => {
 // --- Bring-your-own API key IPC (per provider) ---------------------------
 ipcMain.handle('chervil:get-key-status', async () => {
   const status = {};
-  for (const p of ['claude', 'grok', 'gemini', 'azure', 'stt']) status[p] = !!savedKeys[p];
+  for (const p of ['claude', 'grok', 'gemini', 'openai', 'azure', 'stt']) status[p] = !!savedKeys[p];
   status.claudeFromEnv = !!process.env.ANTHROPIC_API_KEY && savedKeys.claude === process.env.ANTHROPIC_API_KEY;
   return status;
 });

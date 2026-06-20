@@ -88,6 +88,13 @@ const els = {
   sttKeySave: document.getElementById('stt-key-save'),
   sttKeyStatus: document.getElementById('stt-key-status'),
   voiceAutosend: document.getElementById('voice-autosend'),
+  // Listening — "Hey Sprig"
+  wakeToggle: document.getElementById('wake-toggle'),
+  wakeKey: document.getElementById('wake-key'),
+  wakeStatus: document.getElementById('wake-status'),
+  wakeKeyword: document.getElementById('wake-keyword'),
+  wakeImport: document.getElementById('wake-import'),
+  wakeKeywordNote: document.getElementById('wake-keyword-note'),
   // Appearance
   tabLayoutSelect: document.getElementById('tab-layout-select'),
   remixDefaultSelect: document.getElementById('remix-default-select'),
@@ -137,6 +144,7 @@ let settings = {
   claudeModel: 'claude-sonnet-4-6',
   grokModel: 'grok-4.3',
   geminiModel: 'gemini-2.5-flash',
+  openaiModel: 'gpt-5.5',
   azureModel: '',
   azureEndpoint: '',
   azureDeployment: '',
@@ -153,17 +161,24 @@ let settings = {
   sttEndpoint: 'https://api.openai.com/v1/audio/transcriptions', // Whisper-compatible STT
   sttModel: 'whisper-1',
   voiceAutosend: false, // auto-send the transcript instead of just filling the box
+  // Listening — "Hey Sprig" wake mode (Picovoice Porcupine, on-device).
+  wakeEnabled: false,
+  wakeAccessKey: '',     // Picovoice access key (a client-side key, used in the renderer)
+  wakeKeyword: 'custom', // 'custom' (use the loaded .ppn) or a BuiltInKeyword name
+  wakeKeywordLabel: '',  // display label for a loaded custom keyword
+  wakeKeywordBase64: '', // a loaded custom "Hey Sprig" .ppn, base64
+  wakeSensitivity: 0.6,  // 0–1: higher = more sensitive (more false triggers)
 };
 
 // Per-provider metadata for the Settings UI.
 const PROVIDER_LABELS = {
-  claude: 'Claude', grok: 'Grok (xAI)', gemini: 'Gemini', azure: 'Azure AI Foundry', ollama: 'Ollama',
+  claude: 'Claude', grok: 'Grok (xAI)', gemini: 'Gemini', openai: 'OpenAI', azure: 'Azure AI Foundry', ollama: 'Ollama',
 };
 const MODEL_SETTING = {
-  claude: 'claudeModel', grok: 'grokModel', gemini: 'geminiModel', azure: 'azureModel', ollama: 'ollamaModel',
+  claude: 'claudeModel', grok: 'grokModel', gemini: 'geminiModel', openai: 'openaiModel', azure: 'azureModel', ollama: 'ollamaModel',
 };
 const MODEL_PLACEHOLDER = {
-  claude: 'claude-sonnet-4-6', grok: 'grok-4.3', gemini: 'gemini-2.5-flash', azure: '(uses deployment)', ollama: 'gemma3:4b',
+  claude: 'claude-sonnet-4-6', grok: 'grok-4.3', gemini: 'gemini-2.5-flash', openai: 'gpt-5.5', azure: '(uses deployment)', ollama: 'gemma3:4b',
 };
 // Suggested models per provider for the dropdown (a "Custom…" entry is appended so
 // you can always type your own model id).
@@ -181,6 +196,10 @@ const MODEL_OPTIONS = {
   gemini: [
     ['gemini-2.5-flash', 'gemini-2.5-flash — fast & cheap'],
     ['gemini-2.5-pro', 'gemini-2.5-pro — top quality'],
+  ],
+  openai: [
+    ['gpt-5.5', 'gpt-5.5 — recommended (web search)'],
+    ['gpt-5.5-pro', 'gpt-5.5-pro — top quality'],
   ],
   ollama: [
     ['gemma3:4b', 'gemma3:4b'],
@@ -1334,6 +1353,153 @@ function arrayBufferToBase64(buf) {
   const chunk = 0x8000; // chunk to avoid arg-count limits on fromCharCode
   for (let i = 0; i < bytes.length; i += chunk) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
   return btoa(bin);
+}
+
+// ---- Listening mode — "Hey Sprig" wake phrase ----
+// Porcupine (via src/wake.js) listens on-device; when the phrase fires we pop the
+// Quick-Ask bar, capture the spoken request (auto-stopping on silence), transcribe
+// it through the configured voice service, and compose — all hands-free.
+let wakeCapturing = false;
+let wakeModelB64 = null; // cached Porcupine params model (base64) for this session
+
+function setWakeStatus(msg, kind) {
+  if (!els.wakeStatus) return;
+  els.wakeStatus.textContent = msg || '';
+  els.wakeStatus.className = 'field-note' + (kind ? ' ' + kind : '');
+}
+
+async function startWake() {
+  if (!window.ChervilWake || !window.ChervilWake.available()) {
+    setWakeStatus('Wake-word engine failed to load.', 'warn'); return false;
+  }
+  if (!settings.wakeAccessKey) { setWakeStatus('Add your Picovoice access key to start listening.', 'warn'); return false; }
+  const usingCustom = settings.wakeKeyword === 'custom';
+  if (usingCustom && !settings.wakeKeywordBase64) {
+    setWakeStatus('Load a “Hey Sprig” keyword file, or pick a built-in word.', 'warn'); return false;
+  }
+  try {
+    if (!wakeModelB64) {
+      const m = await window.chervil.wakeModel();
+      if (!m || !m.ok || !m.base64) throw new Error((m && m.error) || 'model unavailable');
+      wakeModelB64 = m.base64;
+    }
+    const keyword = usingCustom
+      ? { base64: settings.wakeKeywordBase64, label: settings.wakeKeywordLabel || 'Hey Sprig', sensitivity: settings.wakeSensitivity }
+      : { builtin: settings.wakeKeyword, sensitivity: settings.wakeSensitivity };
+    await window.ChervilWake.start({
+      accessKey: settings.wakeAccessKey,
+      modelBase64: wakeModelB64,
+      keyword,
+      onDetect: onWakeDetected,
+      onError: (e) => setWakeStatus('Listening error: ' + (e && e.message ? e.message : e), 'warn'),
+    });
+    const label = usingCustom ? (settings.wakeKeywordLabel || 'Hey Sprig') : settings.wakeKeyword;
+    setWakeStatus(`Listening for “${label}”…`, 'ok');
+    return true;
+  } catch (e) {
+    setWakeStatus('Could not start listening: ' + (e && e.message ? e.message : e), 'warn');
+    return false;
+  }
+}
+
+async function stopWake() {
+  try { if (window.ChervilWake) await window.ChervilWake.stop(); } catch { /* ignore */ }
+  setWakeStatus('');
+}
+
+// Re-arm after a settings change while listening is on.
+async function restartWake() {
+  if (!settings.wakeEnabled) return;
+  await stopWake();
+  await startWake();
+}
+
+async function onWakeDetected() {
+  if (wakeCapturing) return;
+  wakeCapturing = true;
+  try {
+    window.chervil.wakeListening && window.chervil.wakeListening(); // pop Quick-Ask "listening" bar
+    if (window.ChervilWake) await window.ChervilWake.pause();       // free the mic for capture
+    const text = await captureUtterance();
+    window.chervil.wakeDone && window.chervil.wakeDone();           // hide the listening bar
+    if (text) {
+      window.chervil.showMain && window.chervil.showMain();         // surface the result (only on a real request)
+      newTab(true);
+      handleComposerSubmit(text);
+    }
+  } catch { /* ignore a failed capture */ }
+  finally {
+    wakeCapturing = false;
+    try { if (settings.wakeEnabled && window.ChervilWake) await window.ChervilWake.resume(); } catch { /* ignore */ }
+  }
+}
+
+// Record the spoken command and auto-stop on silence (energy-based VAD), then
+// transcribe via the configured voice-input endpoint. Returns the text or null.
+async function captureUtterance({ maxMs = 9000, silenceMs = 1200, minMs = 500 } = {}) {
+  let stream;
+  try { stream = await navigator.mediaDevices.getUserMedia({ audio: true }); } catch { return null; }
+  let mime = '';
+  for (const m of ['audio/webm;codecs=opus', 'audio/webm', 'audio/ogg;codecs=opus', 'audio/mp4']) {
+    if (window.MediaRecorder && MediaRecorder.isTypeSupported(m)) { mime = m; break; }
+  }
+  let rec;
+  try { rec = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined); }
+  catch { for (const t of stream.getTracks()) t.stop(); return null; }
+
+  const chunks = [];
+  rec.addEventListener('dataavailable', (e) => { if (e.data && e.data.size) chunks.push(e.data); });
+
+  // Silence detector.
+  const AC = window.AudioContext || window.webkitAudioContext;
+  const ac = AC ? new AC() : null;
+  const analyser = ac ? ac.createAnalyser() : null;
+  if (ac && analyser) { analyser.fftSize = 512; ac.createMediaStreamSource(stream).connect(analyser); }
+  const data = analyser ? new Uint8Array(analyser.fftSize) : null;
+  const startedAt = Date.now();
+  let lastVoiceAt = startedAt;
+  let sawVoice = false;
+  let monitor = null;
+
+  return await new Promise((resolve) => {
+    rec.addEventListener('stop', async () => {
+      if (monitor) clearInterval(monitor);
+      try { if (ac) await ac.close(); } catch { /* ignore */ }
+      for (const t of stream.getTracks()) t.stop();
+      const type = rec.mimeType || mime || 'audio/webm';
+      const blob = new Blob(chunks, { type });
+      if (!blob.size) return resolve(null);
+      try {
+        const b64 = arrayBufferToBase64(await blob.arrayBuffer());
+        const ext = /mp4/.test(type) ? 'mp4' : /ogg/.test(type) ? 'ogg' : 'webm';
+        const resp = await window.chervil.transcribe({
+          audio: b64, mimeType: type, filename: 'wake.' + ext,
+          endpoint: settings.sttEndpoint, model: settings.sttModel,
+        });
+        resolve(resp && resp.ok && resp.text ? resp.text.trim() : null);
+      } catch { resolve(null); }
+    });
+
+    rec.start();
+    monitor = setInterval(() => {
+      if (rec.state !== 'recording') return;
+      let rms = 1;
+      if (analyser && data) {
+        analyser.getByteTimeDomainData(data);
+        let sum = 0;
+        for (let i = 0; i < data.length; i++) { const v = (data[i] - 128) / 128; sum += v * v; }
+        rms = Math.sqrt(sum / data.length);
+      }
+      const now = Date.now();
+      if (rms > 0.045) { lastVoiceAt = now; sawVoice = true; }
+      const elapsed = now - startedAt;
+      const silentFor = now - lastVoiceAt;
+      // Stop on max duration, or after enough silence once we've actually heard speech.
+      // If there's no analyser, just record up to maxMs.
+      const silenceStop = analyser && sawVoice && elapsed >= minMs && silentFor >= silenceMs;
+      if (elapsed >= maxMs || silenceStop) { try { rec.stop(); } catch { /* ignore */ } }
+    }, 80);
+  });
 }
 
 // ---- Web agent: let Sprig act on the embedded live site ----
@@ -2785,6 +2951,11 @@ function applySettingsToUI() {
   if (els.sttEndpoint) els.sttEndpoint.value = settings.sttEndpoint || '';
   if (els.sttModel) els.sttModel.value = settings.sttModel || '';
   if (els.voiceAutosend) els.voiceAutosend.checked = !!settings.voiceAutosend;
+  if (els.wakeToggle) els.wakeToggle.checked = !!settings.wakeEnabled;
+  if (els.wakeKey) els.wakeKey.value = settings.wakeAccessKey || '';
+  if (els.wakeKeyword) els.wakeKeyword.value = settings.wakeKeyword || 'custom';
+  if (els.wakeKeywordNote) els.wakeKeywordNote.textContent = settings.wakeKeywordBase64
+    ? `Loaded: ${settings.wakeKeywordLabel || 'custom keyword'}` : 'No custom keyword loaded.';
   if (els.sttKeyInput) els.sttKeyInput.value = '';
   refreshSttKeyStatus();
   renderMcpServers();
@@ -3099,6 +3270,9 @@ async function init() {
   renderCurrentPage();
   refreshComposer();
   els.prompt.focus();
+
+  // Resume "Hey Sprig" listening if it was on (and configured) last session.
+  if (settings.wakeEnabled && settings.wakeAccessKey) startWake();
 }
 
 // ---- Save (to disk) ----
@@ -3358,6 +3532,42 @@ els.azureApiVersion.addEventListener('input', () => { settings.azureApiVersion =
 if (els.sttEndpoint) els.sttEndpoint.addEventListener('input', () => { settings.sttEndpoint = els.sttEndpoint.value.trim(); scheduleSave(); });
 if (els.sttModel) els.sttModel.addEventListener('input', () => { settings.sttModel = els.sttModel.value.trim(); scheduleSave(); });
 if (els.voiceAutosend) els.voiceAutosend.addEventListener('change', () => { settings.voiceAutosend = els.voiceAutosend.checked; scheduleSave(); });
+
+// Listening — "Hey Sprig"
+if (els.wakeToggle) els.wakeToggle.addEventListener('change', async () => {
+  settings.wakeEnabled = els.wakeToggle.checked;
+  scheduleSave();
+  if (settings.wakeEnabled) {
+    const ok = await startWake();
+    if (!ok) { settings.wakeEnabled = false; els.wakeToggle.checked = false; scheduleSave(); }
+  } else {
+    await stopWake();
+  }
+});
+if (els.wakeKey) els.wakeKey.addEventListener('change', () => {
+  settings.wakeAccessKey = els.wakeKey.value.trim(); scheduleSave();
+  if (settings.wakeEnabled) restartWake();
+});
+if (els.wakeKeyword) els.wakeKeyword.addEventListener('change', () => {
+  settings.wakeKeyword = els.wakeKeyword.value; scheduleSave();
+  if (settings.wakeEnabled) restartWake();
+});
+if (els.wakeImport) els.wakeImport.addEventListener('click', async () => {
+  try {
+    const res = await window.chervil.openWakeKeyword();
+    if (res && res.ok && res.base64) {
+      settings.wakeKeywordBase64 = res.base64;
+      settings.wakeKeywordLabel = res.name || 'Hey Sprig';
+      settings.wakeKeyword = 'custom';
+      if (els.wakeKeyword) els.wakeKeyword.value = 'custom';
+      if (els.wakeKeywordNote) els.wakeKeywordNote.textContent = `Loaded: ${settings.wakeKeywordLabel}`;
+      scheduleSave();
+      if (settings.wakeEnabled) restartWake();
+    } else if (res && res.error) {
+      toast('Could not load keyword: ' + res.error);
+    }
+  } catch { toast('Could not load keyword.'); }
+});
 if (els.sttKeySave) els.sttKeySave.addEventListener('click', async () => {
   els.sttKeyStatus.textContent = 'Saving…';
   els.sttKeyStatus.className = 'field-note';
