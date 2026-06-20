@@ -6,6 +6,14 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.2] — 2026-06-20
+
+### Fixed
+- Installer build: prune the dev-only Picovoice packages from the app bundle
+  (runtime uses the vendored copies in `src/vendor`), and stamp the Windows
+  `Chervil.exe` file/product version + metadata (was blank). Packaging moved to
+  a small cross-platform `scripts/package.mjs`.
+
 ## [0.1.1] — 2026-06-20
 
 First packaged **Windows installer** (Inno Setup), plus new providers and a
