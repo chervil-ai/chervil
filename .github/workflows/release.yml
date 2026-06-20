@@ -1,0 +1,70 @@
+name: Release
+
+# Build the Windows Inno Setup installer and publish a GitHub Release.
+# Triggers on a version tag (e.g. v0.1.0) or manual dispatch.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version without the leading v (e.g. 0.1.0)'
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  windows-installer:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Resolve version
+        id: ver
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            v="${{ github.event.inputs.version }}"
+          else
+            v="${GITHUB_REF_NAME#v}"
+          fi
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "Building Chervil v$v"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Package the Electron app
+        run: npm run package
+
+      - name: Install Inno Setup
+        run: choco install innosetup -y --no-progress
+
+      - name: Build the installer
+        run: '& "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DMyAppVersion=${{ steps.ver.outputs.version }} installer\chervil.iss'
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          v="${{ steps.ver.outputs.version }}"
+          asset="dist/installer/Chervil-Setup-$v.exe"
+          notes="Chervil v$v — alpha, building in public. Windows installer (run-from-source still works too). The setup wizard can set your API keys, default provider, \"About you\" profile, and run-at-startup."
+          if gh release view "v$v" >/dev/null 2>&1; then
+            gh release upload "v$v" "$asset" --clobber
+          else
+            gh release create "v$v" "$asset" --title "Chervil v$v" --notes "$notes" --prerelease
+          fi
+
+      - name: Upload installer as build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Chervil-Setup-${{ steps.ver.outputs.version }}
+          path: dist/installer/Chervil-Setup-*.exe

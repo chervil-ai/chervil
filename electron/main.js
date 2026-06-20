@@ -76,6 +76,47 @@ function setKey(provider, key) {
   };
 }
 
+// --- First-run provisioning (from the installer wizard) ------------------
+// The Inno Setup installer can't encrypt keys (safeStorage is Electron/OS-specific)
+// or write the renderer's settings, so it drops a plain firstrun.json into our
+// userData folder and we apply it here on first launch, then delete it:
+//   { keys: { claude, openai, grok, gemini }, provider, profile }
+function applyFirstRunProvisioning() {
+  const p = path.join(app.getPath('userData'), 'firstrun.json');
+  let cfg;
+  try {
+    if (!fs.existsSync(p)) return;
+    cfg = JSON.parse(fs.readFileSync(p, 'utf8'));
+  } catch { return; }
+  if (!cfg || typeof cfg !== 'object') { try { fs.unlinkSync(p); } catch { /* ignore */ } return; }
+
+  try {
+    // 1) API keys → encrypted key store.
+    const keys = cfg.keys && typeof cfg.keys === 'object' ? cfg.keys : {};
+    let touchedKeys = false;
+    for (const provider of ['claude', 'openai', 'grok', 'gemini']) {
+      const v = keys[provider];
+      if (typeof v === 'string' && v.trim()) { savedKeys[provider] = v.trim(); touchedKeys = true; }
+    }
+    if (touchedKeys) persistKeys();
+
+    // 2) Default provider + 3) "About You" profile → renderer settings, by seeding
+    // the state file the renderer restores on load.
+    const provider = ['claude', 'grok', 'gemini', 'openai', 'azure', 'ollama'].includes(cfg.provider) ? cfg.provider : null;
+    const profile = typeof cfg.profile === 'string' ? cfg.profile.slice(0, 4000) : null;
+    if (provider || profile) {
+      let state = {};
+      try { if (fs.existsSync(stateFile())) state = JSON.parse(fs.readFileSync(stateFile(), 'utf8')) || {}; } catch { state = {}; }
+      if (!state.settings || typeof state.settings !== 'object') state.settings = {};
+      if (provider) state.settings.provider = provider;
+      if (profile) state.settings.profile = profile;
+      fs.writeFileSync(stateFile(), JSON.stringify(state), 'utf8');
+    }
+  } catch { /* best-effort; never block startup */ }
+
+  try { fs.unlinkSync(p); } catch { /* ignore */ }
+}
+
 // Build the provider config for a request from the renderer's settings + saved key.
 function providerConfigFrom(payload) {
   const cfg = (payload && payload.config) || {};
@@ -367,6 +408,7 @@ app.whenReady().then(() => {
     app.setAppUserModelId('Chervil');
   }
   loadSavedKeys();
+  applyFirstRunProvisioning(); // import installer wizard choices on first launch
   createWindow();
   createTray();
   // System-wide hotkey to summon the floating quick-ask, even when Chervil isn't focused.

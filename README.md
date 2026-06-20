@@ -2,8 +2,10 @@
 
 > ⚠️ **Alpha / building in public.** Chervil is young and moves fast. Many
 > features are implemented but not yet end-to-end verified on every platform.
-> Treat this as a preview, not a stable release. No packaged installer yet — run
-> from source (below).
+> Treat this as a preview, not a stable release. A Windows installer is available
+> on the [Releases](https://github.com/chervil-ai/chervil/releases) page (the setup
+> wizard can set your keys, default provider, profile, and run-at-startup); you can
+> also run from source (below).
 
 🌐 **Website:** [getchervil.com](https://getchervil.com) &nbsp;·&nbsp; 📣 **Announcement:** [Coming Soon — Chervil: The Web Comes to You](https://rodtrent.substack.com/p/coming-soon-parslee-the-web-comes)
 

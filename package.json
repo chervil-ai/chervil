@@ -5,7 +5,8 @@
   "main": "electron/main.js",
   "scripts": {
     "start": "electron .",
-    "dev": "electron ."
+    "dev": "electron .",
+    "package": "npx --yes @electron/packager . Chervil --platform=win32 --arch=x64 --icon=build/icon.ico --out=dist --overwrite --ignore \"^/dist\" --ignore \"^/installer\" --ignore \"^/\\.github\" --ignore \"^/\\.git$\" --ignore \"^/\\.env$\" --ignore \"^/memory$\""
   },
   "keywords": [
     "browser",
