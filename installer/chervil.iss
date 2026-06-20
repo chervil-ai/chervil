@@ -16,11 +16,12 @@
 #define MyAppPublisher "Rod Trent"
 #define MyAppURL "https://getchervil.com"
 #define MyAppExeName "Chervil.exe"
-#define MyAppId "B9D4E2A1-7C3F-4E58-9A21-6F0C2D8E5B47"
 #define SourceDir "..\dist\Chervil-win32-x64"
 
 [Setup]
-AppId={{#MyAppId}
+; Fixed AppId (do not change between releases). The leading "{{" is Inno's escape
+; for a literal "{"; ISPP would eat the closing brace if a #define were used here.
+AppId={{B9D4E2A1-7C3F-4E58-9A21-6F0C2D8E5B47}
 AppName={#MyAppName}
 AppVersion={#MyAppVersion}
 AppPublisher={#MyAppPublisher}
