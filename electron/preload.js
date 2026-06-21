@@ -91,9 +91,11 @@ contextBridge.exposeInMainWorld('chervil', {
   wakeDone: () => ipcRenderer.send('chervil:wake-done'),
   /** Bring the main window forward (used after a wake command produced a request). */
   showMain: () => ipcRenderer.send('chervil:show-main'),
-  /** Get the Porcupine params model as base64 (engine init from file:// needs base64). */
-  wakeModel: () => ipcRenderer.invoke('chervil:wake-model'),
-  /** Import a custom wake-word keyword (.ppn) → { ok, name, base64 }. */
+  /** openWakeWord assets: ort WASM runtime + shared feature models, as bytes. */
+  wakeAssets: () => ipcRenderer.invoke('chervil:wake-assets'),
+  /** A keyword model's bytes — a built-in name or 'custom'. */
+  wakeKeywordModel: (name) => ipcRenderer.invoke('chervil:wake-keyword-model', name),
+  /** Import a custom openWakeWord keyword model (.onnx) → { ok, name }. */
   openWakeKeyword: () => ipcRenderer.invoke('chervil:open-wake-keyword'),
 
   /** Save an agent as a shareable Markdown file via a native save dialog. */

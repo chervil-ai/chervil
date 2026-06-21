@@ -90,7 +90,6 @@ const els = {
   voiceAutosend: document.getElementById('voice-autosend'),
   // Listening — "Hey Sprig"
   wakeToggle: document.getElementById('wake-toggle'),
-  wakeKey: document.getElementById('wake-key'),
   wakeStatus: document.getElementById('wake-status'),
   wakeKeyword: document.getElementById('wake-keyword'),
   wakeImport: document.getElementById('wake-import'),
@@ -161,13 +160,11 @@ let settings = {
   sttEndpoint: 'https://api.openai.com/v1/audio/transcriptions', // Whisper-compatible STT
   sttModel: 'whisper-1',
   voiceAutosend: false, // auto-send the transcript instead of just filling the box
-  // Listening — "Hey Sprig" wake mode (Picovoice Porcupine, on-device).
+  // Listening — "Hey Sprig" wake mode (openWakeWord, on-device, free, no key).
   wakeEnabled: false,
-  wakeAccessKey: '',     // Picovoice access key (a client-side key, used in the renderer)
-  wakeKeyword: 'custom', // 'custom' (use the loaded .ppn) or a BuiltInKeyword name
-  wakeKeywordLabel: '',  // display label for a loaded custom keyword
-  wakeKeywordBase64: '', // a loaded custom "Hey Sprig" .ppn, base64
-  wakeSensitivity: 0.6,  // 0–1: higher = more sensitive (more false triggers)
+  wakeKeyword: 'hey_jarvis', // built-in: hey_jarvis | alexa | hey_mycroft, or 'custom' (.onnx in userData)
+  wakeKeywordLabel: '',      // display label for a loaded custom model
+  wakeThreshold: 0.5,        // detection score cutoff (0–1; higher = fewer false triggers)
 };
 
 // Per-provider metadata for the Settings UI.
@@ -1356,11 +1353,14 @@ function arrayBufferToBase64(buf) {
 }
 
 // ---- Listening mode — "Hey Sprig" wake phrase ----
-// Porcupine (via src/wake.js) listens on-device; when the phrase fires we pop the
+// openWakeWord (via src/wake.js) listens on-device; when the phrase fires we pop the
 // Quick-Ask bar, capture the spoken request (auto-stopping on silence), transcribe
 // it through the configured voice service, and compose — all hands-free.
 let wakeCapturing = false;
-let wakeModelB64 = null; // cached Porcupine params model (base64) for this session
+let wakeAssets = null; // cached { ortWasm, melspec, embedding } for this session
+
+const WAKE_LABELS = { hey_jarvis: 'Hey Jarvis', alexa: 'Alexa', hey_mycroft: 'Hey Mycroft' };
+function prettyWake(k) { return WAKE_LABELS[k] || k; }
 
 function setWakeStatus(msg, kind) {
   if (!els.wakeStatus) return;
@@ -1372,28 +1372,27 @@ async function startWake() {
   if (!window.ChervilWake || !window.ChervilWake.available()) {
     setWakeStatus('Wake-word engine failed to load.', 'warn'); return false;
   }
-  if (!settings.wakeAccessKey) { setWakeStatus('Add your Picovoice access key to start listening.', 'warn'); return false; }
   const usingCustom = settings.wakeKeyword === 'custom';
-  if (usingCustom && !settings.wakeKeywordBase64) {
-    setWakeStatus('Load a “Hey Sprig” keyword file, or pick a built-in word.', 'warn'); return false;
-  }
   try {
-    if (!wakeModelB64) {
-      const m = await window.chervil.wakeModel();
-      if (!m || !m.ok || !m.base64) throw new Error((m && m.error) || 'model unavailable');
-      wakeModelB64 = m.base64;
+    if (!wakeAssets) {
+      const a = await window.chervil.wakeAssets();
+      if (!a || !a.ok) throw new Error((a && a.error) || 'engine assets unavailable');
+      wakeAssets = a;
     }
-    const keyword = usingCustom
-      ? { base64: settings.wakeKeywordBase64, label: settings.wakeKeywordLabel || 'Hey Sprig', sensitivity: settings.wakeSensitivity }
-      : { builtin: settings.wakeKeyword, sensitivity: settings.wakeSensitivity };
+    const km = await window.chervil.wakeKeywordModel(usingCustom ? 'custom' : settings.wakeKeyword);
+    if (!km || !km.ok) {
+      throw new Error(usingCustom ? 'Load a wake-word model (.onnx) first, or pick a built-in.' : (km && km.error) || 'keyword model missing');
+    }
     await window.ChervilWake.start({
-      accessKey: settings.wakeAccessKey,
-      modelBase64: wakeModelB64,
-      keyword,
+      ortWasm: wakeAssets.ortWasm,
+      melspec: wakeAssets.melspec,
+      embedding: wakeAssets.embedding,
+      keywordModel: km.model,
+      threshold: settings.wakeThreshold || 0.5,
       onDetect: onWakeDetected,
       onError: (e) => setWakeStatus('Listening error: ' + (e && e.message ? e.message : e), 'warn'),
     });
-    const label = usingCustom ? (settings.wakeKeywordLabel || 'Hey Sprig') : settings.wakeKeyword;
+    const label = usingCustom ? (settings.wakeKeywordLabel || 'your model') : prettyWake(settings.wakeKeyword);
     setWakeStatus(`Listening for “${label}”…`, 'ok');
     return true;
   } catch (e) {
@@ -2952,10 +2951,9 @@ function applySettingsToUI() {
   if (els.sttModel) els.sttModel.value = settings.sttModel || '';
   if (els.voiceAutosend) els.voiceAutosend.checked = !!settings.voiceAutosend;
   if (els.wakeToggle) els.wakeToggle.checked = !!settings.wakeEnabled;
-  if (els.wakeKey) els.wakeKey.value = settings.wakeAccessKey || '';
-  if (els.wakeKeyword) els.wakeKeyword.value = settings.wakeKeyword || 'custom';
-  if (els.wakeKeywordNote) els.wakeKeywordNote.textContent = settings.wakeKeywordBase64
-    ? `Loaded: ${settings.wakeKeywordLabel || 'custom keyword'}` : 'No custom keyword loaded.';
+  if (els.wakeKeyword) els.wakeKeyword.value = settings.wakeKeyword || 'hey_jarvis';
+  if (els.wakeKeywordNote) els.wakeKeywordNote.textContent = (settings.wakeKeyword === 'custom' && settings.wakeKeywordLabel)
+    ? `Loaded: ${settings.wakeKeywordLabel}` : 'No custom model loaded.';
   if (els.sttKeyInput) els.sttKeyInput.value = '';
   refreshSttKeyStatus();
   renderMcpServers();
@@ -3271,8 +3269,8 @@ async function init() {
   refreshComposer();
   els.prompt.focus();
 
-  // Resume "Hey Sprig" listening if it was on (and configured) last session.
-  if (settings.wakeEnabled && settings.wakeAccessKey) startWake();
+  // Resume "Hey Sprig" listening if it was on last session.
+  if (settings.wakeEnabled) startWake();
 }
 
 // ---- Save (to disk) ----
@@ -3544,10 +3542,6 @@ if (els.wakeToggle) els.wakeToggle.addEventListener('change', async () => {
     await stopWake();
   }
 });
-if (els.wakeKey) els.wakeKey.addEventListener('change', () => {
-  settings.wakeAccessKey = els.wakeKey.value.trim(); scheduleSave();
-  if (settings.wakeEnabled) restartWake();
-});
 if (els.wakeKeyword) els.wakeKeyword.addEventListener('change', () => {
   settings.wakeKeyword = els.wakeKeyword.value; scheduleSave();
   if (settings.wakeEnabled) restartWake();
@@ -3555,18 +3549,17 @@ if (els.wakeKeyword) els.wakeKeyword.addEventListener('change', () => {
 if (els.wakeImport) els.wakeImport.addEventListener('click', async () => {
   try {
     const res = await window.chervil.openWakeKeyword();
-    if (res && res.ok && res.base64) {
-      settings.wakeKeywordBase64 = res.base64;
-      settings.wakeKeywordLabel = res.name || 'Hey Sprig';
+    if (res && res.ok) {
+      settings.wakeKeywordLabel = res.name || 'custom model';
       settings.wakeKeyword = 'custom';
       if (els.wakeKeyword) els.wakeKeyword.value = 'custom';
       if (els.wakeKeywordNote) els.wakeKeywordNote.textContent = `Loaded: ${settings.wakeKeywordLabel}`;
       scheduleSave();
       if (settings.wakeEnabled) restartWake();
     } else if (res && res.error) {
-      toast('Could not load keyword: ' + res.error);
+      toast('Could not load model: ' + res.error);
     }
-  } catch { toast('Could not load keyword.'); }
+  } catch { toast('Could not load model.'); }
 });
 if (els.sttKeySave) els.sttKeySave.addEventListener('click', async () => {
   els.sttKeyStatus.textContent = 'Saving…';

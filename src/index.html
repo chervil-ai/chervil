@@ -357,33 +357,26 @@
 
       <section class="setting-group">
         <h3>Listening — “Hey Sprig”</h3>
-        <p class="group-hint">Let Chervil listen for a wake phrase and pop the Quick-Ask bar so you can speak a request hands-free. Wake-word detection runs <strong>fully on-device</strong> (Picovoice Porcupine) — your mic audio never leaves the machine until you actually speak a command, which is then transcribed by your configured voice-input service above. Needs a free <a href="https://console.picovoice.ai/" target="_blank" rel="noreferrer">Picovoice</a> access key.</p>
+        <p class="group-hint">Let Chervil listen for a wake word and pop the Quick-Ask bar so you can speak a request hands-free. Detection runs <strong>fully on-device</strong> and free (<a href="https://github.com/dscripka/openWakeWord" target="_blank" rel="noreferrer">openWakeWord</a>, no account or key) — your mic audio never leaves the machine until you actually speak a command, which is then transcribed by your configured voice-input service above.</p>
         <label class="toggle-row">
           <input id="wake-toggle" type="checkbox" />
-          <span>Listen for the wake phrase in the background (even when Chervil is in the tray).</span>
+          <span>Listen for the wake word in the background (even when Chervil is in the tray).</span>
         </label>
+        <small id="wake-status" class="field-note"></small>
         <div class="prov-block">
-          <label class="field">
-            <span class="field-label">Picovoice access key</span>
-            <input id="wake-key" type="password" placeholder="paste Picovoice access key…" autocomplete="off" spellcheck="false" />
-            <small id="wake-status" class="field-note"></small>
-          </label>
           <div class="field">
             <span class="field-label">Wake word</span>
             <select id="wake-keyword">
-              <option value="custom">Hey Sprig (custom — load a .ppn below)</option>
-              <option value="Computer">Computer</option>
-              <option value="Jarvis">Jarvis</option>
-              <option value="Bumblebee">Bumblebee</option>
-              <option value="Picovoice">Picovoice</option>
-              <option value="Alexa">Alexa</option>
-              <option value="Terminator">Terminator</option>
+              <option value="hey_jarvis">Hey Jarvis (built-in)</option>
+              <option value="alexa">Alexa (built-in)</option>
+              <option value="hey_mycroft">Hey Mycroft (built-in)</option>
+              <option value="custom">Custom model (.onnx) — e.g. “Hey Sprig”</option>
             </select>
             <span class="field-row">
-              <button id="wake-import" type="button" class="lib-btn">Load “Hey Sprig” keyword file…</button>
+              <button id="wake-import" type="button" class="lib-btn">Load wake-word model (.onnx)…</button>
               <small id="wake-keyword-note" class="field-note"></small>
             </span>
-            <small class="field-note">The literal “Hey Sprig” phrase needs a custom keyword file (<code>.ppn</code>, WebAssembly target) generated free at the Picovoice console. Until then, pick a built-in word above to try the feature.</small>
+            <small class="field-note">Built-in words work immediately. For the literal “Hey Sprig”, train a free openWakeWord model (a single-command trainer or the openWakeWord Colab) and load the resulting <code>.onnx</code> here.</small>
           </div>
         </div>
       </section>
@@ -551,10 +544,14 @@
     <div class="drop-card">📎 Drop files to attach<small>text, CSV, images, PDF</small></div>
   </div>
 
-  <!-- Wake-word engine (Picovoice Porcupine, offline) — vendored IIFE bundles
-       expose window.PorcupineWeb / window.WebVoiceProcessor for src/wake.js. -->
-  <script src="vendor/porcupine-web.min.js"></script>
-  <script src="vendor/web-voice-processor.min.js"></script>
+  <!-- Wake-word engine (openWakeWord on onnxruntime-web, offline & free). Load the
+       vendored ort ESM bundle (glue inlined) and expose it as window.ort; the .wasm
+       and ONNX models are injected as bytes at runtime (see src/wake.js). -->
+  <script>
+    window.__ortReady = import('./vendor/oww/ort.wasm.bundle.min.mjs')
+      .then((m) => { window.ort = m && m.default ? m.default : m; })
+      .catch((e) => { console.error('onnxruntime-web failed to load', e); });
+  </script>
   <script src="wake.js"></script>
   <script src="renderer.js"></script>
 </body>

@@ -25,12 +25,12 @@ const args = [
   '--win32metadata.ProductName=Chervil',
   '--win32metadata.FileDescription=Chervil - the agentic, conversational web browser',
   '--win32metadata.OriginalFilename=Chervil.exe',
-  // Exclude repo/dev cruft. @picovoice is a dev-only dependency — the runtime
-  // uses the vendored bundles in src/vendor — and prune isn't reliably dropping
-  // it, so ignore it explicitly to keep the bundle lean.
+  // Exclude repo/dev cruft. onnxruntime-* are dev-only deps (the runtime uses the
+  // vendored copies in src/vendor/oww), and prune isn't reliably dropping devDeps,
+  // so ignore them explicitly to keep the bundle lean.
   '--ignore=^/dist', '--ignore=^/installer', '--ignore=^/\\.github',
   '--ignore=^/\\.git$', '--ignore=^/\\.env$', '--ignore=^/memory$', '--ignore=^/scripts$',
-  '--ignore=/node_modules/@picovoice',
+  '--ignore=/node_modules/onnxruntime-',
   '--prune=true',
 ];
 

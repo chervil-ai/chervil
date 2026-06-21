@@ -37,7 +37,7 @@ right at home.)*
 - **Living pages** — schedule a page to re-ground itself and notify you when it changes.
 - **Agentic web actions** — Sprig can operate real sites for you, with hard safety gates (see [SECURITY.md](SECURITY.md)).
 - **Quick-ask** — a global hotkey opens a floating ask bar; Chervil lives in the tray, always a keystroke away.
-- **"Hey Sprig" listening** — opt-in hands-free wake phrase that pops the quick-ask bar and captures your spoken request. Wake-word detection is fully on-device (Picovoice Porcupine) — audio never leaves your machine until you speak a command. Needs a free Picovoice key; the literal "Hey Sprig" phrase uses a custom keyword file (built-in words work out of the box).
+- **"Hey Sprig" listening** — opt-in hands-free wake word that pops the quick-ask bar and captures your spoken request. Detection is fully on-device and free ([openWakeWord](https://github.com/dscripka/openWakeWord) on onnxruntime-web, no account or key) — audio never leaves your machine until you speak a command. Built-in words (Hey Jarvis / Alexa / Hey Mycroft) work out of the box; the literal "Hey Sprig" uses a free, self-trained openWakeWord model.
 - **Scheduled agents** — run prompts on a daily/weekly/interval schedule in the background, optionally "as" a chosen agent.
 - **Agent files** — import a persona (instructions, model, tools, starters) to make Sprig a specialist. Starters in [`/agents`](agents).
 - **Video summaries** — summarize YouTube videos from captions, or watched natively on Gemini.

@@ -357,7 +357,7 @@ ipcMain.on('chervil:quick-submit', (_event, text) => {
 });
 
 // --- "Hey Sprig" wake mode --------------------------------------------------
-// Wake-word detection runs in the main renderer (Porcupine, on-device). When it
+// Wake-word detection runs in the main renderer (openWakeWord, on-device). When it
 // fires, the renderer pops the Quick-Ask bar as a "listening" affordance, then
 // captures + transcribes the spoken command itself and composes via the normal path.
 ipcMain.on('chervil:wake-listening', () => {
@@ -369,29 +369,50 @@ ipcMain.on('chervil:wake-listening', () => {
 ipcMain.on('chervil:wake-done', () => hideQuick());
 ipcMain.on('chervil:show-main', () => showMain());
 
-// The renderer initializes Porcupine from base64 (publicPath uses fetch(), which
-// Chromium blocks on file://), so hand it the vendored params model as base64.
-ipcMain.handle('chervil:wake-model', async () => {
+// openWakeWord runs in the renderer on onnxruntime-web. fetch() is blocked on
+// file://, so we hand the renderer the ort WASM runtime + shared feature models as
+// raw bytes (Buffers ride the IPC structured clone) and it loads them in-memory.
+const OWW_DIR = path.join(__dirname, '..', 'src', 'vendor', 'oww');
+ipcMain.handle('chervil:wake-assets', async () => {
   try {
-    const p = path.join(__dirname, '..', 'src', 'vendor', 'porcupine_params.pv');
-    return { ok: true, base64: fs.readFileSync(p).toString('base64') };
+    return {
+      ok: true,
+      ortWasm: fs.readFileSync(path.join(OWW_DIR, 'ort-wasm-simd-threaded.wasm')),
+      melspec: fs.readFileSync(path.join(OWW_DIR, 'melspectrogram.onnx')),
+      embedding: fs.readFileSync(path.join(OWW_DIR, 'embedding_model.onnx')),
+    };
   } catch (err) {
     return { ok: false, error: String(err && err.message ? err.message : err) };
   }
 });
 
-// Import a custom "Hey Sprig" keyword (.ppn) and return it as base64.
+// A keyword model's bytes: a bundled built-in, or the imported custom one.
+const OWW_BUILTINS = { hey_jarvis: 'hey_jarvis_v0.1.onnx', alexa: 'alexa_v0.1.onnx', hey_mycroft: 'hey_mycroft_v0.1.onnx' };
+ipcMain.handle('chervil:wake-keyword-model', async (_event, name) => {
+  try {
+    const p = name === 'custom'
+      ? path.join(app.getPath('userData'), 'wake-custom.onnx')
+      : path.join(OWW_DIR, OWW_BUILTINS[name] || OWW_BUILTINS.hey_jarvis);
+    if (!fs.existsSync(p)) return { ok: false, error: 'Wake-word model not found.' };
+    return { ok: true, model: fs.readFileSync(p) };
+  } catch (err) {
+    return { ok: false, error: String(err && err.message ? err.message : err) };
+  }
+});
+
+// Import a custom openWakeWord keyword model (.onnx) — copy it into userData.
 ipcMain.handle('chervil:open-wake-keyword', async (event) => {
   const win = BrowserWindow.fromWebContents(event.sender);
   const { canceled, filePaths } = await dialog.showOpenDialog(win, {
-    title: 'Load wake-word keyword file',
+    title: 'Load wake-word model',
     properties: ['openFile'],
-    filters: [{ name: 'Porcupine keyword', extensions: ['ppn'] }],
+    filters: [{ name: 'openWakeWord model', extensions: ['onnx'] }],
   });
   if (canceled || !filePaths || !filePaths[0]) return { ok: false, canceled: true };
   try {
     const name = path.basename(filePaths[0]).replace(/\.[^.]+$/, '');
-    return { ok: true, name, base64: fs.readFileSync(filePaths[0]).toString('base64') };
+    fs.copyFileSync(filePaths[0], path.join(app.getPath('userData'), 'wake-custom.onnx'));
+    return { ok: true, name };
   } catch (err) {
     return { ok: false, error: String(err && err.message ? err.message : err) };
   }
