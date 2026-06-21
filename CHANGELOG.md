@@ -6,6 +6,15 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.3] — 2026-06-21
+
+### Changed
+- **"Hey Sprig" wake word** now runs on **openWakeWord** (onnxruntime-web) instead
+  of Picovoice Porcupine — free, open-source, on-device, and **no API key**
+  (Picovoice is retiring its free tier on June 30, 2026). Built-in words
+  (Hey Jarvis / Alexa / Hey Mycroft) work out of the box; the literal "Hey Sprig"
+  uses a free, self-trained openWakeWord `.onnx` loaded as a custom model.
+
 ## [0.1.2] — 2026-06-20
 
 ### Fixed

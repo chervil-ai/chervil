@@ -10,7 +10,7 @@
 ; launch (encrypting keys via Electron safeStorage) and deletes the file.
 
 #ifndef MyAppVersion
-  #define MyAppVersion "0.1.2"
+  #define MyAppVersion "0.1.3"
 #endif
 #define MyAppName "Chervil"
 #define MyAppPublisher "Rod Trent"
