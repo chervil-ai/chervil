@@ -10,8 +10,8 @@ const { app, BrowserWindow, ipcMain, dialog, safeStorage, Notification, Tray, Me
 // renders as mojibake in the Windows console).
 require('dotenv').config({ path: path.join(__dirname, '..', '.env'), quiet: true });
 
-const { runAgent, runAppletAsk, runListModels, runAgentStep, runExtractSlides, runExtractDoc, runExtractSheets, runSynthesizeAgent, runBuildLesson } = require('../lib/agent');
-const { lessonToHtml } = require('../lib/lessonHtml');
+const { runAgent, runAppletAsk, runListModels, runAgentStep, runExtractSlides, runExtractDoc, runExtractSheets, runSynthesizeAgent } = require('../lib/agent');
+const { getSkill } = require('../lib/skills');
 
 let mainWindow = null;
 let tray = null;
@@ -534,9 +534,10 @@ async function verifyLessonMedia(lesson) {
 ipcMain.handle('chervil:build-lesson', async (_event, payload) => {
   try {
     const { topic, level, goals } = payload || {};
-    const lesson = await runBuildLesson({ topic, level, goals, config: providerConfigFrom(payload) });
+    const learn = getSkill('learn');
+    const lesson = await learn.build({ input: topic, level, goals, config: providerConfigFrom(payload) });
     await verifyLessonMedia(lesson);
-    return { ok: true, lesson, html: lessonToHtml(lesson) };
+    return { ok: true, lesson, html: learn.toHtml(lesson) };
   } catch (err) {
     return { ok: false, error: String(err && err.message ? err.message : err) };
   }
@@ -557,7 +558,7 @@ ipcMain.handle('chervil:export-lesson', async (event, payload) => {
   });
   if (canceled || !filePath) return { ok: false, canceled: true };
   try {
-    fs.writeFileSync(filePath, lessonToHtml(lesson, { reader: true }), 'utf8');
+    fs.writeFileSync(filePath, getSkill('learn').toHtml(lesson, { reader: true }), 'utf8');
     return { ok: true, path: filePath };
   } catch (err) {
     return { ok: false, error: String(err && err.message ? err.message : err) };
@@ -571,7 +572,7 @@ ipcMain.handle('chervil:publish-lesson', async (_event, payload) => {
     if (!lesson) return { ok: false, error: 'No lesson to publish.' };
     if (!token) return { ok: false, error: 'Missing publish token.' };
     const base = String(baseUrl || 'https://getchervil.com').replace(/\/+$/, '');
-    const html = lessonToHtml(lesson, { reader: true });
+    const html = getSkill('learn').toHtml(lesson, { reader: true });
     const res = await fetch(`${base}/api/lessons`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
