@@ -10,7 +10,8 @@ const { app, BrowserWindow, ipcMain, dialog, safeStorage, Notification, Tray, Me
 // renders as mojibake in the Windows console).
 require('dotenv').config({ path: path.join(__dirname, '..', '.env'), quiet: true });
 
-const { runAgent, runAppletAsk, runListModels, runAgentStep, runExtractSlides, runExtractDoc, runExtractSheets, runSynthesizeAgent } = require('../lib/agent');
+const { runAgent, runAppletAsk, runListModels, runAgentStep, runExtractSlides, runExtractDoc, runExtractSheets, runSynthesizeAgent, runBuildLesson } = require('../lib/agent');
+const { lessonToHtml } = require('../lib/lessonHtml');
 
 let mainWindow = null;
 let tray = null;
@@ -497,6 +498,72 @@ ipcMain.handle('chervil:applet-ask', async (_event, payload) => {
   }
 });
 
+// --- Learning vertical: build an interactive lesson and render it to HTML ---
+
+// Model-suggested YouTube ids are untrusted (lib/lesson.js marks them
+// verified:false). Confirm each one exists via YouTube oEmbed before it can be
+// shown; enrich title/caption from the real metadata, and drop any that can't be
+// verified (and any module left empty). Mutates the lesson in place.
+async function verifyLessonMedia(lesson) {
+  const cards = [];
+  for (const m of (lesson.modules || [])) {
+    for (const c of (m.cards || [])) {
+      if (c.kind === 'media' && c.provider === 'youtube' && !c.verified) cards.push(c);
+    }
+  }
+  await Promise.all(cards.map(async (c) => {
+    try {
+      const oembed = `https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=${encodeURIComponent(c.videoId)}&format=json`;
+      const res = await fetch(oembed, { signal: AbortSignal.timeout(6000) });
+      if (!res.ok) return; // 401/404 => video doesn't exist or isn't embeddable
+      const j = await res.json().catch(() => null);
+      c.verified = true;
+      if (j && j.title) {
+        if (!c.title) c.title = String(j.title).slice(0, 200);
+        if (!c.caption) c.caption = String(j.title).slice(0, 500);
+      }
+    } catch { /* network/timeout => leave unverified, dropped below */ }
+  }));
+  for (const m of (lesson.modules || [])) {
+    m.cards = (m.cards || []).filter((c) => !(c.kind === 'media' && !c.verified));
+  }
+  lesson.modules = (lesson.modules || []).filter((m) => m.cards.length);
+  return lesson;
+}
+
+ipcMain.handle('chervil:build-lesson', async (_event, payload) => {
+  try {
+    const { topic, level, goals } = payload || {};
+    const lesson = await runBuildLesson({ topic, level, goals, config: providerConfigFrom(payload) });
+    await verifyLessonMedia(lesson);
+    return { ok: true, lesson, html: lessonToHtml(lesson) };
+  } catch (err) {
+    return { ok: false, error: String(err && err.message ? err.message : err) };
+  }
+});
+
+// Export a lesson as a standalone, swipeable mobile reader (.html) — the
+// reader-mode render, self-contained for sharing/opening on a phone.
+ipcMain.handle('chervil:export-lesson', async (event, payload) => {
+  const { lesson, suggestedName } = payload || {};
+  if (!lesson) return { ok: false, error: 'No lesson to export.' };
+  const win = BrowserWindow.fromWebContents(event.sender);
+  const safe = String(suggestedName || 'chervil-lesson')
+    .replace(/[^a-z0-9\-_ ]+/gi, '').trim().slice(0, 80) || 'chervil-lesson';
+  const { canceled, filePath } = await dialog.showSaveDialog(win, {
+    title: 'Share lesson (mobile)',
+    defaultPath: `${safe}.html`,
+    filters: [{ name: 'HTML lesson', extensions: ['html'] }],
+  });
+  if (canceled || !filePath) return { ok: false, canceled: true };
+  try {
+    fs.writeFileSync(filePath, lessonToHtml(lesson, { reader: true }), 'utf8');
+    return { ok: true, path: filePath };
+  } catch (err) {
+    return { ok: false, error: String(err && err.message ? err.message : err) };
+  }
+});
+
 // --- System notifications: a Living page changed in the background -------
 // The renderer fires this from refreshLiving when a page's content changed and
 // the window isn't focused. Clicking the toast focuses Chervil and asks the
@@ -605,19 +672,7 @@ ipcMain.handle('chervil:list-models', async (_event, payload) => {
 });
 
 // --- Summarize a video: fetch its transcript (YouTube captions) ----------
-function youtubeId(url) {
-  try {
-    const u = new URL(url);
-    const host = u.hostname.replace(/^www\./, '');
-    if (host === 'youtu.be') return u.pathname.slice(1).split('/')[0] || null;
-    if (host.endsWith('youtube.com')) {
-      if (u.searchParams.get('v')) return u.searchParams.get('v');
-      const m = u.pathname.match(/\/(?:shorts|embed|live)\/([^/?]+)/);
-      if (m) return m[1];
-    }
-  } catch { /* not a URL */ }
-  return null;
-}
+const { youtubeId } = require('../lib/youtube');
 
 function fmtTime(sec) {
   sec = Math.max(0, Math.round(sec));

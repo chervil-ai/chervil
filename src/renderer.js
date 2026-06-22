@@ -7,6 +7,7 @@ const els = {
   prompt: document.getElementById('prompt'),
   send: document.getElementById('send'),
   deepToggle: document.getElementById('deep-toggle'),
+  learnToggle: document.getElementById('learn-toggle'),
   attachBtn: document.getElementById('attach-btn'),
   micBtn: document.getElementById('mic-btn'),
   fileInput: document.getElementById('file-input'),
@@ -1168,6 +1169,9 @@ async function refreshLiving(rec) {
   if (!tab) { living = living.filter((r) => r.id !== rec.id); return; }
   const entry = tab.pages.find((p) => p.id === rec.entryId);
   if (!entry || entry.kind !== 'page') return; // navigated away from it; try next tick
+  // Lessons are not composed via the ask pipeline, so re-grounding rec.query
+  // ('/learn …') would clobber the lesson with a generic page. Drop the record.
+  if (entry.lesson) { living = living.filter((r) => r.id !== rec.id); return; }
   if (isTabBusy(tab.id)) return; // don't collide with an active generation
 
   rec.refreshing = true;
@@ -1215,7 +1219,8 @@ function updateLiveControls() {
   if (!els.liveSelect) return;
   const tab = activeTab();
   const cur = currentEntry(tab);
-  const rec = cur && cur.kind === 'page' ? livingFor(cur.id) : null;
+  const rec = cur && cur.kind === 'page' && !cur.lesson ? livingFor(cur.id) : null;
+  els.liveSelect.disabled = !!(cur && cur.lesson); // Living doesn't apply to lessons
   els.liveSelect.value = rec ? String(rec.intervalMs) : 'off';
   if (rec) {
     els.liveStatus.hidden = false;
@@ -1230,7 +1235,7 @@ function updateLiveControls() {
 function onLiveSelectChange() {
   const tab = activeTab();
   const cur = currentEntry(tab);
-  if (!cur || cur.kind !== 'page') return;
+  if (!cur || cur.kind !== 'page' || cur.lesson) return;
   const v = els.liveSelect.value;
   setLiving(tab, cur, v === 'off' ? 0 : parseInt(v, 10));
 }
@@ -1629,7 +1634,7 @@ function updatePlaceholder() {
   const tab = activeTab();
   const cur = currentEntry(tab);
   if (cur && cur.kind === 'navigate') els.prompt.placeholder = 'Hey Sprig, act here…';
-  else els.prompt.placeholder = deepMode ? 'Hey Sprig, research…' : 'Hey Sprig, ask…';
+  else els.prompt.placeholder = learnMode ? 'What do you want to learn?' : deepMode ? 'Hey Sprig, research…' : 'Hey Sprig, ask…';
 }
 
 // Speak a short sample with the currently selected voice/speed (Settings test button).
@@ -2264,6 +2269,22 @@ function setDeepMode(on) {
   deepMode = !!on;
   els.deepToggle.classList.toggle('active', deepMode);
   els.deepToggle.setAttribute('aria-pressed', String(deepMode));
+  if (deepMode) setLearnMode(false); // the two pipelines are mutually exclusive
+  updatePlaceholder();
+}
+
+// Learn mode (sticky toggle): the next query builds an interactive lesson on the
+// topic instead of composing a page. Same effect as the "/learn <topic>" command.
+let learnMode = false;
+function setLearnMode(on) {
+  learnMode = !!on;
+  els.learnToggle.classList.toggle('active', learnMode);
+  els.learnToggle.setAttribute('aria-pressed', String(learnMode));
+  if (learnMode && deepMode) {
+    deepMode = false;
+    els.deepToggle.classList.remove('active');
+    els.deepToggle.setAttribute('aria-pressed', 'false');
+  }
   updatePlaceholder();
 }
 
@@ -2415,6 +2436,12 @@ function handleComposerSubmit(text) {
   const attachments = pendingAttachments.slice();
   if (attachments.length) clearAttachments();
 
+  // Learn mode (or the "/learn <topic>" command) builds an interactive lesson
+  // instead of composing a page.
+  const learnCmd = query.match(/^\/learn\s+(.+)/is);
+  const learnTopic = learnCmd ? learnCmd[1].trim() : (learnMode ? query : null);
+  if (learnTopic) { buildAndRenderLesson(tab, learnTopic); return; }
+
   // On a live site, the composer drives the web agent instead of composing a page.
   const cur = currentEntry(tab);
 
@@ -2437,6 +2464,34 @@ function handleComposerSubmit(text) {
     promptRefineChoice(query, attachments);
   } else {
     submitQuery(query, { attachments });
+  }
+}
+
+// Build an interactive lesson ("/learn <topic>") and render it as a page entry.
+// The lesson HTML is composed in the main process and rendered through the normal
+// page path, so its applet cards get the injected window.chervil bridge for free.
+async function buildAndRenderLesson(tab, topic) {
+  if (!topic) return;
+  if (!window.chervil.buildLesson) { toast('Lessons aren’t available in this build.'); return; }
+  els.prompt.value = '';
+  refreshComposer();
+  toast('Sprig is building your lesson — this can take a moment…');
+  try {
+    const resp = await window.chervil.buildLesson({ topic, level: 'beginner', config: providerConfig() });
+    if (!resp || !resp.ok) { toast((resp && resp.error) || 'Couldn’t build the lesson.'); return; }
+    pushEntry(tab, {
+      kind: 'page',
+      html: resp.html,
+      title: resp.lesson.title,
+      query: '/learn ' + topic,
+      sources: resp.lesson.sources || [],
+      lesson: resp.lesson, // stash the structured lesson alongside the rendered HTML
+    });
+    if (!tab.title || tab.title === 'New Tab') tab.title = resp.lesson.title;
+    if (activeTab() === tab) { renderTabs(); renderCurrentPage(); refreshComposer(); }
+    scheduleSave();
+  } catch (e) {
+    toast('Lesson error: ' + (e && e.message ? e.message : e));
   }
 }
 
@@ -3361,6 +3416,18 @@ function onExportSelect(e) {
   else if (v === 'pptx') exportCurrentPptx();
   else if (v === 'docx') exportCurrentDocx();
   else if (v === 'xlsx') exportCurrentXlsx();
+  else if (v === 'lesson') exportCurrentLessonReader();
+}
+
+// Export the current lesson as a standalone, swipeable mobile reader (.html).
+async function exportCurrentLessonReader() {
+  const tab = activeTab();
+  const entry = currentEntry(tab);
+  if (!entry || !entry.lesson) { toast('Open a lesson first (🎓 Learn), then export it for mobile.'); return; }
+  if (!window.chervil.exportLesson) { toast('Mobile export isn’t available in this build.'); return; }
+  const res = await window.chervil.exportLesson({ lesson: entry.lesson, suggestedName: entry.title });
+  if (res && res.ok) addMessage(tab, 'bot', `Saved a swipeable mobile lesson to ${res.path} — open it on your phone.`);
+  else if (res && !res.canceled) addMessage(tab, 'bot', `Couldn’t export: ${res.error || 'unknown error'}`, 'error');
 }
 
 // ---- Helpers ----
@@ -3385,6 +3452,7 @@ els.composer.addEventListener('submit', (e) => {
 });
 
 els.deepToggle.addEventListener('click', () => setDeepMode(!deepMode));
+els.learnToggle.addEventListener('click', () => setLearnMode(!learnMode));
 
 // File attachments: button, picker, and drag-and-drop.
 els.attachBtn.addEventListener('click', () => els.fileInput.click());
