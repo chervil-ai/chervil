@@ -85,6 +85,8 @@ const els = {
   // Voice input (speech-to-text)
   sttEndpoint: document.getElementById('stt-endpoint'),
   sttModel: document.getElementById('stt-model'),
+  publishToken: document.getElementById('publish-token'),
+  publishBase: document.getElementById('publish-base'),
   sttKeyInput: document.getElementById('stt-key-input'),
   sttKeySave: document.getElementById('stt-key-save'),
   sttKeyStatus: document.getElementById('stt-key-status'),
@@ -166,6 +168,9 @@ let settings = {
   wakeKeyword: 'hey_sprig', // built-in: hey_sprig | hey_jarvis | alexa | hey_mycroft, or 'custom' (.onnx in userData)
   wakeKeywordLabel: '',      // display label for a loaded custom model
   wakeThreshold: 0.5,        // detection score cutoff (0–1; higher = fewer false triggers)
+  // Publishing — Chervil Pro: publish a lesson to a shareable getchervil.com link.
+  publishToken: '',          // from getchervil.com/me (stored locally)
+  publishBase: 'https://getchervil.com',
 };
 
 // Per-provider metadata for the Settings UI.
@@ -3004,6 +3009,8 @@ function applySettingsToUI() {
   if (els.remixDefaultSelect) els.remixDefaultSelect.value = settings.remixMinimized ? 'minimized' : 'expanded';
   if (els.sttEndpoint) els.sttEndpoint.value = settings.sttEndpoint || '';
   if (els.sttModel) els.sttModel.value = settings.sttModel || '';
+  if (els.publishToken) els.publishToken.value = settings.publishToken || '';
+  if (els.publishBase) els.publishBase.value = settings.publishBase || 'https://getchervil.com';
   if (els.voiceAutosend) els.voiceAutosend.checked = !!settings.voiceAutosend;
   if (els.wakeToggle) els.wakeToggle.checked = !!settings.wakeEnabled;
   if (els.wakeKeyword) els.wakeKeyword.value = settings.wakeKeyword || 'hey_jarvis';
@@ -3417,6 +3424,34 @@ function onExportSelect(e) {
   else if (v === 'docx') exportCurrentDocx();
   else if (v === 'xlsx') exportCurrentXlsx();
   else if (v === 'lesson') exportCurrentLessonReader();
+  else if (v === 'lesson-publish') publishCurrentLesson();
+}
+
+// Publish the current lesson to a shareable getchervil.com link (Chervil Pro).
+async function publishCurrentLesson() {
+  const tab = activeTab();
+  const entry = currentEntry(tab);
+  if (!entry || !entry.lesson) { toast('Open a lesson first (🎓 Learn), then publish it.'); return; }
+  if (!settings.publishToken) { toast('Add a publish token in Settings → Publishing (from getchervil.com/me).'); return; }
+  if (!window.chervil.publishLesson) { toast('Publishing isn’t available in this build.'); return; }
+  toast('Publishing your lesson…');
+  try {
+    const res = await window.chervil.publishLesson({
+      lesson: entry.lesson,
+      token: settings.publishToken,
+      baseUrl: settings.publishBase || 'https://getchervil.com',
+    });
+    if (res && res.ok && res.url) {
+      entry.publishedUrl = res.url;
+      scheduleSave();
+      addMessage(tab, 'bot', `Published — your lesson is live at ${res.url}`);
+      try { await navigator.clipboard.writeText(res.url); toast('Published — link copied to clipboard.'); } catch { toast('Published.'); }
+    } else {
+      addMessage(tab, 'bot', `Couldn’t publish: ${(res && res.error) || 'unknown error'}`, 'error');
+    }
+  } catch (e) {
+    addMessage(tab, 'bot', `Publish error: ${(e && e.message) || e}`, 'error');
+  }
 }
 
 // Export the current lesson as a standalone, swipeable mobile reader (.html).
@@ -3597,6 +3632,8 @@ els.azureApiVersion.addEventListener('input', () => { settings.azureApiVersion =
 // Voice input (speech-to-text) settings.
 if (els.sttEndpoint) els.sttEndpoint.addEventListener('input', () => { settings.sttEndpoint = els.sttEndpoint.value.trim(); scheduleSave(); });
 if (els.sttModel) els.sttModel.addEventListener('input', () => { settings.sttModel = els.sttModel.value.trim(); scheduleSave(); });
+if (els.publishToken) els.publishToken.addEventListener('input', () => { settings.publishToken = els.publishToken.value.trim(); scheduleSave(); });
+if (els.publishBase) els.publishBase.addEventListener('input', () => { settings.publishBase = els.publishBase.value.trim(); scheduleSave(); });
 if (els.voiceAutosend) els.voiceAutosend.addEventListener('change', () => { settings.voiceAutosend = els.voiceAutosend.checked; scheduleSave(); });
 
 // Listening — "Hey Sprig"
