@@ -542,6 +542,28 @@ ipcMain.handle('chervil:build-lesson', async (_event, payload) => {
   }
 });
 
+// Export a lesson as a standalone, swipeable mobile reader (.html) — the
+// reader-mode render, self-contained for sharing/opening on a phone.
+ipcMain.handle('chervil:export-lesson', async (event, payload) => {
+  const { lesson, suggestedName } = payload || {};
+  if (!lesson) return { ok: false, error: 'No lesson to export.' };
+  const win = BrowserWindow.fromWebContents(event.sender);
+  const safe = String(suggestedName || 'chervil-lesson')
+    .replace(/[^a-z0-9\-_ ]+/gi, '').trim().slice(0, 80) || 'chervil-lesson';
+  const { canceled, filePath } = await dialog.showSaveDialog(win, {
+    title: 'Share lesson (mobile)',
+    defaultPath: `${safe}.html`,
+    filters: [{ name: 'HTML lesson', extensions: ['html'] }],
+  });
+  if (canceled || !filePath) return { ok: false, canceled: true };
+  try {
+    fs.writeFileSync(filePath, lessonToHtml(lesson, { reader: true }), 'utf8');
+    return { ok: true, path: filePath };
+  } catch (err) {
+    return { ok: false, error: String(err && err.message ? err.message : err) };
+  }
+});
+
 // --- System notifications: a Living page changed in the background -------
 // The renderer fires this from refreshLiving when a page's content changed and
 // the window isn't focused. Clicking the toast focuses Chervil and asks the

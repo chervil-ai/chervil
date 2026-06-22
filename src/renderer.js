@@ -3412,6 +3412,18 @@ function onExportSelect(e) {
   else if (v === 'pptx') exportCurrentPptx();
   else if (v === 'docx') exportCurrentDocx();
   else if (v === 'xlsx') exportCurrentXlsx();
+  else if (v === 'lesson') exportCurrentLessonReader();
+}
+
+// Export the current lesson as a standalone, swipeable mobile reader (.html).
+async function exportCurrentLessonReader() {
+  const tab = activeTab();
+  const entry = currentEntry(tab);
+  if (!entry || !entry.lesson) { toast('Open a lesson first (🎓 Learn), then export it for mobile.'); return; }
+  if (!window.chervil.exportLesson) { toast('Mobile export isn’t available in this build.'); return; }
+  const res = await window.chervil.exportLesson({ lesson: entry.lesson, suggestedName: entry.title });
+  if (res && res.ok) addMessage(tab, 'bot', `Saved a swipeable mobile lesson to ${res.path} — open it on your phone.`);
+  else if (res && !res.canceled) addMessage(tab, 'bot', `Couldn’t export: ${res.error || 'unknown error'}`, 'error');
 }
 
 // ---- Helpers ----

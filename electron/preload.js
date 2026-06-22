@@ -37,6 +37,9 @@ contextBridge.exposeInMainWorld('chervil', {
   /** Build an interactive lesson from a topic → { ok, lesson, html }. */
   buildLesson: (payload) => ipcRenderer.invoke('chervil:build-lesson', payload),
 
+  /** Export a lesson as a standalone, swipeable mobile reader (.html). */
+  exportLesson: (payload) => ipcRenderer.invoke('chervil:export-lesson', payload),
+
   /** Per-provider key status: { claude, grok, gemini, azure, claudeFromEnv }. */
   getKeyStatus: () => ipcRenderer.invoke('chervil:get-key-status'),
 
