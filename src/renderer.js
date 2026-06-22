@@ -7,6 +7,7 @@ const els = {
   prompt: document.getElementById('prompt'),
   send: document.getElementById('send'),
   deepToggle: document.getElementById('deep-toggle'),
+  learnToggle: document.getElementById('learn-toggle'),
   attachBtn: document.getElementById('attach-btn'),
   micBtn: document.getElementById('mic-btn'),
   fileInput: document.getElementById('file-input'),
@@ -1629,7 +1630,7 @@ function updatePlaceholder() {
   const tab = activeTab();
   const cur = currentEntry(tab);
   if (cur && cur.kind === 'navigate') els.prompt.placeholder = 'Hey Sprig, act here…';
-  else els.prompt.placeholder = deepMode ? 'Hey Sprig, research…' : 'Hey Sprig, ask…';
+  else els.prompt.placeholder = learnMode ? 'What do you want to learn?' : deepMode ? 'Hey Sprig, research…' : 'Hey Sprig, ask…';
 }
 
 // Speak a short sample with the currently selected voice/speed (Settings test button).
@@ -2264,6 +2265,22 @@ function setDeepMode(on) {
   deepMode = !!on;
   els.deepToggle.classList.toggle('active', deepMode);
   els.deepToggle.setAttribute('aria-pressed', String(deepMode));
+  if (deepMode) setLearnMode(false); // the two pipelines are mutually exclusive
+  updatePlaceholder();
+}
+
+// Learn mode (sticky toggle): the next query builds an interactive lesson on the
+// topic instead of composing a page. Same effect as the "/learn <topic>" command.
+let learnMode = false;
+function setLearnMode(on) {
+  learnMode = !!on;
+  els.learnToggle.classList.toggle('active', learnMode);
+  els.learnToggle.setAttribute('aria-pressed', String(learnMode));
+  if (learnMode && deepMode) {
+    deepMode = false;
+    els.deepToggle.classList.remove('active');
+    els.deepToggle.setAttribute('aria-pressed', 'false');
+  }
   updatePlaceholder();
 }
 
@@ -2415,9 +2432,11 @@ function handleComposerSubmit(text) {
   const attachments = pendingAttachments.slice();
   if (attachments.length) clearAttachments();
 
-  // "/learn <topic>" builds an interactive lesson instead of a composed page.
-  const learn = query.match(/^\/learn\s+(.+)/is);
-  if (learn) { buildAndRenderLesson(tab, learn[1].trim()); return; }
+  // Learn mode (or the "/learn <topic>" command) builds an interactive lesson
+  // instead of composing a page.
+  const learnCmd = query.match(/^\/learn\s+(.+)/is);
+  const learnTopic = learnCmd ? learnCmd[1].trim() : (learnMode ? query : null);
+  if (learnTopic) { buildAndRenderLesson(tab, learnTopic); return; }
 
   // On a live site, the composer drives the web agent instead of composing a page.
   const cur = currentEntry(tab);
@@ -3417,6 +3436,7 @@ els.composer.addEventListener('submit', (e) => {
 });
 
 els.deepToggle.addEventListener('click', () => setDeepMode(!deepMode));
+els.learnToggle.addEventListener('click', () => setLearnMode(!learnMode));
 
 // File attachments: button, picker, and drag-and-drop.
 els.attachBtn.addEventListener('click', () => els.fileInput.click());
