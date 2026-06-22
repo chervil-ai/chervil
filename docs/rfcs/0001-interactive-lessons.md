@@ -193,8 +193,8 @@ applets." A funnel needs a destination first.
 | **0.5** | Media: oEmbed verification + click-to-play facade (#5) | ✅ done |
 | **1** | In-app lesson player (`lib/lessonHtml.js`); `/learn` + build-lesson IPC; persist via page entries | ✅ done |
 | **1.5** | Two-phase (syllabus → parallel module expansion) generation; discoverable 🎓 Learn toggle | ✅ done |
-| **2C** | Swipe / one-card-per-screen reader (the shared mobile rendering layer) | next |
-| **2A** | Standalone `.html` export — **already works** via the app's "⤓ Save" (a lesson is a self-contained page entry) | ✅ (free tier) |
+| **2C** | Swipe / one-card-per-screen reader (`lessonToHtml(_, {reader:true})`) | ✅ done |
+| **2A** | Standalone `.html` export — "📱 Mobile lesson" export (reader mode) + the app's "⤓ Save" | ✅ done (free tier) |
 | **2B** | Hosted lessons on getchervil.com — shareable URL + OG previews; the **Chervil Pro** paywall surface | designed phase (own RFC) |
 | **3** | Extract the skill framework (#1) | |
 | **4** | Chrome extension funnel (#3) | |
