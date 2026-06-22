@@ -87,6 +87,8 @@ const els = {
   sttModel: document.getElementById('stt-model'),
   publishToken: document.getElementById('publish-token'),
   publishBase: document.getElementById('publish-base'),
+  publishSave: document.getElementById('publish-save'),
+  publishStatus: document.getElementById('publish-status'),
   sttKeyInput: document.getElementById('stt-key-input'),
   sttKeySave: document.getElementById('stt-key-save'),
   sttKeyStatus: document.getElementById('stt-key-status'),
@@ -3634,6 +3636,13 @@ if (els.sttEndpoint) els.sttEndpoint.addEventListener('input', () => { settings.
 if (els.sttModel) els.sttModel.addEventListener('input', () => { settings.sttModel = els.sttModel.value.trim(); scheduleSave(); });
 if (els.publishToken) els.publishToken.addEventListener('input', () => { settings.publishToken = els.publishToken.value.trim(); scheduleSave(); });
 if (els.publishBase) els.publishBase.addEventListener('input', () => { settings.publishBase = els.publishBase.value.trim(); scheduleSave(); });
+if (els.publishSave) els.publishSave.addEventListener('click', () => {
+  settings.publishToken = els.publishToken.value.trim();
+  settings.publishBase = els.publishBase.value.trim() || 'https://getchervil.com';
+  scheduleSave();
+  if (els.publishStatus) { els.publishStatus.textContent = 'Saved ✓'; els.publishStatus.className = 'field-note ok'; }
+  toast('Publishing settings saved.');
+});
 if (els.voiceAutosend) els.voiceAutosend.addEventListener('change', () => { settings.voiceAutosend = els.voiceAutosend.checked; scheduleSave(); });
 
 // Listening — "Hey Sprig"

@@ -337,8 +337,11 @@
         <div class="prov-block">
           <label class="field">
             <span class="field-label">Publish token</span>
-            <input id="publish-token" type="password" placeholder="chv_pub_…" autocomplete="off" spellcheck="false" />
-            <small class="field-note">From getchervil.com/me → Generate publish token.</small>
+            <span class="field-row">
+              <input id="publish-token" type="password" placeholder="chv_pub_…" autocomplete="off" spellcheck="false" />
+              <button id="publish-save" type="button" class="lib-btn primary">Save</button>
+            </span>
+            <small id="publish-status" class="field-note">From getchervil.com/me → Generate publish token.</small>
           </label>
           <label class="field">
             <span class="field-label">Site URL</span>
