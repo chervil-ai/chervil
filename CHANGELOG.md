@@ -6,6 +6,43 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.5] — 2026-06-22
+
+A big feature release: Chervil learns to **teach**. The flagship learning
+vertical lands — interactive lessons and graded quizzes you can build, publish,
+and share — alongside a browser extension and real-world map/phone actions.
+
+### Added
+- **Interactive Lessons** — ask Sprig to teach you a topic (🎓 **Learn**, or
+  `/learn <topic>`) and it builds a swipeable deck of cards with hands-on,
+  generative applets and oEmbed-verified videos.
+- **Quizzes** — build a graded multiple-choice quiz (❓ **Quiz**, or
+  `/quiz <topic>`) that scores answers and explains each one. A composer **skill
+  picker** sits next to Deep Dive so you choose what Sprig should *make*.
+- **Publish to the web (Chervil Pro)** — send any lesson or quiz to a shareable
+  `getchervil.com/learn/…` link from the app (Settings → publish token).
+  Re-publishing updates the same URL in place, and applets are snapshotted at
+  publish so they keep working for viewers. Hosted extras: a **public profile**
+  (`/profile/you`) that collects everything you've published, and **per-card
+  analytics** showing where learners drop off.
+- **Standalone mobile export** — save a lesson or quiz as a self-contained,
+  swipeable `.html` you can open on any phone.
+- **Browser extension (Chrome/Edge)** — "Ask Sprig about this page" or summarize
+  it, sending the page or your selection to Chervil via a `chervil://` deep link.
+- **Real-world agentic actions** — composed pages now open **real Google Maps**
+  in-app (and send the pin to your phone via QR) instead of faking a map, and
+  turn **phone numbers** into one-tap call-from-PC or send-to-phone.
+
+### Changed
+- The learning vertical is built on a reusable **skill framework**, so new
+  builders (Lesson, Quiz, …) plug into one build → render → publish pipeline.
+
+### Fixed
+- Grok / OpenAI now surface the real streaming error instead of a generic
+  "stream error".
+- Browser deep links no longer get lost on a cold start — the prompt is delivered
+  once the window's renderer is ready.
+
 ## [0.1.4] — 2026-06-22
 
 ### Changed
@@ -89,5 +126,6 @@ First public, build-in-public alpha. Run from source; no packaged installer yet.
 - API keys encrypted at rest via OS-native storage; never round-tripped through
   the UI.
 
-[Unreleased]: https://github.com/chervil-ai/chervil/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/chervil-ai/chervil/compare/v0.1.5...HEAD
+[0.1.5]: https://github.com/chervil-ai/chervil/compare/v0.1.4...v0.1.5
 [0.1.0]: https://github.com/chervil-ai/chervil/releases/tag/v0.1.0

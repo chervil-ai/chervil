@@ -1,6 +1,6 @@
 {
   "name": "chervil",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "Chervil — the Agentic, Conversational Modern Web Browser",
   "main": "electron/main.js",
   "scripts": {

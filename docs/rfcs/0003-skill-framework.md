@@ -66,15 +66,23 @@ and one line in `SKILLS`.
   `getSkill().build` → optional `enrich` → `toHtml`), so adding a skill needs no
   bespoke IPC. The renderer dispatches `/quiz` through it.
 
-## Pending (next slices)
+## Done — Phase 3 complete
 
-- **Finish the generic UI:** Learn still uses its own `buildLesson` path (richer:
-  media verify + the 🎓 toggle + export/publish). Migrate it onto `build-skill`
-  (its media verify fits the `enrich` hook) and add a **skill picker** instead of
-  one toggle.
-- **Per-skill publish/export** so the export menu + `/api/lessons` aren't
-  lesson-specific (the website stores `lesson_json`; a generic `artifact_json` +
-  `kind` would let it host any skill's output — e.g. publish a quiz).
+- **1a — Learn migrated onto `build-skill`:** media verify moved to
+  `lib/lessonMedia.js` and wired as Learn's `enrich` hook; the lesson-specific
+  `build-lesson` IPC removed. All skills now share one build path.
+- **1b — skill picker UI:** 🎓 Learn / ❓ Quiz composer toggles (a `skillMode`
+  picker, mutually exclusive with Deep Dive); `/learn` + `/quiz` commands too.
+- **1c — publish/export any skill:** the app sends `{artifact, kind, html}`;
+  `/api/lessons` stores a `kind` column and serves any artifact's HTML. Verified
+  end-to-end: a quiz publishes to getchervil.com (kind=quiz) and serves at
+  `/learn/<id>`.
+
+## Later (optional)
+
+- A richer skill picker (dropdown) once there are >2–3 skills.
+- More skills (study-guide, flashcard-deck) — now just a registry entry + a
+  build prompt + a renderer.
 
 ## Why now / why this shape
 
