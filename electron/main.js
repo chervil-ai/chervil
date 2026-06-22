@@ -277,6 +277,27 @@ function showMain() {
   mainWindow.focus();
 }
 
+// Handle a chervil:// deep link from the browser extension (or anywhere):
+//   chervil://ask?url=<page>&title=<title>&text=<selection>
+// Build a prompt and hand it to the main window (same channel as quick-ask).
+function handleChervilUrl(raw) {
+  let prompt = '';
+  try {
+    const u = new URL(raw);
+    if (u.protocol !== 'chervil:') return;
+    const text = (u.searchParams.get('text') || '').trim();
+    const url = (u.searchParams.get('url') || '').trim();
+    const title = (u.searchParams.get('title') || '').trim();
+    if (text) prompt = url ? `${text}\n\n(from ${title || url}: ${url})` : text;
+    else if (url) prompt = `Tell me about this page: ${title ? title + ' — ' : ''}${url}`;
+  } catch { /* malformed link */ }
+  if (!prompt) return;
+  showMain();
+  if (mainWindow && !mainWindow.webContents.isDestroyed()) {
+    mainWindow.webContents.send('chervil:quick-prompt', prompt);
+  }
+}
+
 function createQuickWindow() {
   quickWindow = new BrowserWindow({
     width: 640,
@@ -419,6 +440,26 @@ ipcMain.handle('chervil:open-wake-keyword', async (event) => {
   }
 });
 
+// Single-instance + chervil:// protocol (so the browser extension can open the
+// app). A second launch (e.g. from a deep link) focuses the running app and
+// passes its URL via 'second-instance' instead of starting a new window.
+if (!app.requestSingleInstanceLock()) {
+  app.quit();
+} else {
+  app.on('second-instance', (_e, argv) => {
+    showMain();
+    const url = argv.find((a) => String(a).startsWith('chervil://'));
+    if (url) handleChervilUrl(url);
+  });
+}
+app.on('open-url', (e, url) => { e.preventDefault(); handleChervilUrl(url); }); // macOS
+if (process.defaultApp) {
+  // Dev (running `electron .`): register with the explicit exec path + script.
+  if (process.argv.length >= 2) app.setAsDefaultProtocolClient('chervil', process.execPath, [path.resolve(process.argv[1])]);
+} else {
+  app.setAsDefaultProtocolClient('chervil');
+}
+
 app.whenReady().then(() => {
   // Windows prints the AppUserModelID verbatim as the toast/notification source
   // *unless* an installed Start Menu shortcut maps that ID to a display name. We
@@ -433,6 +474,9 @@ app.whenReady().then(() => {
   applyFirstRunProvisioning(); // import installer wizard choices on first launch
   createWindow();
   createTray();
+  // Cold start via a chervil:// deep link (URL passed in argv on first launch).
+  const startUrl = process.argv.find((a) => String(a).startsWith('chervil://'));
+  if (startUrl) setTimeout(() => handleChervilUrl(startUrl), 800); // let the window load first
   // System-wide hotkey to summon the floating quick-ask, even when Chervil isn't focused.
   globalShortcut.register('CommandOrControl+Shift+Space', toggleQuick);
 
