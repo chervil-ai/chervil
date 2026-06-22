@@ -34,9 +34,6 @@ contextBridge.exposeInMainWorld('chervil', {
   /** Applet bridge: a composed page asks Sprig for live data. */
   appletAsk: (payload) => ipcRenderer.invoke('chervil:applet-ask', payload),
 
-  /** Build an interactive lesson from a topic → { ok, lesson, html }. */
-  buildLesson: (payload) => ipcRenderer.invoke('chervil:build-lesson', payload),
-
   /** Build any registered skill (RFC 0003) → { ok, kind, artifact, html }. */
   buildSkill: (payload) => ipcRenderer.invoke('chervil:build-skill', payload),
 

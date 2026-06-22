@@ -2447,7 +2447,7 @@ function handleComposerSubmit(text) {
   // instead of composing a page.
   const learnCmd = query.match(/^\/learn\s+(.+)/is);
   const learnTopic = learnCmd ? learnCmd[1].trim() : (learnMode ? query : null);
-  if (learnTopic) { buildAndRenderLesson(tab, learnTopic); return; }
+  if (learnTopic) { buildAndRenderSkill(tab, 'learn', learnTopic, 'lesson'); return; }
 
   // "/quiz <topic>" builds a graded quiz (a second skill via the generic path).
   const quizCmd = query.match(/^\/quiz\s+(.+)/is);
@@ -2478,34 +2478,6 @@ function handleComposerSubmit(text) {
   }
 }
 
-// Build an interactive lesson ("/learn <topic>") and render it as a page entry.
-// The lesson HTML is composed in the main process and rendered through the normal
-// page path, so its applet cards get the injected window.chervil bridge for free.
-async function buildAndRenderLesson(tab, topic) {
-  if (!topic) return;
-  if (!window.chervil.buildLesson) { toast('Lessons aren’t available in this build.'); return; }
-  els.prompt.value = '';
-  refreshComposer();
-  toast('Sprig is building your lesson — this can take a moment…');
-  try {
-    const resp = await window.chervil.buildLesson({ topic, level: 'beginner', config: providerConfig() });
-    if (!resp || !resp.ok) { toast((resp && resp.error) || 'Couldn’t build the lesson.'); return; }
-    pushEntry(tab, {
-      kind: 'page',
-      html: resp.html,
-      title: resp.lesson.title,
-      query: '/learn ' + topic,
-      sources: resp.lesson.sources || [],
-      lesson: resp.lesson, // stash the structured lesson alongside the rendered HTML
-    });
-    if (!tab.title || tab.title === 'New Tab') tab.title = resp.lesson.title;
-    if (activeTab() === tab) { renderTabs(); renderCurrentPage(); refreshComposer(); }
-    scheduleSave();
-  } catch (e) {
-    toast('Lesson error: ' + (e && e.message ? e.message : e));
-  }
-}
-
 // Generic skill build (RFC 0003): build any registered skill and commit it as a
 // page entry. Lesson keeps its own richer path (buildAndRenderLesson); this is
 // the generic dispatch used by Quiz and future skills.
@@ -2519,14 +2491,18 @@ async function buildAndRenderSkill(tab, skillId, input, label) {
     const resp = await window.chervil.buildSkill({ skill: skillId, input, level: 'beginner', config: providerConfig() });
     if (!resp || !resp.ok) { toast((resp && resp.error) || 'Couldn’t build it.'); return; }
     const a = resp.artifact || {};
-    pushEntry(tab, {
+    const entry = {
       kind: 'page',
       html: resp.html,
       title: a.title || (label || skillId),
       query: `/${skillId} ${input}`,
       skill: skillId,
       artifact: a,
-    });
+    };
+    // Learn keeps `lesson` + `sources` for the (currently lesson-specific)
+    // export/publish actions.
+    if (skillId === 'learn') { entry.lesson = a; entry.sources = a.sources || []; }
+    pushEntry(tab, entry);
     if (!tab.title || tab.title === 'New Tab') tab.title = a.title || (label || skillId);
     if (activeTab() === tab) { renderTabs(); renderCurrentPage(); refreshComposer(); }
     scheduleSave();
