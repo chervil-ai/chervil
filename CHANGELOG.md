@@ -6,6 +6,14 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.4] — 2026-06-22
+
+### Changed
+- **"Hey Sprig" is now a bundled, built-in wake word — and the default.** The
+  self-trained openWakeWord model ships with the app, so hands-free "Hey Sprig"
+  works out of the box; no more loading a custom `.onnx` or falling back to
+  Hey Jarvis. (Hey Jarvis / Alexa / Hey Mycroft remain selectable.)
+
 ## [0.1.3] — 2026-06-21
 
 ### Changed
