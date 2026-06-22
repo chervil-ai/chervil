@@ -543,6 +543,21 @@ ipcMain.handle('chervil:build-lesson', async (_event, payload) => {
   }
 });
 
+// Pre-compute applet answers with the user's LOCAL key so published/exported
+// lessons show baked results — no hosted bridge, no server-side key custody, no
+// token cost (RFC 0002 / the "snapshot at publish" decision). Mutates in place.
+async function snapshotApplets(lesson, config) {
+  const cards = [];
+  for (const m of (lesson.modules || [])) for (const c of (m.cards || [])) {
+    if (c.kind === 'applet' && c.prompt && !c.answer) cards.push(c);
+  }
+  await Promise.all(cards.map(async (c) => {
+    try { const r = await runAppletAsk({ prompt: c.prompt, config }); if (r && r.text) c.answer = String(r.text); }
+    catch { /* leave unbaked */ }
+  }));
+  return lesson;
+}
+
 // Export a lesson as a standalone, swipeable mobile reader (.html) — the
 // reader-mode render, self-contained for sharing/opening on a phone.
 ipcMain.handle('chervil:export-lesson', async (event, payload) => {
@@ -558,6 +573,7 @@ ipcMain.handle('chervil:export-lesson', async (event, payload) => {
   });
   if (canceled || !filePath) return { ok: false, canceled: true };
   try {
+    await snapshotApplets(lesson, providerConfigFrom(payload));
     fs.writeFileSync(filePath, getSkill('learn').toHtml(lesson, { reader: true }), 'utf8');
     return { ok: true, path: filePath };
   } catch (err) {
@@ -572,6 +588,7 @@ ipcMain.handle('chervil:publish-lesson', async (_event, payload) => {
     if (!lesson) return { ok: false, error: 'No lesson to publish.' };
     if (!token) return { ok: false, error: 'Missing publish token.' };
     const base = String(baseUrl || 'https://getchervil.com').replace(/\/+$/, '');
+    await snapshotApplets(lesson, providerConfigFrom(payload));
     const html = getSkill('learn').toHtml(lesson, { reader: true });
     const res = await fetch(`${base}/api/lessons`, {
       method: 'POST',

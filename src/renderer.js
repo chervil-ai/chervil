@@ -3442,6 +3442,7 @@ async function publishCurrentLesson() {
       lesson: entry.lesson,
       token: settings.publishToken,
       baseUrl: settings.publishBase || 'https://getchervil.com',
+      config: providerConfig(),
     });
     if (res && res.ok && res.url) {
       entry.publishedUrl = res.url;
@@ -3462,7 +3463,7 @@ async function exportCurrentLessonReader() {
   const entry = currentEntry(tab);
   if (!entry || !entry.lesson) { toast('Open a lesson first (🎓 Learn), then export it for mobile.'); return; }
   if (!window.chervil.exportLesson) { toast('Mobile export isn’t available in this build.'); return; }
-  const res = await window.chervil.exportLesson({ lesson: entry.lesson, suggestedName: entry.title });
+  const res = await window.chervil.exportLesson({ lesson: entry.lesson, suggestedName: entry.title, config: providerConfig() });
   if (res && res.ok) addMessage(tab, 'bot', `Saved a swipeable mobile lesson to ${res.path} — open it on your phone.`);
   else if (res && !res.canceled) addMessage(tab, 'bot', `Couldn’t export: ${res.error || 'unknown error'}`, 'error');
 }
