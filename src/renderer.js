@@ -3447,13 +3447,15 @@ function onExportSelect(e) {
 async function publishCurrentLesson() {
   const tab = activeTab();
   const entry = currentEntry(tab);
-  if (!entry || !entry.lesson) { toast('Open a lesson first (🎓 Learn), then publish it.'); return; }
+  const artifact = entry && (entry.artifact || entry.lesson);
+  if (!artifact) { toast('Open a lesson or quiz first (🎓 / ❓), then publish it.'); return; }
   if (!settings.publishToken) { toast('Add a publish token in Settings → Publishing (from getchervil.com/me).'); return; }
   if (!window.chervil.publishLesson) { toast('Publishing isn’t available in this build.'); return; }
-  toast('Publishing your lesson…');
+  toast('Publishing…');
   try {
     const res = await window.chervil.publishLesson({
-      lesson: entry.lesson,
+      artifact,
+      kind: entry.skill || 'learn',
       token: settings.publishToken,
       baseUrl: settings.publishBase || 'https://getchervil.com',
       config: providerConfig(),
@@ -3461,7 +3463,7 @@ async function publishCurrentLesson() {
     if (res && res.ok && res.url) {
       entry.publishedUrl = res.url;
       scheduleSave();
-      addMessage(tab, 'bot', `${res.updated ? 'Updated' : 'Published'} — your lesson is live at ${res.url}`);
+      addMessage(tab, 'bot', `${res.updated ? 'Updated' : 'Published'} — it’s live at ${res.url}`);
       try { await navigator.clipboard.writeText(res.url); toast('Published — link copied to clipboard.'); } catch { toast('Published.'); }
     } else {
       addMessage(tab, 'bot', `Couldn’t publish: ${(res && res.error) || 'unknown error'}`, 'error');
@@ -3475,10 +3477,11 @@ async function publishCurrentLesson() {
 async function exportCurrentLessonReader() {
   const tab = activeTab();
   const entry = currentEntry(tab);
-  if (!entry || !entry.lesson) { toast('Open a lesson first (🎓 Learn), then export it for mobile.'); return; }
+  const artifact = entry && (entry.artifact || entry.lesson);
+  if (!artifact) { toast('Open a lesson or quiz first (🎓 / ❓), then export it for mobile.'); return; }
   if (!window.chervil.exportLesson) { toast('Mobile export isn’t available in this build.'); return; }
-  const res = await window.chervil.exportLesson({ lesson: entry.lesson, suggestedName: entry.title, config: providerConfig() });
-  if (res && res.ok) addMessage(tab, 'bot', `Saved a swipeable mobile lesson to ${res.path} — open it on your phone.`);
+  const res = await window.chervil.exportLesson({ artifact, kind: entry.skill || 'learn', suggestedName: entry.title, config: providerConfig() });
+  if (res && res.ok) addMessage(tab, 'bot', `Saved to ${res.path} — open it on your phone.`);
   else if (res && !res.canceled) addMessage(tab, 'bot', `Couldn’t export: ${res.error || 'unknown error'}`, 'error');
 }
 

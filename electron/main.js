@@ -589,20 +589,23 @@ async function snapshotApplets(lesson, config) {
 // Export a lesson as a standalone, swipeable mobile reader (.html) — the
 // reader-mode render, self-contained for sharing/opening on a phone.
 ipcMain.handle('chervil:export-lesson', async (event, payload) => {
-  const { lesson, suggestedName } = payload || {};
-  if (!lesson) return { ok: false, error: 'No lesson to export.' };
+  const artifact = (payload && (payload.artifact || payload.lesson)) || null;
+  const kind = (payload && (payload.kind || (payload.lesson ? 'learn' : ''))) || 'learn';
+  if (!artifact) return { ok: false, error: 'Nothing to export.' };
+  const skill = getSkill(kind);
+  if (!skill) return { ok: false, error: 'Unknown skill.' };
   const win = BrowserWindow.fromWebContents(event.sender);
-  const safe = String(suggestedName || 'chervil-lesson')
-    .replace(/[^a-z0-9\-_ ]+/gi, '').trim().slice(0, 80) || 'chervil-lesson';
+  const safe = String((payload && payload.suggestedName) || 'chervil-' + kind)
+    .replace(/[^a-z0-9\-_ ]+/gi, '').trim().slice(0, 80) || 'chervil-' + kind;
   const { canceled, filePath } = await dialog.showSaveDialog(win, {
-    title: 'Share lesson (mobile)',
+    title: 'Share (mobile)',
     defaultPath: `${safe}.html`,
-    filters: [{ name: 'HTML lesson', extensions: ['html'] }],
+    filters: [{ name: 'HTML', extensions: ['html'] }],
   });
   if (canceled || !filePath) return { ok: false, canceled: true };
   try {
-    await snapshotApplets(lesson, providerConfigFrom(payload));
-    fs.writeFileSync(filePath, getSkill('learn').toHtml(lesson, { reader: true }), 'utf8');
+    if (kind === 'learn') await snapshotApplets(artifact, providerConfigFrom(payload));
+    fs.writeFileSync(filePath, skill.toHtml(artifact, { reader: true }), 'utf8');
     return { ok: true, path: filePath };
   } catch (err) {
     return { ok: false, error: String(err && err.message ? err.message : err) };
@@ -612,16 +615,20 @@ ipcMain.handle('chervil:export-lesson', async (event, payload) => {
 // --- Publish a lesson to getchervil.com (Chervil Pro) --------------------
 ipcMain.handle('chervil:publish-lesson', async (_event, payload) => {
   try {
-    const { lesson, token, baseUrl } = payload || {};
-    if (!lesson) return { ok: false, error: 'No lesson to publish.' };
+    const { token, baseUrl } = payload || {};
+    const artifact = (payload && (payload.artifact || payload.lesson)) || null;
+    const kind = (payload && (payload.kind || (payload.lesson ? 'learn' : ''))) || 'learn';
+    if (!artifact) return { ok: false, error: 'Nothing to publish.' };
     if (!token) return { ok: false, error: 'Missing publish token.' };
+    const skill = getSkill(kind);
+    if (!skill) return { ok: false, error: 'Unknown skill.' };
     const base = String(baseUrl || 'https://getchervil.com').replace(/\/+$/, '');
-    await snapshotApplets(lesson, providerConfigFrom(payload));
-    const html = getSkill('learn').toHtml(lesson, { reader: true });
+    if (kind === 'learn') await snapshotApplets(artifact, providerConfigFrom(payload));
+    const html = skill.toHtml(artifact, { reader: true });
     const res = await fetch(`${base}/api/lessons`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-      body: JSON.stringify({ lesson, html }),
+      body: JSON.stringify({ artifact, kind, html }),
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) return { ok: false, error: data.error || `Publish failed (${res.status}).` };
