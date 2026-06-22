@@ -193,11 +193,30 @@ applets." A funnel needs a destination first.
 | **0.5** | Media: oEmbed verification + click-to-play facade (#5) | ✅ done |
 | **1** | In-app lesson player (`lib/lessonHtml.js`); `/learn` + build-lesson IPC; persist via page entries | ✅ done |
 | **1.5** | Two-phase (syllabus → parallel module expansion) generation; discoverable 🎓 Learn toggle | ✅ done |
-| **2** | Publish bundle + mobile swipe reader (#4) | next |
+| **2C** | Swipe / one-card-per-screen reader (the shared mobile rendering layer) | next |
+| **2A** | Standalone `.html` export — **already works** via the app's "⤓ Save" (a lesson is a self-contained page entry) | ✅ (free tier) |
+| **2B** | Hosted lessons on getchervil.com — shareable URL + OG previews; the **Chervil Pro** paywall surface | designed phase (own RFC) |
 | **3** | Extract the skill framework (#1) | |
 | **4** | Chrome extension funnel (#3) | |
 
 Built on branch `feat/learning-vertical` ([PR #3](https://github.com/chervil-ai/chervil/pull/3)).
+
+## Phase 2 shape & monetization (decided 2026-06-22)
+
+Do all three layers — they share the `Lesson` + `lessonToHtml` core, so it isn't 3× work:
+the **reader (C)** is the rendering layer; **file export (A)** and **hosted (B)** are delivery channels.
+
+- **Free, always:** the app, local lesson creation, and standalone `.html` export (A). Preserves
+  the open-source promise and the viral loop (free lesson files spread on their own).
+- **Chervil Pro (paid):** hosted publishing on getchervil.com (B) — shareable links, OG previews,
+  completion analytics, a learner profile/library, branding, with a free publish cap.
+- **Design implication / paywall reinforcement:** hosted lessons can't reach the local
+  `window.chervil.ask` bridge, so applets need a **hosted "ask" endpoint** (costs tokens) — a natural
+  Pro gate (or BYO-key). Free shared files degrade applets gracefully (already handled). So applets
+  must be pre-composed or gated at publish time. Pricing is TBD; keep the architecture open.
+
+Sequence: **2C → (2A done) → 2B**. 2B is large (storage, publish pipeline, moderation, billing,
+cross-repo into `chervil-web`) and gets its own RFC.
 
 ## Open questions / decisions
 
