@@ -605,19 +605,7 @@ ipcMain.handle('chervil:list-models', async (_event, payload) => {
 });
 
 // --- Summarize a video: fetch its transcript (YouTube captions) ----------
-function youtubeId(url) {
-  try {
-    const u = new URL(url);
-    const host = u.hostname.replace(/^www\./, '');
-    if (host === 'youtu.be') return u.pathname.slice(1).split('/')[0] || null;
-    if (host.endsWith('youtube.com')) {
-      if (u.searchParams.get('v')) return u.searchParams.get('v');
-      const m = u.pathname.match(/\/(?:shorts|embed|live)\/([^/?]+)/);
-      if (m) return m[1];
-    }
-  } catch { /* not a URL */ }
-  return null;
-}
+const { youtubeId } = require('../lib/youtube');
 
 function fmtTime(sec) {
   sec = Math.max(0, Math.round(sec));
