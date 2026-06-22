@@ -23,7 +23,8 @@
     "dotenv": "^17.0.0",
     "exceljs": "^4.4.0",
     "gifenc": "^1.0.3",
-    "pptxgenjs": "^4.0.1"
+    "pptxgenjs": "^4.0.1",
+    "qrcode": "^1.5.4"
   },
   "devDependencies": {
     "electron": "^39.8.5",

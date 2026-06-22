@@ -10,6 +10,7 @@ const { app, BrowserWindow, ipcMain, dialog, safeStorage, Notification, Tray, Me
 // renders as mojibake in the Windows console).
 require('dotenv').config({ path: path.join(__dirname, '..', '.env'), quiet: true });
 
+const QRCode = require('qrcode');
 const { runAgent, runAppletAsk, runListModels, runAgentStep, runExtractSlides, runExtractDoc, runExtractSheets, runSynthesizeAgent } = require('../lib/agent');
 const { getSkill } = require('../lib/skills');
 
@@ -292,6 +293,24 @@ function deliverPrompt(prompt) {
     wc.send('chervil:quick-prompt', prompt);
   }
 }
+
+// "Send to phone": render any URL/number as a QR the user scans with their phone.
+ipcMain.handle('chervil:qr', async (_event, text) => {
+  try {
+    const dataUrl = await QRCode.toDataURL(String(text || ''), { width: 320, margin: 1, color: { dark: '#0b0e13', light: '#ffffff' } });
+    return { ok: true, dataUrl };
+  } catch (err) {
+    return { ok: false, error: String(err && err.message ? err.message : err) };
+  }
+});
+
+// Dial a phone number through the desktop's tel: handler (Phone Link, Skype, etc.).
+ipcMain.handle('chervil:dial', async (_event, tel) => {
+  const t = String(tel || '');
+  if (!/^tel:[+\d().\-\s]+$/i.test(t)) return { ok: false, error: 'Not a phone number.' };
+  try { await shell.openExternal(t); return { ok: true }; }
+  catch (err) { return { ok: false, error: String(err && err.message ? err.message : err) }; }
+});
 
 // Handle a chervil:// deep link from the browser extension (or anywhere):
 //   chervil://ask?url=<page>&title=<title>&text=<selection>

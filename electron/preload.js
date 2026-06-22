@@ -37,6 +37,12 @@ contextBridge.exposeInMainWorld('chervil', {
   /** Build any registered skill (RFC 0003) → { ok, kind, artifact, html }. */
   buildSkill: (payload) => ipcRenderer.invoke('chervil:build-skill', payload),
 
+  /** Render text/URL as a QR data URL for "send to phone". */
+  qr: (text) => ipcRenderer.invoke('chervil:qr', text),
+
+  /** Dial a tel: number through the OS phone handler. */
+  dial: (tel) => ipcRenderer.invoke('chervil:dial', tel),
+
   /** Export a lesson as a standalone, swipeable mobile reader (.html). */
   exportLesson: (payload) => ipcRenderer.invoke('chervil:export-lesson', payload),
 

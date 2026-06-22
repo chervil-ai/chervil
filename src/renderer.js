@@ -291,7 +291,7 @@ const CHERVIL_RUNTIME = `<script>(function(){
     var raw = a.getAttribute('href');
     if(!raw || raw.charAt(0)==='#') return;     // let in-page anchors scroll
     var href = a.href;
-    if(!/^https?:/i.test(href)) return;
+    if(!/^(https?|tel):/i.test(href)) return;  // also forward tel: for one-tap call/send
     e.preventDefault();
     try { parent.postMessage({ __chervil:true, type:'link', href: href, text: (a.textContent||'').trim() }, '*'); } catch(_){}
   }, true);
@@ -2738,9 +2738,45 @@ async function submitQuery(text, opts = {}) {
   }
 }
 
+// ---- Agentic actions: phone numbers and map locations ----
+function isMapsUrl(href) {
+  return /(?:google\.[a-z.]+\/maps|maps\.google\.|maps\.app\.goo\.gl|goo\.gl\/maps)/i.test(href);
+}
+
+// A tel: link in a composed page → call via the desktop, or send to phone.
+function showPhoneActions(href, text) {
+  const number = href.replace(/^tel:/i, '').trim();
+  showActionSheet(text && text.trim() && text.trim() !== number ? text.trim() : number, number, [
+    { label: '📞 Call from this PC', primary: true, onClick: async () => {
+      const r = await window.chervil.dial(href);
+      if (!r || !r.ok) toast('No phone app is set up on this PC to place the call.');
+    } },
+    { label: '📱 Send to phone', onClick: () => showQrModal('Scan to dial', href, number) },
+    { label: '📋 Copy number', onClick: () => { try { navigator.clipboard.writeText(number); toast('Number copied.'); } catch {} } },
+  ]);
+}
+
+// A Google Maps link → open the real map in Chervil's webview, or send the pin to phone.
+function openMapsInChervil(href, text) {
+  const place = (text && text.trim()) || 'this location';
+  showActionSheet(`Open ${place} in Maps?`, href, [
+    { label: '🗺️ Open in Chervil', primary: true, onClick: () => {
+      const tab = activeTab();
+      if (!tab || isTabBusy(tab.id)) return;
+      pushEntry(tab, { kind: 'navigate', url: href, title: place, query: href });
+      tab.title = place.slice(0, 60);
+      renderTabs(); renderCurrentPage(); scheduleSave();
+    } },
+    { label: '📱 Send pin to phone', onClick: () => showQrModal('Scan to open the map', href, place) },
+    { label: '📋 Copy link', onClick: () => { try { navigator.clipboard.writeText(href); toast('Map link copied.'); } catch {} } },
+  ]);
+}
+
 // ---- Click-through links ----
 function handleLinkClick(href, text) {
+  if (/^tel:/i.test(href)) { showPhoneActions(href, text); return; }
   if (!/^https?:\/\//i.test(href)) return;
+  if (isMapsUrl(href)) { openMapsInChervil(href, text); return; }
   const tab = activeTab();
   if (!tab) return;
   const behavior = settings.linkBehavior || 'smart';
@@ -2765,6 +2801,82 @@ function handleLinkClick(href, text) {
     skipFollowup: true,
     allowNavigate: behavior !== 'compose',
   });
+}
+
+// A small centered modal with a title, a subtitle, and a stack of action buttons.
+function showActionSheet(title, subtitle, actions) {
+  const overlay = document.createElement('div');
+  overlay.className = 'chervil-sheet-overlay';
+  const close = () => overlay.remove();
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+
+  const sheet = document.createElement('div');
+  sheet.className = 'chervil-sheet';
+  const h = document.createElement('div');
+  h.className = 'chervil-sheet-title';
+  h.textContent = title;
+  sheet.appendChild(h);
+  if (subtitle) {
+    const s = document.createElement('div');
+    s.className = 'chervil-sheet-sub';
+    s.textContent = subtitle;
+    sheet.appendChild(s);
+  }
+  (actions || []).forEach((a) => {
+    const b = document.createElement('button');
+    b.className = 'chervil-sheet-btn' + (a.primary ? ' primary' : '');
+    b.textContent = a.label;
+    b.addEventListener('click', () => { close(); Promise.resolve().then(a.onClick); });
+    sheet.appendChild(b);
+  });
+  const cancel = document.createElement('button');
+  cancel.className = 'chervil-sheet-btn cancel';
+  cancel.textContent = 'Cancel';
+  cancel.addEventListener('click', close);
+  sheet.appendChild(cancel);
+
+  overlay.appendChild(sheet);
+  document.body.appendChild(overlay);
+  const onEsc = (e) => { if (e.key === 'Escape') { close(); document.removeEventListener('keydown', onEsc); } };
+  document.addEventListener('keydown', onEsc);
+}
+
+// "Send to phone" — show a QR the user scans with their phone camera.
+async function showQrModal(title, text, caption) {
+  const res = await window.chervil.qr(text);
+  if (!res || !res.ok) { toast('Couldn’t generate the QR code.'); return; }
+  const overlay = document.createElement('div');
+  overlay.className = 'chervil-sheet-overlay';
+  const close = () => overlay.remove();
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+
+  const sheet = document.createElement('div');
+  sheet.className = 'chervil-sheet';
+  const h = document.createElement('div');
+  h.className = 'chervil-sheet-title';
+  h.textContent = title;
+  sheet.appendChild(h);
+  const img = document.createElement('img');
+  img.className = 'chervil-qr';
+  img.src = res.dataUrl;
+  img.alt = 'QR code';
+  sheet.appendChild(img);
+  if (caption) {
+    const c = document.createElement('div');
+    c.className = 'chervil-sheet-sub';
+    c.textContent = caption;
+    sheet.appendChild(c);
+  }
+  const done = document.createElement('button');
+  done.className = 'chervil-sheet-btn cancel';
+  done.textContent = 'Done';
+  done.addEventListener('click', close);
+  sheet.appendChild(done);
+
+  overlay.appendChild(sheet);
+  document.body.appendChild(overlay);
+  const onEsc = (e) => { if (e.key === 'Escape') { close(); document.removeEventListener('keydown', onEsc); } };
+  document.addEventListener('keydown', onEsc);
 }
 
 // ---- Library (auto-collected History + Trash) ----

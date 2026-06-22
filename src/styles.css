@@ -1294,3 +1294,62 @@ html, body {
   outline: none;
 }
 #new-space-name:focus, #synth-input:focus { border-color: var(--accent); }
+
+/* Agentic action sheet (phone / maps) + send-to-phone QR modal */
+.chervil-sheet-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  backdrop-filter: blur(2px);
+}
+.chervil-sheet {
+  width: min(340px, calc(100vw - 48px));
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+}
+.chervil-sheet-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text);
+  text-align: center;
+}
+.chervil-sheet-sub {
+  font-size: 13px;
+  color: var(--muted);
+  text-align: center;
+  margin-top: -4px;
+  word-break: break-word;
+}
+.chervil-sheet-btn {
+  width: 100%;
+  padding: 11px 14px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--panel);
+  color: var(--text);
+  font-size: 14px;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+.chervil-sheet-btn:hover { border-color: var(--accent); }
+.chervil-sheet-btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+.chervil-sheet-btn.primary:hover { filter: brightness(1.08); }
+.chervil-sheet-btn.cancel { color: var(--muted); margin-top: 2px; }
+.chervil-qr {
+  width: 240px;
+  height: 240px;
+  align-self: center;
+  border-radius: 12px;
+  background: #fff;
+  padding: 8px;
+}
