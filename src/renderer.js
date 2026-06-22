@@ -2415,6 +2415,10 @@ function handleComposerSubmit(text) {
   const attachments = pendingAttachments.slice();
   if (attachments.length) clearAttachments();
 
+  // "/learn <topic>" builds an interactive lesson instead of a composed page.
+  const learn = query.match(/^\/learn\s+(.+)/is);
+  if (learn) { buildAndRenderLesson(tab, learn[1].trim()); return; }
+
   // On a live site, the composer drives the web agent instead of composing a page.
   const cur = currentEntry(tab);
 
@@ -2437,6 +2441,34 @@ function handleComposerSubmit(text) {
     promptRefineChoice(query, attachments);
   } else {
     submitQuery(query, { attachments });
+  }
+}
+
+// Build an interactive lesson ("/learn <topic>") and render it as a page entry.
+// The lesson HTML is composed in the main process and rendered through the normal
+// page path, so its applet cards get the injected window.chervil bridge for free.
+async function buildAndRenderLesson(tab, topic) {
+  if (!topic) return;
+  if (!window.chervil.buildLesson) { toast('Lessons aren’t available in this build.'); return; }
+  els.prompt.value = '';
+  refreshComposer();
+  toast('Sprig is building your lesson — this can take a moment…');
+  try {
+    const resp = await window.chervil.buildLesson({ topic, level: 'beginner', config: providerConfig() });
+    if (!resp || !resp.ok) { toast((resp && resp.error) || 'Couldn’t build the lesson.'); return; }
+    pushEntry(tab, {
+      kind: 'page',
+      html: resp.html,
+      title: resp.lesson.title,
+      query: '/learn ' + topic,
+      sources: resp.lesson.sources || [],
+      lesson: resp.lesson, // stash the structured lesson alongside the rendered HTML
+    });
+    if (!tab.title || tab.title === 'New Tab') tab.title = resp.lesson.title;
+    if (activeTab() === tab) { renderTabs(); renderCurrentPage(); refreshComposer(); }
+    scheduleSave();
+  } catch (e) {
+    toast('Lesson error: ' + (e && e.message ? e.message : e));
   }
 }
 

@@ -34,6 +34,9 @@ contextBridge.exposeInMainWorld('chervil', {
   /** Applet bridge: a composed page asks Sprig for live data. */
   appletAsk: (payload) => ipcRenderer.invoke('chervil:applet-ask', payload),
 
+  /** Build an interactive lesson from a topic → { ok, lesson, html }. */
+  buildLesson: (payload) => ipcRenderer.invoke('chervil:build-lesson', payload),
+
   /** Per-provider key status: { claude, grok, gemini, azure, claudeFromEnv }. */
   getKeyStatus: () => ipcRenderer.invoke('chervil:get-key-status'),
 

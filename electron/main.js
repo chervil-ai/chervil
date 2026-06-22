@@ -10,7 +10,8 @@ const { app, BrowserWindow, ipcMain, dialog, safeStorage, Notification, Tray, Me
 // renders as mojibake in the Windows console).
 require('dotenv').config({ path: path.join(__dirname, '..', '.env'), quiet: true });
 
-const { runAgent, runAppletAsk, runListModels, runAgentStep, runExtractSlides, runExtractDoc, runExtractSheets, runSynthesizeAgent } = require('../lib/agent');
+const { runAgent, runAppletAsk, runListModels, runAgentStep, runExtractSlides, runExtractDoc, runExtractSheets, runSynthesizeAgent, runBuildLesson } = require('../lib/agent');
+const { lessonToHtml } = require('../lib/lessonHtml');
 
 let mainWindow = null;
 let tray = null;
@@ -492,6 +493,17 @@ ipcMain.handle('chervil:applet-ask', async (_event, payload) => {
     const { prompt } = payload || {};
     const res = await runAppletAsk({ prompt, config: providerConfigFrom(payload) });
     return { ok: true, text: res.text, sources: res.sources || [] };
+  } catch (err) {
+    return { ok: false, error: String(err && err.message ? err.message : err) };
+  }
+});
+
+// --- Learning vertical: build an interactive lesson and render it to HTML ---
+ipcMain.handle('chervil:build-lesson', async (_event, payload) => {
+  try {
+    const { topic, level, goals } = payload || {};
+    const lesson = await runBuildLesson({ topic, level, goals, config: providerConfigFrom(payload) });
+    return { ok: true, lesson, html: lessonToHtml(lesson) };
   } catch (err) {
     return { ok: false, error: String(err && err.message ? err.message : err) };
   }
