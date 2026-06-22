@@ -277,9 +277,24 @@ function showMain() {
   mainWindow.focus();
 }
 
+// Deliver a prompt to the main window's composer. If the window is still
+// loading (cold start / just created), wait until its renderer is ready —
+// otherwise the message is sent before onQuickPrompt is registered and lost.
+function deliverPrompt(prompt) {
+  if (!mainWindow || mainWindow.isDestroyed()) createWindow();
+  showMain();
+  const wc = mainWindow.webContents;
+  if (wc.isLoading()) {
+    wc.once('did-finish-load', () => {
+      if (!wc.isDestroyed()) wc.send('chervil:quick-prompt', prompt);
+    });
+  } else {
+    wc.send('chervil:quick-prompt', prompt);
+  }
+}
+
 // Handle a chervil:// deep link from the browser extension (or anywhere):
 //   chervil://ask?url=<page>&title=<title>&text=<selection>
-// Build a prompt and hand it to the main window (same channel as quick-ask).
 function handleChervilUrl(raw) {
   let prompt = '';
   try {
@@ -288,14 +303,11 @@ function handleChervilUrl(raw) {
     const text = (u.searchParams.get('text') || '').trim();
     const url = (u.searchParams.get('url') || '').trim();
     const title = (u.searchParams.get('title') || '').trim();
-    if (text) prompt = url ? `${text}\n\n(from ${title || url}: ${url})` : text;
-    else if (url) prompt = `Tell me about this page: ${title ? title + ' — ' : ''}${url}`;
+    const where = title ? `${title} (${url})` : url;
+    if (text) prompt = url ? `${text}\n\n— from ${where}` : text;
+    else if (url) prompt = `Summarize this web page and pull out the key points: ${where}`;
   } catch { /* malformed link */ }
-  if (!prompt) return;
-  showMain();
-  if (mainWindow && !mainWindow.webContents.isDestroyed()) {
-    mainWindow.webContents.send('chervil:quick-prompt', prompt);
-  }
+  if (prompt) deliverPrompt(prompt);
 }
 
 function createQuickWindow() {
@@ -476,7 +488,7 @@ app.whenReady().then(() => {
   createTray();
   // Cold start via a chervil:// deep link (URL passed in argv on first launch).
   const startUrl = process.argv.find((a) => String(a).startsWith('chervil://'));
-  if (startUrl) setTimeout(() => handleChervilUrl(startUrl), 800); // let the window load first
+  if (startUrl) handleChervilUrl(startUrl); // deliverPrompt waits for the renderer
   // System-wide hotkey to summon the floating quick-ask, even when Chervil isn't focused.
   globalShortcut.register('CommandOrControl+Shift+Space', toggleQuick);
 
