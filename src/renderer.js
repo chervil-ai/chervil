@@ -3447,7 +3447,7 @@ async function publishCurrentLesson() {
     if (res && res.ok && res.url) {
       entry.publishedUrl = res.url;
       scheduleSave();
-      addMessage(tab, 'bot', `Published — your lesson is live at ${res.url}`);
+      addMessage(tab, 'bot', `${res.updated ? 'Updated' : 'Published'} — your lesson is live at ${res.url}`);
       try { await navigator.clipboard.writeText(res.url); toast('Published — link copied to clipboard.'); } catch { toast('Published.'); }
     } else {
       addMessage(tab, 'bot', `Couldn’t publish: ${(res && res.error) || 'unknown error'}`, 'error');
