@@ -8,6 +8,7 @@ const els = {
   send: document.getElementById('send'),
   deepToggle: document.getElementById('deep-toggle'),
   learnToggle: document.getElementById('learn-toggle'),
+  quizToggle: document.getElementById('quiz-toggle'),
   attachBtn: document.getElementById('attach-btn'),
   micBtn: document.getElementById('mic-btn'),
   fileInput: document.getElementById('file-input'),
@@ -1641,7 +1642,7 @@ function updatePlaceholder() {
   const tab = activeTab();
   const cur = currentEntry(tab);
   if (cur && cur.kind === 'navigate') els.prompt.placeholder = 'Hey Sprig, act here…';
-  else els.prompt.placeholder = learnMode ? 'What do you want to learn?' : deepMode ? 'Hey Sprig, research…' : 'Hey Sprig, ask…';
+  else els.prompt.placeholder = skillMode === 'learn' ? 'What do you want to learn?' : skillMode === 'quiz' ? 'Quiz me on…' : deepMode ? 'Hey Sprig, research…' : 'Hey Sprig, ask…';
 }
 
 // Speak a short sample with the currently selected voice/speed (Settings test button).
@@ -2276,18 +2277,24 @@ function setDeepMode(on) {
   deepMode = !!on;
   els.deepToggle.classList.toggle('active', deepMode);
   els.deepToggle.setAttribute('aria-pressed', String(deepMode));
-  if (deepMode) setLearnMode(false); // the two pipelines are mutually exclusive
+  if (deepMode) setSkillMode(''); // the two pipelines are mutually exclusive
   updatePlaceholder();
 }
 
-// Learn mode (sticky toggle): the next query builds an interactive lesson on the
-// topic instead of composing a page. Same effect as the "/learn <topic>" command.
-let learnMode = false;
-function setLearnMode(on) {
-  learnMode = !!on;
-  els.learnToggle.classList.toggle('active', learnMode);
-  els.learnToggle.setAttribute('aria-pressed', String(learnMode));
-  if (learnMode && deepMode) {
+// Skill picker (sticky): when a skill mode is active, the next query builds that
+// skill ('learn' | 'quiz') instead of composing a page — same as its "/command".
+let skillMode = '';
+function setSkillMode(id) {
+  skillMode = skillMode === id ? '' : (id || ''); // clicking the active one turns it off
+  if (els.learnToggle) {
+    els.learnToggle.classList.toggle('active', skillMode === 'learn');
+    els.learnToggle.setAttribute('aria-pressed', String(skillMode === 'learn'));
+  }
+  if (els.quizToggle) {
+    els.quizToggle.classList.toggle('active', skillMode === 'quiz');
+    els.quizToggle.setAttribute('aria-pressed', String(skillMode === 'quiz'));
+  }
+  if (skillMode && deepMode) {
     deepMode = false;
     els.deepToggle.classList.remove('active');
     els.deepToggle.setAttribute('aria-pressed', 'false');
@@ -2443,15 +2450,13 @@ function handleComposerSubmit(text) {
   const attachments = pendingAttachments.slice();
   if (attachments.length) clearAttachments();
 
-  // Learn mode (or the "/learn <topic>" command) builds an interactive lesson
-  // instead of composing a page.
+  // Skill dispatch: a "/learn" or "/quiz" command, or the active skill-mode
+  // toggle, builds that skill instead of composing a page.
   const learnCmd = query.match(/^\/learn\s+(.+)/is);
-  const learnTopic = learnCmd ? learnCmd[1].trim() : (learnMode ? query : null);
-  if (learnTopic) { buildAndRenderSkill(tab, 'learn', learnTopic, 'lesson'); return; }
-
-  // "/quiz <topic>" builds a graded quiz (a second skill via the generic path).
   const quizCmd = query.match(/^\/quiz\s+(.+)/is);
+  if (learnCmd) { buildAndRenderSkill(tab, 'learn', learnCmd[1].trim(), 'lesson'); return; }
   if (quizCmd) { buildAndRenderSkill(tab, 'quiz', quizCmd[1].trim(), 'quiz'); return; }
+  if (skillMode) { buildAndRenderSkill(tab, skillMode, query, skillMode === 'learn' ? 'lesson' : 'quiz'); return; }
 
   // On a live site, the composer drives the web agent instead of composing a page.
   const cur = currentEntry(tab);
@@ -2478,9 +2483,9 @@ function handleComposerSubmit(text) {
   }
 }
 
-// Generic skill build (RFC 0003): build any registered skill and commit it as a
-// page entry. Lesson keeps its own richer path (buildAndRenderLesson); this is
-// the generic dispatch used by Quiz and future skills.
+// Generic skill build (RFC 0003): build any registered skill (Learn, Quiz, …)
+// via the build-skill IPC and commit it as a page entry. Learn also keeps
+// `lesson`/`sources` on the entry for the export/publish actions.
 async function buildAndRenderSkill(tab, skillId, input, label) {
   if (!input) return;
   if (!window.chervil.buildSkill) { toast('This build isn’t available in this build.'); return; }
@@ -3499,7 +3504,8 @@ els.composer.addEventListener('submit', (e) => {
 });
 
 els.deepToggle.addEventListener('click', () => setDeepMode(!deepMode));
-els.learnToggle.addEventListener('click', () => setLearnMode(!learnMode));
+els.learnToggle.addEventListener('click', () => setSkillMode('learn'));
+els.quizToggle.addEventListener('click', () => setSkillMode('quiz'));
 
 // File attachments: button, picker, and drag-and-drop.
 els.attachBtn.addEventListener('click', () => els.fileInput.click());
