@@ -499,10 +499,43 @@ ipcMain.handle('chervil:applet-ask', async (_event, payload) => {
 });
 
 // --- Learning vertical: build an interactive lesson and render it to HTML ---
+
+// Model-suggested YouTube ids are untrusted (lib/lesson.js marks them
+// verified:false). Confirm each one exists via YouTube oEmbed before it can be
+// shown; enrich title/caption from the real metadata, and drop any that can't be
+// verified (and any module left empty). Mutates the lesson in place.
+async function verifyLessonMedia(lesson) {
+  const cards = [];
+  for (const m of (lesson.modules || [])) {
+    for (const c of (m.cards || [])) {
+      if (c.kind === 'media' && c.provider === 'youtube' && !c.verified) cards.push(c);
+    }
+  }
+  await Promise.all(cards.map(async (c) => {
+    try {
+      const oembed = `https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=${encodeURIComponent(c.videoId)}&format=json`;
+      const res = await fetch(oembed, { signal: AbortSignal.timeout(6000) });
+      if (!res.ok) return; // 401/404 => video doesn't exist or isn't embeddable
+      const j = await res.json().catch(() => null);
+      c.verified = true;
+      if (j && j.title) {
+        if (!c.title) c.title = String(j.title).slice(0, 200);
+        if (!c.caption) c.caption = String(j.title).slice(0, 500);
+      }
+    } catch { /* network/timeout => leave unverified, dropped below */ }
+  }));
+  for (const m of (lesson.modules || [])) {
+    m.cards = (m.cards || []).filter((c) => !(c.kind === 'media' && !c.verified));
+  }
+  lesson.modules = (lesson.modules || []).filter((m) => m.cards.length);
+  return lesson;
+}
+
 ipcMain.handle('chervil:build-lesson', async (_event, payload) => {
   try {
     const { topic, level, goals } = payload || {};
     const lesson = await runBuildLesson({ topic, level, goals, config: providerConfigFrom(payload) });
+    await verifyLessonMedia(lesson);
     return { ok: true, lesson, html: lessonToHtml(lesson) };
   } catch (err) {
     return { ok: false, error: String(err && err.message ? err.message : err) };
