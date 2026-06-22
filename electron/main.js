@@ -387,12 +387,12 @@ ipcMain.handle('chervil:wake-assets', async () => {
 });
 
 // A keyword model's bytes: a bundled built-in, or the imported custom one.
-const OWW_BUILTINS = { hey_jarvis: 'hey_jarvis_v0.1.onnx', alexa: 'alexa_v0.1.onnx', hey_mycroft: 'hey_mycroft_v0.1.onnx' };
+const OWW_BUILTINS = { hey_sprig: 'hey_sprig_v0.1.onnx', hey_jarvis: 'hey_jarvis_v0.1.onnx', alexa: 'alexa_v0.1.onnx', hey_mycroft: 'hey_mycroft_v0.1.onnx' };
 ipcMain.handle('chervil:wake-keyword-model', async (_event, name) => {
   try {
     const p = name === 'custom'
       ? path.join(app.getPath('userData'), 'wake-custom.onnx')
-      : path.join(OWW_DIR, OWW_BUILTINS[name] || OWW_BUILTINS.hey_jarvis);
+      : path.join(OWW_DIR, OWW_BUILTINS[name] || OWW_BUILTINS.hey_sprig);
     if (!fs.existsSync(p)) return { ok: false, error: 'Wake-word model not found.' };
     return { ok: true, model: fs.readFileSync(p) };
   } catch (err) {

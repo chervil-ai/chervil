@@ -162,7 +162,7 @@ let settings = {
   voiceAutosend: false, // auto-send the transcript instead of just filling the box
   // Listening — "Hey Sprig" wake mode (openWakeWord, on-device, free, no key).
   wakeEnabled: false,
-  wakeKeyword: 'hey_jarvis', // built-in: hey_jarvis | alexa | hey_mycroft, or 'custom' (.onnx in userData)
+  wakeKeyword: 'hey_sprig', // built-in: hey_sprig | hey_jarvis | alexa | hey_mycroft, or 'custom' (.onnx in userData)
   wakeKeywordLabel: '',      // display label for a loaded custom model
   wakeThreshold: 0.5,        // detection score cutoff (0–1; higher = fewer false triggers)
 };
@@ -1359,7 +1359,7 @@ function arrayBufferToBase64(buf) {
 let wakeCapturing = false;
 let wakeAssets = null; // cached { ortWasm, melspec, embedding } for this session
 
-const WAKE_LABELS = { hey_jarvis: 'Hey Jarvis', alexa: 'Alexa', hey_mycroft: 'Hey Mycroft' };
+const WAKE_LABELS = { hey_sprig: 'Hey Sprig', hey_jarvis: 'Hey Jarvis', alexa: 'Alexa', hey_mycroft: 'Hey Mycroft' };
 function prettyWake(k) { return WAKE_LABELS[k] || k; }
 
 function setWakeStatus(msg, kind) {
