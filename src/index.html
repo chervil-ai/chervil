@@ -136,6 +136,7 @@
             <option value="docx">Word (.docx)</option>
             <option value="xlsx">Excel (.xlsx)</option>
             <option value="lesson">📱 Mobile lesson (.html)</option>
+            <option value="lesson-publish">🌐 Publish to web (Pro)</option>
           </select>
           <span class="remix-sep"></span>
           <select id="live-select" class="live-select" title="Keep this page auto-updated">
@@ -326,6 +327,23 @@
           <label class="toggle-row">
             <input id="voice-autosend" type="checkbox" />
             <span>Send automatically after transcribing (otherwise the text just fills the chat box for you to review).</span>
+          </label>
+        </div>
+      </section>
+
+      <section class="setting-group">
+        <h3>Publishing (Chervil Pro)</h3>
+        <p class="group-hint">Publish a lesson to a shareable getchervil.com link. Sign in at <code>getchervil.com/me</code>, generate a publish token, and paste it here. Then use <b>🌐 Publish to web</b> from a lesson's Export menu.</p>
+        <div class="prov-block">
+          <label class="field">
+            <span class="field-label">Publish token</span>
+            <input id="publish-token" type="password" placeholder="chv_pub_…" autocomplete="off" spellcheck="false" />
+            <small class="field-note">From getchervil.com/me → Generate publish token.</small>
+          </label>
+          <label class="field">
+            <span class="field-label">Site URL</span>
+            <input id="publish-base" type="text" placeholder="https://getchervil.com" spellcheck="false" />
+            <small class="field-note">Leave as default unless testing against a local site.</small>
           </label>
         </div>
       </section>

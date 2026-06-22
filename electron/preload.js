@@ -40,6 +40,9 @@ contextBridge.exposeInMainWorld('chervil', {
   /** Export a lesson as a standalone, swipeable mobile reader (.html). */
   exportLesson: (payload) => ipcRenderer.invoke('chervil:export-lesson', payload),
 
+  /** Publish a lesson to a shareable getchervil.com link (Chervil Pro). */
+  publishLesson: (payload) => ipcRenderer.invoke('chervil:publish-lesson', payload),
+
   /** Per-provider key status: { claude, grok, gemini, azure, claudeFromEnv }. */
   getKeyStatus: () => ipcRenderer.invoke('chervil:get-key-status'),
 

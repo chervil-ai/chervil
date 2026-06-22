@@ -564,6 +564,27 @@ ipcMain.handle('chervil:export-lesson', async (event, payload) => {
   }
 });
 
+// --- Publish a lesson to getchervil.com (Chervil Pro) --------------------
+ipcMain.handle('chervil:publish-lesson', async (_event, payload) => {
+  try {
+    const { lesson, token, baseUrl } = payload || {};
+    if (!lesson) return { ok: false, error: 'No lesson to publish.' };
+    if (!token) return { ok: false, error: 'Missing publish token.' };
+    const base = String(baseUrl || 'https://getchervil.com').replace(/\/+$/, '');
+    const html = lessonToHtml(lesson, { reader: true });
+    const res = await fetch(`${base}/api/lessons`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ lesson, html }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) return { ok: false, error: data.error || `Publish failed (${res.status}).` };
+    return { ok: true, url: data.url, id: data.id };
+  } catch (err) {
+    return { ok: false, error: String(err && err.message ? err.message : err) };
+  }
+});
+
 // --- System notifications: a Living page changed in the background -------
 // The renderer fires this from refreshLiving when a page's content changed and
 // the window isn't focused. Clicking the toast focuses Chervil and asks the
