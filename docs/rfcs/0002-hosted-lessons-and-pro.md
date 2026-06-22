@@ -61,15 +61,21 @@ hash-based CSP (RFC 0001 review fixes) apply to the served blob too. NEW surface
 that 2B must handle: public user-generated content → **abuse/moderation**, and a
 public **`/api/ask`** → auth + per-account **rate limiting** + token quotas.
 
-## Stack (decisions needed — see questions)
+## Stack (DECIDED 2026-06-22)
 
-| Concern | Options | Lean |
-|---|---|---|
-| Data store | Vercel Postgres, Supabase, Turso/SQLite, Mongo | **Supabase** (Postgres + storage + authz in one) or Vercel Postgres + Blob |
-| Auth | Clerk, Auth.js (NextAuth), Supabase Auth | **Clerk** (fastest, billing-friendly) or Supabase Auth if we pick Supabase |
-| Payments | Stripe | **Stripe** subscriptions + webhook |
-| Hosting | Vercel (already) | Vercel |
-| Analytics | events table + Vercel Analytics (installed) | events table for completion |
+| Concern | Choice |
+|---|---|
+| Data store | **Vercel Postgres** (relational: users, lessons, events) + **Vercel Blob** (the pre-rendered HTML artifacts) |
+| Auth | **Clerk** (prebuilt auth UI; maps Clerk user → our `users` row) |
+| Payments | **Stripe** subscription + webhook (Pro entitlement synced to `users.pro`) |
+| Hosting | Vercel (already) |
+| Analytics | `lesson_events` table (view/start/complete/card) + Vercel Analytics (installed) |
+
+**Hosted applet tokens — DECIDED: BYO-key.** Hosted applets use the viewer's (or
+author's) own AI key; we bear no token cost. This matches Chervil's
+bring-your-own-AI ethos and keeps Pro unit economics clean. `POST /api/ask` is a
+thin authed/rate-limited relay that uses the caller-supplied key (held client-side
+or per-account, never ours). Free shared files still degrade applets gracefully.
 
 ## Pro vs Free
 
@@ -89,15 +95,22 @@ public **`/api/ask`** → auth + per-account **rate limiting** + token quotas.
 | **2B.4** | Completion analytics + learner library/profile pages |
 | **2B.5** | Moderation: report/abuse flow, takedown, basic content checks |
 
-## Open decisions (block implementation)
+## Open decisions
 
-1. **Stack**: data store + auth + payments (the table above). Biggest fork — it
-   sets up the whole website backend.
-2. **Free publish cap**: number of free hosted lessons (lean: 3) before Pro.
-3. **Hosted applet tokens**: include a Pro quota (we pay) vs require BYO-key
-   (user's key, we don't pay)? Affects unit economics.
-4. **Served artifact**: pre-rendered HTML blob (lean) vs shared renderer package.
-   (Recommend starting with the blob; revisit.)
+1. ~~Stack~~ — **DECIDED:** Vercel Postgres + Blob + Clerk + Stripe.
+2. ~~Hosted applet tokens~~ — **DECIDED:** BYO-key.
+3. **Free publish cap**: number of free hosted lessons before Pro (lean: **3**). _(default unless changed)_
+4. **Served artifact**: pre-rendered HTML blob (chosen for v1) vs shared renderer package (revisit later).
+
+## Implementation is gated on external setup
+
+2B.1 (accounts/billing) can't be wired until these exist and their secrets are
+provided (the secret-free foundation — DB schema, `.env.example` — can land now):
+
+- **Clerk** app → `CLERK_PUBLISHABLE_KEY`, `CLERK_SECRET_KEY`
+- **Stripe** account + a Pro product/price → `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, price id
+- **Vercel Postgres** database → `POSTGRES_URL` (+ pooled vars)
+- **Vercel Blob** store → `BLOB_READ_WRITE_TOKEN`
 
 ## Risks
 
