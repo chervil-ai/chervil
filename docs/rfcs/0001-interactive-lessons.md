@@ -189,13 +189,15 @@ applets." A funnel needs a destination first.
 
 | Phase | Scope | Status |
 |---|---|---|
-| **0** | Lesson schema (`lib/lesson.js`) + `runBuildLesson` + this RFC | **done (this change)** |
-| **0.5** | Media: oEmbed verification + click-to-play facade (#5) | approved (facade); next |
-| **1** | In-app lesson player; persist lessons; render concept/applet/check/flashcard | next |
-| **1.5** | Two-phase (syllabus → modules) generation for depth | |
-| **2** | Publish bundle + mobile PWA swipe reader (#4) | |
+| **0** | Lesson schema (`lib/lesson.js`) + `runBuildLesson` + this RFC | ✅ done |
+| **0.5** | Media: oEmbed verification + click-to-play facade (#5) | ✅ done |
+| **1** | In-app lesson player (`lib/lessonHtml.js`); `/learn` + build-lesson IPC; persist via page entries | ✅ done |
+| **1.5** | Two-phase (syllabus → parallel module expansion) generation; discoverable 🎓 Learn toggle | ✅ done |
+| **2** | Publish bundle + mobile swipe reader (#4) | next |
 | **3** | Extract the skill framework (#1) | |
 | **4** | Chrome extension funnel (#3) | |
+
+Built on branch `feat/learning-vertical` ([PR #3](https://github.com/chervil-ai/chervil/pull/3)).
 
 ## Open questions / decisions
 
