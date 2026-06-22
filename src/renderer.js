@@ -440,6 +440,22 @@ function closeTabs(ids) {
   if (!idSet.size) return;
   const closingActive = idSet.has(activeId);
   const activeIdx = tabs.findIndex((t) => t.id === activeId);
+
+  // Before splicing, find the closest surviving tab to the active one — the first
+  // tab after it that isn't being closed, or failing that the first one before it.
+  // This avoids a stale index after multiple splices shift the array.
+  let nextId = null;
+  if (closingActive && activeIdx >= 0) {
+    for (let i = activeIdx + 1; i < tabs.length; i++) {
+      if (!idSet.has(tabs[i].id)) { nextId = tabs[i].id; break; }
+    }
+    if (!nextId) {
+      for (let i = activeIdx - 1; i >= 0; i--) {
+        if (!idSet.has(tabs[i].id)) { nextId = tabs[i].id; break; }
+      }
+    }
+  }
+
   for (const id of idSet) {
     const idx = tabs.findIndex((t) => t.id === id);
     if (idx !== -1) tabs.splice(idx, 1);
@@ -450,8 +466,7 @@ function closeTabs(ids) {
     newTab(true);
   } else if (closingActive) {
     if (previewTimer) { clearTimeout(previewTimer); previewTimer = null; }
-    const next = tabs[Math.min(activeIdx, tabs.length - 1)] || tabs[tabs.length - 1];
-    activeId = next.id;
+    activeId = nextId || tabs[tabs.length - 1].id;
     renderConversation();
     showActiveTabView();
     refreshComposer();
