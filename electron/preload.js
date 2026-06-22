@@ -37,6 +37,9 @@ contextBridge.exposeInMainWorld('chervil', {
   /** Build an interactive lesson from a topic → { ok, lesson, html }. */
   buildLesson: (payload) => ipcRenderer.invoke('chervil:build-lesson', payload),
 
+  /** Build any registered skill (RFC 0003) → { ok, kind, artifact, html }. */
+  buildSkill: (payload) => ipcRenderer.invoke('chervil:build-skill', payload),
+
   /** Export a lesson as a standalone, swipeable mobile reader (.html). */
   exportLesson: (payload) => ipcRenderer.invoke('chervil:export-lesson', payload),
 

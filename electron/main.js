@@ -587,6 +587,21 @@ ipcMain.handle('chervil:build-lesson', async (_event, payload) => {
   }
 });
 
+// Generic skill build (RFC 0003): any registered skill → artifact + HTML.
+ipcMain.handle('chervil:build-skill', async (_event, payload) => {
+  try {
+    const { skill: skillId, input, level, goals } = payload || {};
+    const skill = getSkill(skillId);
+    if (!skill) return { ok: false, error: 'Unknown skill.' };
+    const config = providerConfigFrom(payload);
+    const artifact = await skill.build({ input, level, goals, config });
+    if (skill.enrich) await skill.enrich(artifact, config);
+    return { ok: true, kind: skill.id, artifact, html: skill.toHtml(artifact) };
+  } catch (err) {
+    return { ok: false, error: String(err && err.message ? err.message : err) };
+  }
+});
+
 // Pre-compute applet answers with the user's LOCAL key so published/exported
 // lessons show baked results — no hosted bridge, no server-side key custody, no
 // token cost (RFC 0002 / the "snapshot at publish" decision). Mutates in place.

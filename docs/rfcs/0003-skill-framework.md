@@ -55,16 +55,26 @@ Worked example — a "Quiz" skill would be: `{ id:'quiz', command:'/quiz',
 build → a graded-questions artifact, toHtml → a quiz player, summarize → count }`
 and one line in `SKILLS`.
 
+## Done since the foundation
+
+- **A second skill — Quiz** (`lib/quiz.js`, `lib/quizHtml.js`, `runBuildQuiz`,
+  `quizSkill`): a graded multiple-choice assessment built via `/quiz <topic>`.
+  It uses the same `build`/`toHtml`/`summarize` contract — **validating that the
+  abstraction generalizes** beyond Lessons (the real test of an extracted
+  abstraction). Verified end-to-end through the registry.
+- **Generic dispatch:** a `chervil:build-skill` IPC ({skill,input,level,goals} →
+  `getSkill().build` → optional `enrich` → `toHtml`), so adding a skill needs no
+  bespoke IPC. The renderer dispatches `/quiz` through it.
+
 ## Pending (next slices)
 
-- **Generic UI dispatch.** The renderer still hardcodes `/learn` + the 🎓 Learn
-  toggle and calls `buildLesson` directly. Generalize to: `matchCommand` →
-  dispatch any skill; a skill picker instead of one toggle.
-- **A second skill** to truly validate the interface generalizes (the real test
-  of an extracted abstraction). Candidates: quiz, study-guide, flashcard-deck.
-- **Per-skill publish/export wiring** so the export menu + `/api/lessons` aren't
+- **Finish the generic UI:** Learn still uses its own `buildLesson` path (richer:
+  media verify + the 🎓 toggle + export/publish). Migrate it onto `build-skill`
+  (its media verify fits the `enrich` hook) and add a **skill picker** instead of
+  one toggle.
+- **Per-skill publish/export** so the export menu + `/api/lessons` aren't
   lesson-specific (the website stores `lesson_json`; a generic `artifact_json` +
-  `kind` would let it host any skill's output).
+  `kind` would let it host any skill's output — e.g. publish a quiz).
 
 ## Why now / why this shape
 

@@ -2449,6 +2449,10 @@ function handleComposerSubmit(text) {
   const learnTopic = learnCmd ? learnCmd[1].trim() : (learnMode ? query : null);
   if (learnTopic) { buildAndRenderLesson(tab, learnTopic); return; }
 
+  // "/quiz <topic>" builds a graded quiz (a second skill via the generic path).
+  const quizCmd = query.match(/^\/quiz\s+(.+)/is);
+  if (quizCmd) { buildAndRenderSkill(tab, 'quiz', quizCmd[1].trim(), 'quiz'); return; }
+
   // On a live site, the composer drives the web agent instead of composing a page.
   const cur = currentEntry(tab);
 
@@ -2499,6 +2503,35 @@ async function buildAndRenderLesson(tab, topic) {
     scheduleSave();
   } catch (e) {
     toast('Lesson error: ' + (e && e.message ? e.message : e));
+  }
+}
+
+// Generic skill build (RFC 0003): build any registered skill and commit it as a
+// page entry. Lesson keeps its own richer path (buildAndRenderLesson); this is
+// the generic dispatch used by Quiz and future skills.
+async function buildAndRenderSkill(tab, skillId, input, label) {
+  if (!input) return;
+  if (!window.chervil.buildSkill) { toast('This build isn’t available in this build.'); return; }
+  els.prompt.value = '';
+  refreshComposer();
+  toast(`Sprig is building your ${label || skillId}…`);
+  try {
+    const resp = await window.chervil.buildSkill({ skill: skillId, input, level: 'beginner', config: providerConfig() });
+    if (!resp || !resp.ok) { toast((resp && resp.error) || 'Couldn’t build it.'); return; }
+    const a = resp.artifact || {};
+    pushEntry(tab, {
+      kind: 'page',
+      html: resp.html,
+      title: a.title || (label || skillId),
+      query: `/${skillId} ${input}`,
+      skill: skillId,
+      artifact: a,
+    });
+    if (!tab.title || tab.title === 'New Tab') tab.title = a.title || (label || skillId);
+    if (activeTab() === tab) { renderTabs(); renderCurrentPage(); refreshComposer(); }
+    scheduleSave();
+  } catch (e) {
+    toast(`Build error: ${(e && e.message) || e}`);
   }
 }
 
