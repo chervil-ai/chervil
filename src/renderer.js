@@ -1169,6 +1169,9 @@ async function refreshLiving(rec) {
   if (!tab) { living = living.filter((r) => r.id !== rec.id); return; }
   const entry = tab.pages.find((p) => p.id === rec.entryId);
   if (!entry || entry.kind !== 'page') return; // navigated away from it; try next tick
+  // Lessons are not composed via the ask pipeline, so re-grounding rec.query
+  // ('/learn …') would clobber the lesson with a generic page. Drop the record.
+  if (entry.lesson) { living = living.filter((r) => r.id !== rec.id); return; }
   if (isTabBusy(tab.id)) return; // don't collide with an active generation
 
   rec.refreshing = true;
@@ -1216,7 +1219,8 @@ function updateLiveControls() {
   if (!els.liveSelect) return;
   const tab = activeTab();
   const cur = currentEntry(tab);
-  const rec = cur && cur.kind === 'page' ? livingFor(cur.id) : null;
+  const rec = cur && cur.kind === 'page' && !cur.lesson ? livingFor(cur.id) : null;
+  els.liveSelect.disabled = !!(cur && cur.lesson); // Living doesn't apply to lessons
   els.liveSelect.value = rec ? String(rec.intervalMs) : 'off';
   if (rec) {
     els.liveStatus.hidden = false;
@@ -1231,7 +1235,7 @@ function updateLiveControls() {
 function onLiveSelectChange() {
   const tab = activeTab();
   const cur = currentEntry(tab);
-  if (!cur || cur.kind !== 'page') return;
+  if (!cur || cur.kind !== 'page' || cur.lesson) return;
   const v = els.liveSelect.value;
   setLiving(tab, cur, v === 'off' ? 0 : parseInt(v, 10));
 }
