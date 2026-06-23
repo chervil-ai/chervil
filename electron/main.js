@@ -650,11 +650,127 @@ ipcMain.handle('chervil:publish-lesson', async (_event, payload) => {
       body: JSON.stringify({ artifact, kind, html }),
     });
     const data = await res.json().catch(() => ({}));
-    if (!res.ok) return { ok: false, error: data.error || `Publish failed (${res.status}).` };
+    if (!res.ok) {
+      if (res.status === 404) return { ok: false, error: 'Publishing isn’t available yet — the Chervil hosted service (getchervil.com) is still in development. (404)' };
+      return { ok: false, error: data.error || `Publish failed (${res.status}).` };
+    }
     return { ok: true, url: data.url, id: data.id };
   } catch (err) {
     return { ok: false, error: String(err && err.message ? err.message : err) };
   }
+});
+
+// --- Publish any composed page to getchervil.com (Chervil Pro) ----------
+// Unlike publish-lesson (which renders a structured lesson/quiz artifact), this
+// publishes a page's self-contained HTML as-is — any interactive component
+// (clock, calculator, converter). Model-dependent applets won't run when hosted.
+ipcMain.handle('chervil:publish-page', async (_event, payload) => {
+  try {
+    const { token, baseUrl, title } = payload || {};
+    const html = payload && payload.html;
+    if (!html) return { ok: false, error: 'Nothing to publish.' };
+    if (!token) return { ok: false, error: 'Missing publish token.' };
+    const base = String(baseUrl || 'https://getchervil.com').replace(/\/+$/, '');
+    const res = await fetch(`${base}/api/pages`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ kind: 'page', title: title || 'Chervil page', html }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      if (res.status === 404) return { ok: false, error: 'Publishing isn’t available yet — the Chervil hosted service (getchervil.com) is still in development. (404)' };
+      return { ok: false, error: data.error || `Publish failed (${res.status}).` };
+    }
+    return { ok: true, url: data.url, id: data.id, updated: data.updated };
+  } catch (err) {
+    return { ok: false, error: String(err && err.message ? err.message : err) };
+  }
+});
+
+// --- Data folders (local on-ramp for RFC 0004 data sources) -------------
+// Free, backend-agnostic: designate a folder (local, or a desktop-synced
+// OneDrive/Google Drive folder) and pull files from it into a query's
+// attachments. No upload, no indexing — that's the Pro cloud layer (RFC 0004).
+const SOURCE_TEXT_EXT = new Set([
+  '.txt', '.md', '.markdown', '.csv', '.tsv', '.json', '.log', '.xml',
+  '.yml', '.yaml', '.html', '.htm', '.css', '.js', '.ts', '.py', '.rb',
+  '.go', '.rs', '.java', '.c', '.h', '.cpp', '.sh', '.ini', '.toml', '.sql',
+]);
+const SOURCE_IMG_EXT = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp', '.bmp': 'image/bmp' };
+const SOURCE_PDF_EXT = '.pdf';
+const SOURCE_MAX_BYTES = 12 * 1024 * 1024;   // per file, mirrors the renderer attach cap
+const SOURCE_MAX_FILES = 2000;               // safety cap on a folder scan
+const SOURCE_MAX_DEPTH = 6;
+
+function isSupportedSource(name) {
+  const ext = path.extname(name).toLowerCase();
+  return SOURCE_TEXT_EXT.has(ext) || !!SOURCE_IMG_EXT[ext] || ext === SOURCE_PDF_EXT;
+}
+
+// Pick a folder to designate as a data source.
+ipcMain.handle('chervil:pick-folder', async (event) => {
+  const win = BrowserWindow.fromWebContents(event.sender);
+  const { canceled, filePaths } = await dialog.showOpenDialog(win, {
+    title: 'Choose a data-source folder',
+    properties: ['openDirectory'],
+  });
+  if (canceled || !filePaths || !filePaths.length) return { ok: false, canceled: true };
+  const dir = filePaths[0];
+  return { ok: true, path: dir, name: path.basename(dir) || dir };
+});
+
+// Enumerate supported files in a designated folder (recursive, capped).
+ipcMain.handle('chervil:list-folder', async (_event, payload) => {
+  const root = payload && payload.path;
+  if (!root) return { ok: false, error: 'No folder.' };
+  const out = [];
+  function walk(dir, depth) {
+    if (depth > SOURCE_MAX_DEPTH || out.length >= SOURCE_MAX_FILES) return;
+    let entries;
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); }
+    catch { return; }
+    for (const ent of entries) {
+      if (out.length >= SOURCE_MAX_FILES) break;
+      if (ent.name.startsWith('.')) continue; // skip dotfiles/dirs
+      const full = path.join(dir, ent.name);
+      if (ent.isDirectory()) { walk(full, depth + 1); continue; }
+      if (!ent.isFile() || !isSupportedSource(ent.name)) continue;
+      let size = 0;
+      try { size = fs.statSync(full).size; } catch { continue; }
+      out.push({ name: ent.name, path: full, relPath: path.relative(root, full), size });
+    }
+  }
+  try {
+    walk(root, 0);
+    out.sort((a, b) => a.relPath.localeCompare(b.relPath));
+    return { ok: true, files: out, truncated: out.length >= SOURCE_MAX_FILES };
+  } catch (err) {
+    return { ok: false, error: String(err && err.message ? err.message : err) };
+  }
+});
+
+// Read selected files into attachment-shaped payloads (text / image / pdf).
+ipcMain.handle('chervil:read-source-files', async (_event, payload) => {
+  const paths = (payload && payload.paths) || [];
+  const files = [];
+  const skipped = [];
+  for (const p of paths) {
+    const name = path.basename(p);
+    const ext = path.extname(name).toLowerCase();
+    let size = 0;
+    try { size = fs.statSync(p).size; } catch { skipped.push(name); continue; }
+    if (size > SOURCE_MAX_BYTES) { skipped.push(name); continue; }
+    try {
+      if (SOURCE_IMG_EXT[ext]) {
+        files.push({ name, kind: 'image', data: fs.readFileSync(p).toString('base64'), mediaType: SOURCE_IMG_EXT[ext] });
+      } else if (ext === SOURCE_PDF_EXT) {
+        files.push({ name, kind: 'pdf', data: fs.readFileSync(p).toString('base64'), mediaType: 'application/pdf' });
+      } else {
+        files.push({ name, kind: 'text', text: fs.readFileSync(p, 'utf8') });
+      }
+    } catch { skipped.push(name); }
+  }
+  return { ok: true, files, skipped };
 });
 
 // --- System notifications: a Living page changed in the background -------

@@ -59,6 +59,8 @@
         <div class="composer-tools">
           <button id="attach-btn" type="button" class="composer-icon"
                   title="Attach files (text, CSV, image, PDF)">📎</button>
+          <button id="folders-btn" type="button" class="composer-icon"
+                  title="Data folders — attach from a designated folder">📁</button>
           <button id="mic-btn" type="button" class="composer-icon"
                   title="Voice input — talk to Sprig" aria-pressed="false">🎤</button>
           <button id="deep-toggle" type="button" class="deep-toggle" aria-pressed="false"
@@ -335,7 +337,7 @@
 
       <section class="setting-group">
         <h3>Publishing (Chervil Pro)</h3>
-        <p class="group-hint">Publish a lesson to a shareable getchervil.com link. Sign in at <code>getchervil.com/me</code>, generate a publish token, and paste it here. Then use <b>🌐 Publish to web</b> from a lesson's Export menu.</p>
+        <p class="group-hint">Publish a lesson, quiz, or any interactive page (clock, calculator, converter…) to a shareable getchervil.com link. Sign in at <code>getchervil.com/me</code>, generate a publish token, and paste it here. Then use <b>🌐 Publish to web</b> from any page's Export menu. (Pages that call Sprig at runtime won't be interactive when hosted.)</p>
         <div class="prov-block">
           <label class="field">
             <span class="field-label">Publish token</span>
@@ -432,6 +434,33 @@
     </div>
   </div>
 
+  <!-- Data folders modal: designate folders and pull files into a query -->
+  <div id="folders-modal" class="modal">
+    <div class="modal-card">
+      <header class="modal-head">
+        <h2>Data folders</h2>
+        <button id="folders-close" class="modal-close" title="Close">✕</button>
+      </header>
+      <section class="setting-group">
+        <p class="group-hint">Designate folders to pull files from when composing — local, or a desktop-synced <b>OneDrive</b>/<b>Google Drive</b> folder (those are just local folders). Files are read into the current query's attachments. Cloud sync &amp; auto-retrieval across folders is a planned Pro feature (RFC 0004).</p>
+        <div id="folders-list" class="folders-list"></div>
+        <button id="folders-add" class="lib-btn primary">+ Add folder</button>
+      </section>
+      <section id="folder-browse" class="setting-group" hidden>
+        <header class="folder-browse-head">
+          <span id="folder-browse-title" class="field-label"></span>
+          <button id="folder-browse-back" class="lib-btn">‹ Folders</button>
+        </header>
+        <input id="folder-filter" type="text" placeholder="Filter files…" />
+        <div id="folder-files" class="folder-files"></div>
+        <div class="folder-browse-actions">
+          <span id="folder-pick-count" class="lib-meta">0 selected</span>
+          <button id="folder-attach" class="lib-btn primary" disabled>Attach selected</button>
+        </div>
+      </section>
+    </div>
+  </div>
+
   <!-- Library drawer (History / Trash) -->
   <div id="library-drawer" class="drawer">
     <div class="drawer-panel">
@@ -441,10 +470,19 @@
           <button id="lib-tab-trash" class="drawer-tab">Trash</button>
         </div>
         <div class="drawer-head-right">
+          <button id="lib-select-toggle" class="lib-btn" hidden>Select</button>
           <button id="empty-trash" class="lib-btn danger" hidden>Empty Trash</button>
           <button id="library-close" class="modal-close" title="Close">✕</button>
         </div>
       </header>
+
+      <!-- Multi-select bar (History tab): bulk-delete selected pages -->
+      <div id="lib-select-bar" hidden>
+        <span id="lib-select-count">0 selected</span>
+        <button id="lib-select-all">Select all</button>
+        <button id="lib-select-delete" class="danger">Delete selected</button>
+        <button id="lib-select-done">Done</button>
+      </div>
 
       <!-- Space bar (History tab only): pick a Space, create one, or synthesize across it -->
       <div id="space-bar">

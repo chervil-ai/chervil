@@ -1207,6 +1207,37 @@ html, body {
 
 .lib-empty { color: var(--muted); font-size: 14px; text-align: center; padding: 40px 0; }
 
+/* History multi-select bar (mirrors #tab-select-bar) */
+#lib-select-bar { display: flex; align-items: center; gap: 8px; padding: 8px 12px; background: rgba(123, 224, 163, 0.10); border-bottom: 1px solid var(--border); font-size: 12px; color: var(--text); }
+#lib-select-bar[hidden] { display: none; }
+#lib-select-bar #lib-select-count { margin-right: auto; color: var(--muted); }
+#lib-select-bar button { background: rgba(255, 255, 255, 0.06); border: 1px solid var(--border); color: var(--text); border-radius: 7px; padding: 5px 11px; font-size: 12px; cursor: pointer; }
+#lib-select-bar button:hover:not(:disabled) { border-color: var(--accent); }
+#lib-select-bar button:disabled { opacity: 0.5; cursor: default; }
+#lib-select-bar button.danger { background: rgba(255, 90, 90, 0.15); border-color: #7a2c2c; color: #ffb0b0; }
+.lib-row.selecting { cursor: pointer; }
+.lib-row.sel { outline: 1px solid var(--accent); outline-offset: -1px; background: rgba(123, 224, 163, 0.12); }
+.lib-check { flex: none; font-size: 14px; cursor: pointer; user-select: none; }
+
+/* ---------- Data folders modal ---------- */
+.folders-list { display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px; }
+.folder-row { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 11px; background: var(--panel-2); }
+.folder-row .folder-info { flex: 1; min-width: 0; }
+.folder-row .folder-name { font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.folder-row .folder-path { font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.folder-row .folder-acts { flex: none; display: flex; gap: 6px; }
+.folders-empty { color: var(--muted); font-size: 13px; padding: 8px 2px 12px; }
+.folder-browse-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 8px; }
+#folder-filter { width: 100%; box-sizing: border-box; margin-bottom: 8px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); color: var(--text); font-size: 13px; }
+.folder-files { max-height: 320px; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; border: 1px solid var(--border); border-radius: 10px; padding: 6px; }
+.folder-file { display: flex; align-items: center; gap: 9px; padding: 6px 8px; border-radius: 7px; cursor: pointer; font-size: 13px; }
+.folder-file:hover { background: rgba(255, 255, 255, 0.05); }
+.folder-file.sel { background: rgba(123, 224, 163, 0.12); }
+.folder-file .ff-check { flex: none; font-size: 13px; }
+.folder-file .ff-name { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.folder-file .ff-size { flex: none; color: var(--muted); font-size: 11px; }
+.folder-browse-actions { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 10px; }
+
 .lib-row {
   display: flex;
   align-items: center;

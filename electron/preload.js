@@ -49,6 +49,9 @@ contextBridge.exposeInMainWorld('chervil', {
   /** Publish a lesson to a shareable getchervil.com link (Chervil Pro). */
   publishLesson: (payload) => ipcRenderer.invoke('chervil:publish-lesson', payload),
 
+  /** Publish any composed page's HTML to a shareable getchervil.com link (Chervil Pro). */
+  publishPage: (payload) => ipcRenderer.invoke('chervil:publish-page', payload),
+
   /** Per-provider key status: { claude, grok, gemini, azure, claudeFromEnv }. */
   getKeyStatus: () => ipcRenderer.invoke('chervil:get-key-status'),
 
@@ -63,6 +66,11 @@ contextBridge.exposeInMainWorld('chervil', {
 
   /** Save a composed page to disk via a native save dialog. */
   savePage: (payload) => ipcRenderer.invoke('chervil:save-page', payload),
+
+  /** Data folders (RFC 0004 local on-ramp): pick a folder, list its files, read selected files. */
+  pickFolder: () => ipcRenderer.invoke('chervil:pick-folder'),
+  listFolder: (payload) => ipcRenderer.invoke('chervil:list-folder', payload),
+  readSourceFiles: (payload) => ipcRenderer.invoke('chervil:read-source-files', payload),
 
   /** Export a composed page as PDF via a native save dialog. */
   exportPdf: (payload) => ipcRenderer.invoke('chervil:export-pdf', payload),

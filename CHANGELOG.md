@@ -6,6 +6,29 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- **Publish any page to the web** — **🌐 Publish to web** now works for *any*
+  composed interactive page (clock, calculator, converter…), not just lessons and
+  quizzes. Self-contained pages publish their HTML directly; pages that call Sprig
+  at runtime degrade gracefully when hosted. New `chervil:publish-page` endpoint.
+- **Minimal publish service** (`server/`) — a zero-dependency Node service that
+  stores and serves published page HTML, so *Publish to web* works without the
+  full hosted tier. Run `node server/server.js`, point Settings → Publishing at it.
+- **Data folders** — designate local folders (or desktop-synced **OneDrive** /
+  **Google Drive** folders) as data sources and pull their files into a query's
+  attachments (📁 beside the attach button). A free, local on-ramp toward
+  cloud-synced, indexed sources — designed in
+  [RFC 0004](docs/rfcs/0004-cloud-data-sources.md).
+- **History multi-select** — bulk-select and delete pages in the History drawer
+  (**Select** → check rows → **Delete selected**), so long histories stay manageable.
+
+### Fixed
+- **Bulk tab close** now activates the closest *surviving* tab (first to the
+  right, then left), computed before removal — instead of an index that shifts as
+  tabs splice out.
+- Publishing to an unavailable hosted endpoint now shows a clear "service still in
+  development" message instead of a bare `404`.
+
 ## [0.1.5] — 2026-06-22
 
 A big feature release: Chervil learns to **teach**. The flagship learning

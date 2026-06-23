@@ -1,0 +1,11 @@
+{
+  "name": "chervil-publish-service",
+  "version": "0.1.0",
+  "description": "Minimal publish service for Chervil — stores and serves published page HTML.",
+  "main": "server.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "license": "MIT"
+}

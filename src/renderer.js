@@ -10,9 +10,22 @@ const els = {
   learnToggle: document.getElementById('learn-toggle'),
   quizToggle: document.getElementById('quiz-toggle'),
   attachBtn: document.getElementById('attach-btn'),
+  foldersBtn: document.getElementById('folders-btn'),
   micBtn: document.getElementById('mic-btn'),
   fileInput: document.getElementById('file-input'),
   attachChips: document.getElementById('attach-chips'),
+  // Data folders modal (RFC 0004 local on-ramp)
+  foldersModal: document.getElementById('folders-modal'),
+  foldersClose: document.getElementById('folders-close'),
+  foldersList: document.getElementById('folders-list'),
+  foldersAdd: document.getElementById('folders-add'),
+  folderBrowse: document.getElementById('folder-browse'),
+  folderBrowseTitle: document.getElementById('folder-browse-title'),
+  folderBrowseBack: document.getElementById('folder-browse-back'),
+  folderFilter: document.getElementById('folder-filter'),
+  folderFiles: document.getElementById('folder-files'),
+  folderPickCount: document.getElementById('folder-pick-count'),
+  folderAttach: document.getElementById('folder-attach'),
   dropOverlay: document.getElementById('drop-overlay'),
   pageTitle: document.getElementById('page-title'),
   badge: document.getElementById('mode-badge'),
@@ -119,6 +132,12 @@ const els = {
   libTabHistory: document.getElementById('lib-tab-history'),
   libTabTrash: document.getElementById('lib-tab-trash'),
   emptyTrash: document.getElementById('empty-trash'),
+  libSelectToggle: document.getElementById('lib-select-toggle'),
+  libSelectBar: document.getElementById('lib-select-bar'),
+  libSelectCount: document.getElementById('lib-select-count'),
+  libSelectAll: document.getElementById('lib-select-all'),
+  libSelectDelete: document.getElementById('lib-select-delete'),
+  libSelectDone: document.getElementById('lib-select-done'),
   // Spaces
   spaceBar: document.getElementById('space-bar'),
   spaceSelect: document.getElementById('space-select'),
@@ -174,6 +193,8 @@ let settings = {
   // Publishing — Chervil Pro: publish a lesson to a shareable getchervil.com link.
   publishToken: '',          // from getchervil.com/me (stored locally)
   publishBase: 'https://getchervil.com',
+  // Data folders (RFC 0004 local on-ramp): designated folders to pull files from.
+  dataFolders: [],           // [{ id, name, path }] — local or desktop-synced OneDrive/GDrive
 };
 
 // Per-provider metadata for the Settings UI.
@@ -238,6 +259,9 @@ function providerConfig(agentOverride) {
 //   item = { id, createdAt, title, query, html, sources, conversation, history, spaceId }
 let library = { history: [], trash: [] };
 let drawerTab = 'history';
+// History multi-select (bulk delete) state.
+let librarySelectMode = false;
+let selectedLibraryIds = new Set();
 
 // Spaces: persistent topic workspaces. Each composed page is filed into the active
 // Space; Sprig can synthesize across everything collected in a Space.
@@ -449,6 +473,20 @@ function closeTabs(ids) {
   if (!idSet.size) return;
   const closingActive = idSet.has(activeId);
   const activeIdx = tabs.findIndex((t) => t.id === activeId);
+  // Pick the closest surviving tab from the ORIGINAL array before any splicing:
+  // first to the right of the active tab, then to the left. This id stays valid
+  // no matter how many entries shift during the splice loop below.
+  let nextId;
+  if (closingActive && activeIdx !== -1) {
+    for (let i = activeIdx + 1; i < tabs.length; i++) {
+      if (!idSet.has(tabs[i].id)) { nextId = tabs[i].id; break; }
+    }
+    if (nextId === undefined) {
+      for (let i = activeIdx - 1; i >= 0; i--) {
+        if (!idSet.has(tabs[i].id)) { nextId = tabs[i].id; break; }
+      }
+    }
+  }
   for (const id of idSet) {
     const idx = tabs.findIndex((t) => t.id === id);
     if (idx !== -1) tabs.splice(idx, 1);
@@ -459,7 +497,8 @@ function closeTabs(ids) {
     newTab(true);
   } else if (closingActive) {
     if (previewTimer) { clearTimeout(previewTimer); previewTimer = null; }
-    const next = tabs[Math.min(activeIdx, tabs.length - 1)] || tabs[tabs.length - 1];
+    // nextId is the pre-computed closest survivor; fall back to last tab as a safety net.
+    const next = tabs.find((t) => t.id === nextId) || tabs[tabs.length - 1];
     activeId = next.id;
     renderConversation();
     showActiveTabView();
@@ -2370,6 +2409,174 @@ function renderAttachChips() {
   }
 }
 
+// ---- Data folders (RFC 0004 local on-ramp) ----
+// Designate folders (local / desktop-synced OneDrive/GDrive) and pull files from
+// them into pendingAttachments. No upload/indexing — that's the Pro cloud layer.
+let folderBrowseId = null;       // id of the folder currently being browsed
+let folderBrowseFiles = [];      // enumerated files of that folder
+let folderSelected = new Set();  // selected file paths
+
+function fmtBytes(n) {
+  if (!n && n !== 0) return '';
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(0)} KB`;
+  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function openFoldersModal() {
+  folderBrowseId = null;
+  folderBrowseFiles = [];
+  folderSelected.clear();
+  els.folderBrowse.hidden = true;
+  renderFolders();
+  els.foldersModal.classList.add('open');
+}
+function closeFoldersModal() { els.foldersModal.classList.remove('open'); }
+
+function renderFolders() {
+  const list = els.foldersList;
+  list.innerHTML = '';
+  const folders = settings.dataFolders || [];
+  if (!folders.length) {
+    const empty = document.createElement('div');
+    empty.className = 'folders-empty';
+    empty.textContent = 'No folders yet. Add one to pull files from it when composing.';
+    list.appendChild(empty);
+    return;
+  }
+  for (const f of folders) {
+    const row = document.createElement('div');
+    row.className = 'folder-row';
+    const info = document.createElement('div');
+    info.className = 'folder-info';
+    const name = document.createElement('div');
+    name.className = 'folder-name';
+    name.textContent = `📁 ${f.name}`;
+    const p = document.createElement('div');
+    p.className = 'folder-path';
+    p.textContent = f.path;
+    p.title = f.path;
+    info.appendChild(name);
+    info.appendChild(p);
+    row.appendChild(info);
+    const acts = document.createElement('div');
+    acts.className = 'folder-acts';
+    const browse = document.createElement('button');
+    browse.className = 'lib-btn';
+    browse.textContent = 'Browse';
+    browse.addEventListener('click', () => browseFolder(f.id));
+    const remove = document.createElement('button');
+    remove.className = 'lib-btn danger';
+    remove.textContent = 'Remove';
+    remove.addEventListener('click', () => removeDataFolder(f.id));
+    acts.appendChild(browse);
+    acts.appendChild(remove);
+    row.appendChild(acts);
+    list.appendChild(row);
+  }
+}
+
+async function addDataFolder() {
+  if (!window.chervil.pickFolder) { toast('Folder picking isn’t available in this build.'); return; }
+  const res = await window.chervil.pickFolder();
+  if (!res || !res.ok) return;
+  if (!settings.dataFolders) settings.dataFolders = [];
+  if (settings.dataFolders.some((f) => f.path === res.path)) { toast('That folder is already added.'); return; }
+  settings.dataFolders.push({ id: uid(), name: res.name, path: res.path });
+  scheduleSave();
+  renderFolders();
+}
+
+function removeDataFolder(id) {
+  settings.dataFolders = (settings.dataFolders || []).filter((f) => f.id !== id);
+  scheduleSave();
+  if (folderBrowseId === id) { folderBrowseId = null; els.folderBrowse.hidden = true; }
+  renderFolders();
+}
+
+async function browseFolder(id) {
+  const folder = (settings.dataFolders || []).find((f) => f.id === id);
+  if (!folder) return;
+  if (!window.chervil.listFolder) { toast('Folder browsing isn’t available in this build.'); return; }
+  folderBrowseId = id;
+  folderSelected.clear();
+  els.folderBrowseTitle.textContent = `📁 ${folder.name}`;
+  els.folderFilter.value = '';
+  els.folderFiles.innerHTML = '<div class="folders-empty">Reading folder…</div>';
+  els.folderBrowse.hidden = false;
+  const res = await window.chervil.listFolder({ path: folder.path });
+  if (!res || !res.ok) { els.folderFiles.innerHTML = `<div class="folders-empty">Couldn’t read folder: ${(res && res.error) || 'unknown error'}</div>`; return; }
+  folderBrowseFiles = res.files || [];
+  if (res.truncated) toast(`Showing the first ${folderBrowseFiles.length} files.`);
+  renderFolderFiles();
+}
+
+function renderFolderFiles() {
+  const q = (els.folderFilter.value || '').trim().toLowerCase();
+  const shown = q ? folderBrowseFiles.filter((f) => f.relPath.toLowerCase().includes(q)) : folderBrowseFiles;
+  els.folderFiles.innerHTML = '';
+  if (!folderBrowseFiles.length) {
+    els.folderFiles.innerHTML = '<div class="folders-empty">No supported files in this folder.</div>';
+  } else if (!shown.length) {
+    els.folderFiles.innerHTML = '<div class="folders-empty">No files match the filter.</div>';
+  } else {
+    for (const f of shown) {
+      const row = document.createElement('div');
+      row.className = 'folder-file' + (folderSelected.has(f.path) ? ' sel' : '');
+      row.title = f.relPath;
+      const cb = document.createElement('span');
+      cb.className = 'ff-check';
+      cb.textContent = folderSelected.has(f.path) ? '☑' : '☐';
+      const name = document.createElement('span');
+      name.className = 'ff-name';
+      name.textContent = f.relPath;
+      const size = document.createElement('span');
+      size.className = 'ff-size';
+      size.textContent = fmtBytes(f.size);
+      row.appendChild(cb);
+      row.appendChild(name);
+      row.appendChild(size);
+      row.addEventListener('click', () => toggleFolderFile(f.path));
+      els.folderFiles.appendChild(row);
+    }
+  }
+  updateFolderPickBar();
+}
+
+function toggleFolderFile(p) {
+  if (folderSelected.has(p)) folderSelected.delete(p);
+  else {
+    const room = MAX_ATTACH - pendingAttachments.length;
+    if (folderSelected.size >= room) { toast(`Up to ${MAX_ATTACH} files total (with current attachments).`); return; }
+    folderSelected.add(p);
+  }
+  renderFolderFiles();
+}
+
+function updateFolderPickBar() {
+  els.folderPickCount.textContent = `${folderSelected.size} selected`;
+  els.folderAttach.disabled = folderSelected.size === 0;
+}
+
+async function attachSelectedFolderFiles() {
+  if (!folderSelected.size) return;
+  if (!window.chervil.readSourceFiles) { toast('Reading files isn’t available in this build.'); return; }
+  const paths = [...folderSelected];
+  toast('Reading files…');
+  const res = await window.chervil.readSourceFiles({ paths });
+  if (!res || !res.ok) { toast(`Couldn’t read files: ${(res && res.error) || 'unknown error'}`); return; }
+  let added = 0;
+  for (const f of (res.files || [])) {
+    if (pendingAttachments.length >= MAX_ATTACH) break;
+    pendingAttachments.push({ id: uid(), ...f });
+    added++;
+  }
+  renderAttachChips();
+  const skipped = (res.skipped || []).length;
+  closeFoldersModal();
+  toast(`Attached ${added} file${added === 1 ? '' : 's'}${skipped ? ` (${skipped} skipped — too large)` : ''}.`);
+}
+
 // Strip a leading wake phrase ("Hey Sprig, …") so the command runs clean and the
 // model never sees the wake words. Accepts the command with or without it.
 function stripWake(text) {
@@ -3005,6 +3212,52 @@ function deleteLibraryItem(id) {
   scheduleSave();
 }
 
+// Move several history items to trash at once (bulk delete), newest kept on top.
+function deleteLibraryItems(ids) {
+  const idSet = new Set(ids);
+  idSet.delete(undefined);
+  if (!idSet.size) return;
+  const moved = [];
+  library.history = library.history.filter((it) => {
+    if (idSet.has(it.id)) { moved.push(it); return false; }
+    return true;
+  });
+  for (let i = moved.length - 1; i >= 0; i--) library.trash.unshift(moved[i]);
+  if (library.trash.length > MAX_LIBRARY) library.trash.length = MAX_LIBRARY;
+  renderDrawer();
+  scheduleSave();
+}
+
+// ---- History multi-select mode ----
+function enterLibrarySelect() {
+  librarySelectMode = true;
+  selectedLibraryIds.clear();
+  renderDrawer();
+}
+function exitLibrarySelect() {
+  librarySelectMode = false;
+  selectedLibraryIds.clear();
+  renderDrawer();
+}
+function toggleLibrarySelected(id) {
+  if (selectedLibraryIds.has(id)) selectedLibraryIds.delete(id);
+  else selectedLibraryIds.add(id);
+  renderDrawer();
+}
+function selectAllLibrary() {
+  const shown = spaceItems();
+  const allSel = shown.length > 0 && shown.every((it) => selectedLibraryIds.has(it.id));
+  selectedLibraryIds = new Set(allSel ? [] : shown.map((it) => it.id));
+  renderDrawer();
+}
+function deleteSelectedLibrary() {
+  if (!selectedLibraryIds.size) return;
+  const ids = [...selectedLibraryIds];
+  librarySelectMode = false;
+  selectedLibraryIds.clear();
+  deleteLibraryItems(ids); // calls renderDrawer + scheduleSave
+}
+
 function restoreLibraryItem(id) {
   const idx = library.trash.findIndex((i) => i.id === id);
   if (idx === -1) return;
@@ -3033,9 +3286,9 @@ function relTime(ts) {
 }
 
 function renderSpaceBar() {
-  // The Space bar only applies to the History tab.
-  els.spaceBar.hidden = drawerTab !== 'history';
-  if (drawerTab !== 'history') {
+  // The Space bar only applies to the History tab, and is hidden while multi-selecting.
+  els.spaceBar.hidden = drawerTab !== 'history' || librarySelectMode;
+  if (drawerTab !== 'history' || librarySelectMode) {
     if (els.newSpaceRow) els.newSpaceRow.hidden = true;
     if (els.synthRow) els.synthRow.hidden = true;
     return;
@@ -3054,9 +3307,22 @@ function renderDrawer() {
   els.libTabHistory.classList.toggle('active', drawerTab === 'history');
   els.libTabTrash.classList.toggle('active', drawerTab === 'trash');
   els.emptyTrash.hidden = drawerTab !== 'trash';
+  // Select mode only applies to History; leaving History cancels it.
+  if (drawerTab !== 'history' && librarySelectMode) { librarySelectMode = false; selectedLibraryIds.clear(); }
   renderSpaceBar();
 
   const items = drawerTab === 'history' ? spaceItems() : library.trash;
+
+  // Toggle + select-bar visibility (History only).
+  if (els.libSelectToggle) els.libSelectToggle.hidden = drawerTab !== 'history' || librarySelectMode || !items.length;
+  if (els.libSelectBar) els.libSelectBar.hidden = !(drawerTab === 'history' && librarySelectMode);
+  if (librarySelectMode) {
+    const allSel = items.length > 0 && items.every((it) => selectedLibraryIds.has(it.id));
+    els.libSelectCount.textContent = `${selectedLibraryIds.size} selected`;
+    els.libSelectDelete.disabled = selectedLibraryIds.size === 0;
+    els.libSelectAll.textContent = allSel ? 'Select none' : 'Select all';
+  }
+
   els.libraryList.innerHTML = '';
 
   if (!items.length) {
@@ -3069,9 +3335,19 @@ function renderDrawer() {
     return;
   }
 
+  const selecting = drawerTab === 'history' && librarySelectMode;
   for (const item of items) {
     const row = document.createElement('div');
-    row.className = 'lib-row';
+    row.className = 'lib-row'
+      + (selecting ? ' selecting' : '')
+      + (selecting && selectedLibraryIds.has(item.id) ? ' sel' : '');
+
+    if (selecting) {
+      const cb = document.createElement('span');
+      cb.className = 'lib-check';
+      cb.textContent = selectedLibraryIds.has(item.id) ? '☑' : '☐';
+      row.appendChild(cb);
+    }
 
     const main = document.createElement('div');
     main.className = 'lib-main';
@@ -3087,7 +3363,11 @@ function renderDrawer() {
 
     const actions = document.createElement('div');
     actions.className = 'lib-actions';
-    if (drawerTab === 'history') {
+    if (selecting) {
+      // Whole row toggles selection; no per-row buttons.
+      row.title = 'Toggle selection';
+      row.addEventListener('click', () => toggleLibrarySelected(item.id));
+    } else if (drawerTab === 'history') {
       main.title = 'Open';
       main.style.cursor = 'pointer';
       main.addEventListener('click', () => openLibraryItem(item));
@@ -3115,6 +3395,8 @@ function openDrawer() {
 }
 
 function closeDrawer() {
+  librarySelectMode = false;
+  selectedLibraryIds.clear();
   els.libraryDrawer.classList.remove('open');
 }
 
@@ -3552,7 +3834,47 @@ function onExportSelect(e) {
   else if (v === 'docx') exportCurrentDocx();
   else if (v === 'xlsx') exportCurrentXlsx();
   else if (v === 'lesson') exportCurrentLessonReader();
-  else if (v === 'lesson-publish') publishCurrentLesson();
+  else if (v === 'lesson-publish') publishCurrentToWeb();
+}
+
+// Publish the current page to the web. Lessons/quizzes use their richer reader
+// render; any other interactive page publishes its self-contained HTML directly.
+function publishCurrentToWeb() {
+  const tab = activeTab();
+  const entry = currentEntry(tab);
+  if (!entry || entry.kind !== 'page') { toast('Open a page first, then publish it.'); return; }
+  if (entry.artifact || entry.lesson) return publishCurrentLesson();
+  return publishCurrentPage();
+}
+
+// Publish any composed page (self-contained interactive HTML — clock, calculator,
+// converter, etc.) to a shareable getchervil.com link (Chervil Pro). Model-dependent
+// applets that call Sprig at runtime won't work when hosted.
+async function publishCurrentPage() {
+  const tab = activeTab();
+  const entry = currentEntry(tab);
+  if (!entry || entry.kind !== 'page' || !entry.html) { toast('Open a page first, then publish it.'); return; }
+  if (!settings.publishToken) { toast('Add a publish token in Settings → Publishing (from getchervil.com/me).'); return; }
+  if (!window.chervil.publishPage) { toast('Publishing isn’t available in this build.'); return; }
+  toast('Publishing…');
+  try {
+    const res = await window.chervil.publishPage({
+      html: entry.html,
+      title: entry.title || 'Chervil page',
+      token: settings.publishToken,
+      baseUrl: settings.publishBase || 'https://getchervil.com',
+    });
+    if (res && res.ok && res.url) {
+      entry.publishedUrl = res.url;
+      scheduleSave();
+      addMessage(tab, 'bot', `${res.updated ? 'Updated' : 'Published'} — it’s live at ${res.url}`);
+      try { await navigator.clipboard.writeText(res.url); toast('Published — link copied to clipboard.'); } catch { toast('Published.'); }
+    } else {
+      addMessage(tab, 'bot', `Couldn’t publish: ${(res && res.error) || 'unknown error'}`, 'error');
+    }
+  } catch (e) {
+    addMessage(tab, 'bot', `Publish error: ${(e && e.message) || e}`, 'error');
+  }
 }
 
 // Publish the current lesson to a shareable getchervil.com link (Chervil Pro).
@@ -3625,6 +3947,15 @@ els.quizToggle.addEventListener('click', () => setSkillMode('quiz'));
 // File attachments: button, picker, and drag-and-drop.
 els.attachBtn.addEventListener('click', () => els.fileInput.click());
 els.fileInput.addEventListener('change', () => { addFiles(els.fileInput.files); els.fileInput.value = ''; });
+
+// Data folders modal (RFC 0004 local on-ramp)
+if (els.foldersBtn) els.foldersBtn.addEventListener('click', openFoldersModal);
+if (els.foldersClose) els.foldersClose.addEventListener('click', closeFoldersModal);
+if (els.foldersModal) els.foldersModal.addEventListener('click', (e) => { if (e.target === els.foldersModal) closeFoldersModal(); });
+if (els.foldersAdd) els.foldersAdd.addEventListener('click', addDataFolder);
+if (els.folderBrowseBack) els.folderBrowseBack.addEventListener('click', () => { folderBrowseId = null; els.folderBrowse.hidden = true; });
+if (els.folderFilter) els.folderFilter.addEventListener('input', renderFolderFiles);
+if (els.folderAttach) els.folderAttach.addEventListener('click', attachSelectedFolderFiles);
 let dragDepth = 0;
 window.addEventListener('dragenter', (e) => { if (e.dataTransfer && [...e.dataTransfer.types].includes('Files')) { e.preventDefault(); dragDepth++; els.dropOverlay.hidden = false; } });
 window.addEventListener('dragover', (e) => { if (e.dataTransfer && [...e.dataTransfer.types].includes('Files')) e.preventDefault(); });
@@ -3671,7 +4002,7 @@ window.addEventListener('click', () => { if (els.tabMenu && !els.tabMenu.hidden)
 window.addEventListener('contextmenu', () => { if (els.tabMenu && !els.tabMenu.hidden) closeTabMenu(); });
 window.addEventListener('blur', () => closeTabMenu());
 els.tabs.addEventListener('scroll', () => closeTabMenu());
-window.addEventListener('keydown', (e) => { if (e.key === 'Escape') { closeTabMenu(); if (tabSelectMode) exitTabSelect(); } });
+window.addEventListener('keydown', (e) => { if (e.key === 'Escape') { closeTabMenu(); if (tabSelectMode) exitTabSelect(); if (librarySelectMode) exitLibrarySelect(); if (els.foldersModal && els.foldersModal.classList.contains('open')) closeFoldersModal(); } });
 // Tab reorder: allow dropping a dragged tab anywhere along the strip/rail.
 els.tabs.addEventListener('dragover', onTabsDragOver);
 els.tabs.addEventListener('drop', (e) => e.preventDefault());
@@ -3874,6 +4205,10 @@ els.libraryDrawer.addEventListener('click', (e) => {
 els.libTabHistory.addEventListener('click', () => { drawerTab = 'history'; renderDrawer(); });
 els.libTabTrash.addEventListener('click', () => { drawerTab = 'trash'; renderDrawer(); });
 els.emptyTrash.addEventListener('click', emptyTrash);
+if (els.libSelectToggle) els.libSelectToggle.addEventListener('click', enterLibrarySelect);
+if (els.libSelectAll) els.libSelectAll.addEventListener('click', selectAllLibrary);
+if (els.libSelectDelete) els.libSelectDelete.addEventListener('click', deleteSelectedLibrary);
+if (els.libSelectDone) els.libSelectDone.addEventListener('click', exitLibrarySelect);
 
 // Spaces
 els.spaceSelect.addEventListener('change', (e) => setActiveSpace(e.target.value));
