@@ -7,6 +7,11 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- **Tab switcher (Ctrl+K)** — a command palette to jump to any tab by title;
+  type to filter, ↑/↓ to move, Enter to open. Tames large tab counts.
+- **Pinned tabs** — right-click → Pin. Pinned tabs sort to the front, show 📌,
+  are compact, and are protected from "close others / to the right / all". Pins
+  persist across restarts.
 - **Publish any page to the web** — **🌐 Publish to web** now works for *any*
   composed interactive page (clock, calculator, converter…), not just lessons and
   quizzes. Self-contained pages publish their HTML directly; pages that call Sprig

@@ -64,6 +64,9 @@ const els = {
   tabSelectAll: document.getElementById('tab-select-all'),
   tabSelectClose: document.getElementById('tab-select-close'),
   tabSelectDone: document.getElementById('tab-select-done'),
+  tabSwitcher: document.getElementById('tab-switcher'),
+  tabSwitcherInput: document.getElementById('tab-switcher-input'),
+  tabSwitcherList: document.getElementById('tab-switcher-list'),
   back: document.getElementById('back-btn'),
   fwd: document.getElementById('fwd-btn'),
   navTip: document.getElementById('nav-tip'),
@@ -422,6 +425,7 @@ function newTab(activate = true) {
     history: [],
     pages: [],
     currentId: null,
+    pinned: false,
   };
   tabs.push(tab);
   if (activate) activeId = tab.id;
@@ -508,17 +512,110 @@ function closeTabs(ids) {
   scheduleSave();
 }
 
-function closeOtherTabs(id) { closeTabs(tabs.filter((t) => t.id !== id).map((t) => t.id)); }
+// Bulk-close helpers protect pinned tabs — they're only closed explicitly.
+function closeOtherTabs(id) { closeTabs(tabs.filter((t) => t.id !== id && !t.pinned).map((t) => t.id)); }
 
 function closeTabsToRight(id) {
   const i = tabs.findIndex((t) => t.id === id);
   if (i === -1) return;
-  closeTabs(tabs.slice(i + 1).map((t) => t.id));
+  closeTabs(tabs.slice(i + 1).filter((t) => !t.pinned).map((t) => t.id));
 }
 
 function closeAllTabs() {
-  if (tabs.length > 1 && !confirm(`Close all ${tabs.length} tabs? This clears their conversations.`)) return;
-  closeTabs(tabs.map((t) => t.id));
+  const closable = tabs.filter((t) => !t.pinned);
+  if (!closable.length) { toast('Only pinned tabs remain.'); return; }
+  if (closable.length > 1 && !confirm(`Close ${closable.length} tabs? Pinned tabs are kept. This clears their conversations.`)) return;
+  closeTabs(closable.map((t) => t.id));
+}
+
+// ---- Pin / unpin: pinned tabs sort to the front and resist bulk close ----
+function lastPinnedIndex() {
+  let i = -1;
+  for (let k = 0; k < tabs.length; k++) if (tabs[k].pinned) i = k;
+  return i;
+}
+function pinTab(id) {
+  const idx = tabs.findIndex((t) => t.id === id);
+  if (idx === -1 || tabs[idx].pinned) return;
+  const [t] = tabs.splice(idx, 1);
+  t.pinned = true;
+  tabs.splice(lastPinnedIndex() + 1, 0, t); // after the current pinned group
+  renderTabs();
+  scheduleSave();
+}
+function unpinTab(id) {
+  const idx = tabs.findIndex((t) => t.id === id);
+  if (idx === -1 || !tabs[idx].pinned) return;
+  const [t] = tabs.splice(idx, 1);
+  t.pinned = false;
+  tabs.splice(lastPinnedIndex() + 1, 0, t); // first slot after pinned group
+  renderTabs();
+  scheduleSave();
+}
+function toggleTabPin(id) {
+  const t = tabs.find((x) => x.id === id);
+  if (!t) return;
+  if (t.pinned) unpinTab(id); else pinTab(id);
+}
+
+// ---- Ctrl+K tab switcher (command palette for tabs) ----
+let tabSwitcherItems = [];
+let tabSwitcherIdx = 0;
+
+function tabSwitcherIsOpen() { return els.tabSwitcher && !els.tabSwitcher.hidden; }
+function openTabSwitcher() {
+  if (!els.tabSwitcher || tabs.length <= 1) { if (tabs.length <= 1) toast('Only one tab open.'); return; }
+  els.tabSwitcherInput.value = '';
+  tabSwitcherIdx = 0;
+  els.tabSwitcher.hidden = false;
+  renderTabSwitcher();
+  els.tabSwitcherInput.focus();
+}
+function closeTabSwitcher() { if (els.tabSwitcher) els.tabSwitcher.hidden = true; }
+
+function renderTabSwitcher() {
+  const q = (els.tabSwitcherInput.value || '').trim().toLowerCase();
+  tabSwitcherItems = q ? tabs.filter((t) => tabLabel(t).toLowerCase().includes(q)) : tabs.slice();
+  if (tabSwitcherIdx >= tabSwitcherItems.length) tabSwitcherIdx = Math.max(0, tabSwitcherItems.length - 1);
+  const list = els.tabSwitcherList;
+  list.innerHTML = '';
+  if (!tabSwitcherItems.length) {
+    const e = document.createElement('div');
+    e.className = 'palette-empty';
+    e.textContent = 'No matching tabs.';
+    list.appendChild(e);
+    return;
+  }
+  tabSwitcherItems.forEach((t, i) => {
+    const row = document.createElement('div');
+    row.className = 'palette-row' + (i === tabSwitcherIdx ? ' active' : '');
+    const icon = document.createElement('span');
+    icon.className = 'pr-icon';
+    icon.textContent = t.pinned ? '📌' : (isTabBusy(t.id) ? '⏳' : '○');
+    const title = document.createElement('span');
+    title.className = 'pr-title';
+    title.textContent = tabLabel(t);
+    const tag = document.createElement('span');
+    tag.className = 'pr-tag';
+    tag.textContent = t.id === activeId ? 'current' : '';
+    row.appendChild(icon);
+    row.appendChild(title);
+    row.appendChild(tag);
+    row.addEventListener('click', () => chooseTabSwitcher(i));
+    list.appendChild(row);
+  });
+  const activeRow = list.children[tabSwitcherIdx];
+  if (activeRow && activeRow.scrollIntoView) activeRow.scrollIntoView({ block: 'nearest' });
+}
+function moveTabSwitcher(delta) {
+  if (!tabSwitcherItems.length) return;
+  tabSwitcherIdx = (tabSwitcherIdx + delta + tabSwitcherItems.length) % tabSwitcherItems.length;
+  renderTabSwitcher();
+}
+function chooseTabSwitcher(i) {
+  const t = tabSwitcherItems[i != null ? i : tabSwitcherIdx];
+  closeTabSwitcher();
+  if (t) switchTab(t.id);
 }
 
 // ---- Tab right-click context menu ----
@@ -529,6 +626,9 @@ function openTabMenu(e, tabId) {
   tabMenuTargetId = tabId;
   const menu = els.tabMenu;
   const i = tabs.findIndex((t) => t.id === tabId);
+  const target = tabs[i];
+  const pinBtn = menu.querySelector('[data-act="pin"]');
+  if (pinBtn) pinBtn.textContent = (target && target.pinned) ? 'Unpin tab' : 'Pin tab';
   menu.querySelector('[data-act="others"]').disabled = tabs.length <= 1;
   menu.querySelector('[data-act="right"]').disabled = i < 0 || i >= tabs.length - 1;
   const layoutBtn = menu.querySelector('[data-act="layout"]');
@@ -549,6 +649,7 @@ function onTabMenuClick(act) {
   closeTabMenu();
   if (!id) return;
   if (act === 'new') newTab(true);
+  else if (act === 'pin') toggleTabPin(id);
   else if (act === 'close') closeTab(id);
   else if (act === 'others') closeOtherTabs(id);
   else if (act === 'right') closeTabsToRight(id);
@@ -609,6 +710,7 @@ function renderTabs() {
     const el = document.createElement('div');
     el.className = 'tab'
       + (tab.id === activeId ? ' active' : '')
+      + (tab.pinned ? ' pinned' : '')
       + (tabSelectMode ? ' selecting' : '')
       + (selectedTabIds.has(tab.id) ? ' sel' : '');
     el.title = tabLabel(tab);
@@ -622,6 +724,13 @@ function renderTabs() {
       el.appendChild(cb);
     }
 
+    if (tab.pinned) {
+      const pin = document.createElement('span');
+      pin.className = 'tab-pin';
+      pin.textContent = '📌';
+      el.appendChild(pin);
+    }
+
     if (isTabBusy(tab.id)) {
       const spin = document.createElement('span');
       spin.className = 'tab-spin';
@@ -633,7 +742,8 @@ function renderTabs() {
     title.textContent = tabLabel(tab);
     el.appendChild(title);
 
-    if (!tabSelectMode) {
+    // Pinned tabs hide the inline ✕ (close them via the menu) and shrink to the pin.
+    if (!tabSelectMode && !tab.pinned) {
       const close = document.createElement('span');
       close.className = 'tab-close';
       close.textContent = '✕';
@@ -717,6 +827,12 @@ function commitTabOrder() {
   const order = [...els.tabs.querySelectorAll('.tab')].map((el) => el.dataset.tabId);
   if (order.length !== tabs.length) return;
   tabs.sort((a, b) => order.indexOf(a.id) - order.indexOf(b.id));
+  // Enforce the pinned-first invariant (stable within each group), then re-sync
+  // the DOM in case a drag crossed the pinned boundary.
+  const reordered = tabs.filter((t) => t.pinned).concat(tabs.filter((t) => !t.pinned));
+  const changed = reordered.some((t, i) => t !== tabs[i]);
+  tabs = reordered;
+  if (changed) renderTabs();
   scheduleSave();
 }
 
@@ -3663,6 +3779,7 @@ function sanitizeTab(t) {
     history: Array.isArray(t.history) ? t.history : [],
     pages,
     currentId,
+    pinned: !!t.pinned,
   };
 }
 
@@ -3998,6 +4115,18 @@ els.tabMenu.addEventListener('click', (e) => {
 els.tabSelectAll.addEventListener('click', selectAllTabs);
 els.tabSelectClose.addEventListener('click', closeSelectedTabs);
 els.tabSelectDone.addEventListener('click', exitTabSelect);
+
+// Ctrl+K tab switcher wiring
+if (els.tabSwitcher) els.tabSwitcher.addEventListener('click', (e) => { if (e.target === els.tabSwitcher) closeTabSwitcher(); });
+if (els.tabSwitcherInput) {
+  els.tabSwitcherInput.addEventListener('input', () => { tabSwitcherIdx = 0; renderTabSwitcher(); });
+  els.tabSwitcherInput.addEventListener('keydown', (e) => {
+    if (e.key === 'ArrowDown') { e.preventDefault(); moveTabSwitcher(1); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); moveTabSwitcher(-1); }
+    else if (e.key === 'Enter') { e.preventDefault(); chooseTabSwitcher(); }
+    else if (e.key === 'Escape') { e.preventDefault(); closeTabSwitcher(); }
+  });
+}
 window.addEventListener('click', () => { if (els.tabMenu && !els.tabMenu.hidden) closeTabMenu(); });
 window.addEventListener('contextmenu', () => { if (els.tabMenu && !els.tabMenu.hidden) closeTabMenu(); });
 window.addEventListener('blur', () => closeTabMenu());
@@ -4241,13 +4370,15 @@ els.synthInput.addEventListener('keydown', (e) => {
 
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') {
+    if (tabSwitcherIsOpen()) { closeTabSwitcher(); return; }
     if (els.agentsView.classList.contains('open')) { closeAgents(); return; }
     if (els.schedView.classList.contains('open')) { closeSched(); return; }
     if (els.mapView.classList.contains('open')) { closeMap(); return; }
     if (els.settingsModal.classList.contains('open')) { closeSettings(); return; }
     if (els.libraryDrawer.classList.contains('open')) { closeDrawer(); return; }
   }
-  if (e.ctrlKey && e.key === 't') { e.preventDefault(); newTab(true); }
+  if ((e.ctrlKey || e.metaKey) && (e.key === 'k' || e.key === 'K')) { e.preventDefault(); openTabSwitcher(); }
+  else if (e.ctrlKey && e.key === 't') { e.preventDefault(); newTab(true); }
   else if (e.ctrlKey && e.key === 'w') { e.preventDefault(); if (activeId) closeTab(activeId); }
   else if (e.altKey && e.key === 'ArrowLeft') { e.preventDefault(); goBack(); }
   else if (e.altKey && e.key === 'ArrowRight') { e.preventDefault(); goForward(); }

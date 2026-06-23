@@ -27,6 +27,7 @@
     </div>
     <div id="tab-menu" class="ctx-menu" hidden>
       <button data-act="new">New tab</button>
+      <button data-act="pin">Pin tab</button>
       <button data-act="close">Close tab</button>
       <button data-act="others">Close other tabs</button>
       <button data-act="right">Close tabs to the right</button>
@@ -34,6 +35,15 @@
       <button data-act="layout">Switch to vertical tabs</button>
       <button data-act="select">Select tabs…</button>
       <button data-act="all" class="ctx-danger">Close all tabs</button>
+    </div>
+
+    <!-- Ctrl+K tab switcher (command palette for tabs) -->
+    <div id="tab-switcher" class="palette" hidden>
+      <div class="palette-card">
+        <input id="tab-switcher-input" type="text" autocomplete="off" spellcheck="false"
+               placeholder="Switch to tab…  (type to filter, ↑↓ to move, Enter to open)" />
+        <div id="tab-switcher-list" class="palette-list"></div>
+      </div>
     </div>
 
     <div id="main">
