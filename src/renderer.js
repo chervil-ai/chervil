@@ -150,6 +150,7 @@ const els = {
   spaceSelect: document.getElementById('space-select'),
   newSpaceBtn: document.getElementById('new-space-btn'),
   synthesizeBtn: document.getElementById('synthesize-btn'),
+  publishSpaceBtn: document.getElementById('publish-space-btn'),
   newSpaceRow: document.getElementById('new-space-row'),
   newSpaceName: document.getElementById('new-space-name'),
   createSpaceBtn: document.getElementById('create-space-btn'),
@@ -3294,6 +3295,79 @@ function synthesizeSpace(query) {
   });
 }
 
+// Publish every page in the active Space to the web, then a styled index page
+// linking them all. Returns the index URL (the shareable Space link).
+async function publishCurrentSpace() {
+  const items = spaceItems();
+  const sp = activeSpace();
+  const spaceName = sp ? sp.name : 'My Space';
+  if (!items.length) { toast(`"${spaceName}" has no pages to publish.`); return; }
+  if (!settings.publishToken) { toast('Add a publish token in Settings → Publishing.'); return; }
+  if (!window.chervil.publishPage) { toast('Publishing isn’t available in this build.'); return; }
+  const pages = items.filter((it) => it.html);
+  if (!pages.length) { toast('No composed pages in this Space to publish.'); return; }
+  if (!confirm(`Publish all ${pages.length} page${pages.length === 1 ? '' : 's'} in "${spaceName}" to the web?`)) return;
+
+  const token = settings.publishToken;
+  const baseUrl = settings.publishBase || 'https://getchervil.com';
+  toast(`Publishing ${pages.length} page${pages.length === 1 ? '' : 's'}…`);
+  const published = [];
+  for (const it of pages) {
+    try {
+      const res = await window.chervil.publishPage({ html: it.html, title: it.title || it.query || 'Chervil page', token, baseUrl });
+      if (res && res.ok && res.url) published.push({ title: it.title || it.query || 'Untitled page', url: res.url, createdAt: it.createdAt });
+    } catch { /* skip this page, keep going */ }
+  }
+
+  closeDrawer();
+  const tab = activeTab();
+  if (!published.length) {
+    if (tab) addMessage(tab, 'bot', `Couldn’t publish "${spaceName}". Check your publish token and base URL in Settings → Publishing.`, 'error');
+    return;
+  }
+  let indexUrl = '';
+  try {
+    const res = await window.chervil.publishPage({ html: buildSpaceIndexHtml(spaceName, published), title: spaceName, token, baseUrl });
+    if (res && res.ok && res.url) indexUrl = res.url;
+  } catch { /* index failed; pages are still up */ }
+
+  const n = published.length;
+  if (indexUrl) {
+    if (tab) addMessage(tab, 'bot', `Published "${spaceName}" — ${n} page${n === 1 ? '' : 's'} live at ${indexUrl}`);
+    try { await navigator.clipboard.writeText(indexUrl); toast('Space published — index link copied to clipboard.'); } catch { toast('Space published.'); }
+  } else {
+    if (tab) addMessage(tab, 'bot', `Published ${n} page${n === 1 ? '' : 's'} from "${spaceName}", but the index page couldn’t be created.`, 'error');
+  }
+}
+
+// A self-contained index page listing each published page in a Space.
+function buildSpaceIndexHtml(name, pages) {
+  const esc = (s) => String(s == null ? '' : s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  const rows = pages.map((p) => {
+    const when = p.createdAt ? new Date(p.createdAt).toLocaleDateString() : '';
+    return `<li><a href="${esc(p.url)}">${esc(p.title)}</a>${when ? `<span class="when">${esc(when)}</span>` : ''}</li>`;
+  }).join('');
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${esc(name)} — Chervil</title>
+<style>
+*{box-sizing:border-box}
+body{font:16px/1.6 system-ui,-apple-system,"Segoe UI",sans-serif;max-width:680px;margin:0 auto;padding:48px 24px;color:#1c2b22;background:#f7faf7}
+h1{font-size:28px;margin:0 0 4px}
+.sub{color:#5b6b60;margin:0 0 28px;font-size:14px}
+ul{list-style:none;padding:0;margin:0;display:flex;flex-direction:column;gap:10px}
+li{background:#fff;border:1px solid #e2ece4;border-radius:12px;padding:14px 16px;display:flex;justify-content:space-between;align-items:center;gap:12px}
+a{color:#2e8b57;text-decoration:none;font-weight:600}
+a:hover{text-decoration:underline}
+.when{color:#8aa093;font-size:12px;flex:none}
+footer{margin-top:32px;color:#8aa093;font-size:13px;text-align:center}
+</style></head>
+<body>
+<h1>🌿 ${esc(name)}</h1>
+<p class="sub">${pages.length} page${pages.length === 1 ? '' : 's'} · published with Chervil</p>
+<ul>${rows}</ul>
+<footer>Made with Chervil</footer>
+</body></html>`;
+}
+
 function openLibraryItem(item) {
   const rootId = uid();
   const tab = {
@@ -4417,6 +4491,7 @@ els.synthesizeBtn.addEventListener('click', () => {
   if (!els.synthRow.hidden) { els.synthInput.value = ''; els.synthInput.focus(); }
 });
 els.synthGo.addEventListener('click', () => { els.synthRow.hidden = true; synthesizeSpace(els.synthInput.value); });
+if (els.publishSpaceBtn) els.publishSpaceBtn.addEventListener('click', publishCurrentSpace);
 els.synthInput.addEventListener('keydown', (e) => {
   if (e.key === 'Enter') { e.preventDefault(); els.synthRow.hidden = true; synthesizeSpace(els.synthInput.value); }
   else if (e.key === 'Escape') { els.synthRow.hidden = true; }

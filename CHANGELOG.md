@@ -36,6 +36,9 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   composed interactive page (clock, calculator, converter…), not just lessons and
   quizzes. Self-contained pages publish their HTML directly; pages that call Sprig
   at runtime degrade gracefully when hosted. New `chervil:publish-page` endpoint.
+- **Publish a whole Space** — a **🌐 Publish** button in the History drawer's
+  Space bar publishes every page in the active Space, then a styled index page
+  linking them all, and copies the shareable index URL.
 - **Minimal publish service** (`server/`) — a zero-dependency Node service that
   stores and serves published page HTML, so *Publish to web* works without the
   full hosted tier. Run `node server/server.js`, point Settings → Publishing at it.
