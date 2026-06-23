@@ -6,6 +6,13 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.2.0] — 2026-06-23
+
+A platform release. Chervil grows past "build interactive pages" into a tool that
+**publishes anything** you make, **syncs across your computers**, pulls in your
+own **files and folders**, **knows your machine**, and tames heavy sessions with
+real tab management — plus a richer browser extension.
+
 ### Added
 - **Sync between computers (free folder-sync)** — point Chervil's data (tabs,
   history, Spaces, agents) at a folder your cloud client already syncs
