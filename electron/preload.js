@@ -78,6 +78,11 @@ contextBridge.exposeInMainWorld('chervil', {
   /** Read-only extended OS details — Windows edition/build, update history, GPU, etc. */
   systemDetails: () => ipcRenderer.invoke('chervil:system-details'),
 
+  /** Sync folder (#1): point the state file at a synced folder, read it, or unlink. */
+  getSyncFolder: () => ipcRenderer.invoke('chervil:get-sync-folder'),
+  setSyncFolder: () => ipcRenderer.invoke('chervil:set-sync-folder'),
+  clearSyncFolder: () => ipcRenderer.invoke('chervil:clear-sync-folder'),
+
   /** Export a composed page as PDF via a native save dialog. */
   exportPdf: (payload) => ipcRenderer.invoke('chervil:export-pdf', payload),
 

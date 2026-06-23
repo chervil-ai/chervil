@@ -366,6 +366,22 @@
       </section>
 
       <section class="setting-group">
+        <h3>Sync between computers</h3>
+        <p class="group-hint">Point Chervil's data (tabs, history, Spaces, agents) at a folder your cloud client already syncs — inside <b>OneDrive</b>, <b>Google Drive</b>, or <b>Dropbox</b>. Set the <i>same</i> folder on each computer and your sessions follow you. Note: API keys aren't synced (they're encrypted per-machine — re-enter once per computer), and running Chervil on two machines at once is last-writer-wins.</p>
+        <div class="prov-block">
+          <label class="field">
+            <span class="field-label">Sync folder</span>
+            <span class="field-row">
+              <input id="sync-folder" type="text" readonly placeholder="Not syncing — stored on this computer only" />
+              <button id="sync-choose" type="button" class="lib-btn primary">Choose…</button>
+              <button id="sync-clear" type="button" class="lib-btn" hidden>Stop</button>
+            </span>
+            <small id="sync-status" class="field-note">Your data is stored locally on this computer.</small>
+          </label>
+        </div>
+      </section>
+
+      <section class="setting-group">
         <h3>Appearance</h3>
         <p class="group-hint">Choose how tabs are arranged. Either way, you can click-hold-drag a tab to reorder it, just like a web browser.</p>
         <label class="field">

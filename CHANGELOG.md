@@ -7,6 +7,13 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- **Sync between computers (free folder-sync)** — point Chervil's data (tabs,
+  history, Spaces, agents) at a folder your cloud client already syncs
+  (OneDrive / Google Drive / Dropbox) via Settings → "Sync between computers".
+  Set the same folder on each machine and your sessions follow you. Safe by
+  design: local fallback if the folder is offline, seed-or-adopt on setup, and a
+  copy-back-to-local on unlink. Keys stay machine-local (not synced). Pro
+  account-sync is the phase-2 path ([RFC 0005](docs/rfcs/0005-sync-between-computers.md)).
 - **Computer info (read-only OS introspection)** — ask Sprig "check my computer",
   "how much RAM/disk", "what Windows version am I on", or "when did Windows Update
   last run" and it composes a real dashboard from live machine facts. Exposed to

@@ -104,6 +104,10 @@ const els = {
   sttModel: document.getElementById('stt-model'),
   publishToken: document.getElementById('publish-token'),
   publishBase: document.getElementById('publish-base'),
+  syncFolder: document.getElementById('sync-folder'),
+  syncChoose: document.getElementById('sync-choose'),
+  syncClear: document.getElementById('sync-clear'),
+  syncStatus: document.getElementById('sync-status'),
   publishSave: document.getElementById('publish-save'),
   publishStatus: document.getElementById('publish-status'),
   sttKeyInput: document.getElementById('stt-key-input'),
@@ -3743,11 +3747,55 @@ function refreshKeyStatus() {
 
 function openSettings() {
   applySettingsToUI();
+  renderSyncFolder();
   els.settingsModal.classList.add('open');
 }
 
 function closeSettings() {
   els.settingsModal.classList.remove('open');
+}
+
+// ---- Sync folder (#1: free folder-sync on-ramp) ----
+async function renderSyncFolder() {
+  if (!els.syncFolder || !window.chervil.getSyncFolder) return;
+  try {
+    const res = await window.chervil.getSyncFolder();
+    const folder = res && res.ok ? res.folder : null;
+    if (folder) {
+      els.syncFolder.value = folder;
+      els.syncStatus.textContent = 'Syncing here. Set the same folder on your other computers.';
+      if (els.syncClear) els.syncClear.hidden = false;
+    } else {
+      els.syncFolder.value = '';
+      els.syncStatus.textContent = 'Your data is stored locally on this computer.';
+      if (els.syncClear) els.syncClear.hidden = true;
+    }
+  } catch { /* ignore */ }
+}
+
+async function chooseSyncFolder() {
+  if (!window.chervil.setSyncFolder) { toast('Sync isn’t available in this build.'); return; }
+  const res = await window.chervil.setSyncFolder();
+  if (!res || res.canceled) return;
+  if (!res.ok) { toast(`Couldn’t set sync folder: ${res.error || 'unknown error'}`); return; }
+  await renderSyncFolder();
+  if (res.adopted) {
+    // That folder already holds synced Chervil data — reload to load it (re-runs
+    // init → loadState from the now-synced path), replacing this machine's session.
+    if (confirm('That folder already has synced Chervil data. Load it now? Your current tabs on this computer will be replaced by the synced session.')) {
+      location.reload();
+    }
+  } else {
+    toast('Syncing to that folder. Set the same folder on your other computers.');
+  }
+}
+
+async function clearSyncFolder() {
+  if (!window.chervil.clearSyncFolder) return;
+  if (!confirm('Stop syncing? Your data stays on this computer (copied back locally).')) return;
+  const res = await window.chervil.clearSyncFolder();
+  if (res && res.ok) { await renderSyncFolder(); toast('Stopped syncing — your data is local again.'); }
+  else toast(`Couldn’t stop syncing: ${(res && res.error) || 'unknown error'}`);
 }
 
 // ---- Persistence ----
@@ -4237,6 +4285,10 @@ if (els.publishSave) els.publishSave.addEventListener('click', () => {
   toast('Publishing settings saved.');
 });
 if (els.voiceAutosend) els.voiceAutosend.addEventListener('change', () => { settings.voiceAutosend = els.voiceAutosend.checked; scheduleSave(); });
+
+// Sync folder (#1)
+if (els.syncChoose) els.syncChoose.addEventListener('click', chooseSyncFolder);
+if (els.syncClear) els.syncClear.addEventListener('click', clearSyncFolder);
 
 // Listening — "Hey Sprig"
 if (els.wakeToggle) els.wakeToggle.addEventListener('change', async () => {

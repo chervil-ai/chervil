@@ -1457,8 +1457,34 @@ ipcMain.handle('chervil:save-page', async (event, payload) => {
 });
 
 // --- Persist & restore session state (tabs, prompts, pages) --------------
-function stateFile() {
+function defaultStateFile() {
   return path.join(app.getPath('userData'), 'chervil-state.json');
+}
+
+// Machine-local config (the pointer to a custom/synced state location). Must live
+// OUTSIDE the synced state file itself, and never syncs — each machine sets its own.
+function configFile() {
+  return path.join(app.getPath('userData'), 'chervil-config.json');
+}
+function readConfig() {
+  try { return JSON.parse(fs.readFileSync(configFile(), 'utf8')) || {}; }
+  catch { return {}; }
+}
+function writeConfig(cfg) {
+  try { fs.writeFileSync(configFile(), JSON.stringify(cfg), 'utf8'); return true; }
+  catch { return false; }
+}
+
+// The active state file: a user-chosen sync location if set AND its folder is
+// reachable, otherwise the local default. Falling back when the sync folder is
+// offline (unmounted drive, paused cloud client) avoids breaking save/load.
+function stateFile() {
+  const cfg = readConfig();
+  if (cfg.statePath) {
+    const dir = path.dirname(cfg.statePath);
+    try { if (fs.existsSync(dir)) return cfg.statePath; } catch { /* fall through */ }
+  }
+  return defaultStateFile();
 }
 
 // Pre-rename state file (in the old per-app folder); migrated forward on first save.
@@ -1469,6 +1495,8 @@ function legacyStateFile() {
 ipcMain.handle('chervil:load-state', async () => {
   try {
     let p = stateFile();
+    // If a configured sync file isn't there yet, fall back to local, then legacy.
+    if (!fs.existsSync(p) && fs.existsSync(defaultStateFile())) p = defaultStateFile();
     if (!fs.existsSync(p) && fs.existsSync(legacyStateFile())) p = legacyStateFile();
     if (!fs.existsSync(p)) return null;
     return JSON.parse(fs.readFileSync(p, 'utf8'));
@@ -1480,6 +1508,60 @@ ipcMain.handle('chervil:load-state', async () => {
 ipcMain.handle('chervil:save-state', async (_event, state) => {
   try {
     fs.writeFileSync(stateFile(), JSON.stringify(state), 'utf8');
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: String(err && err.message ? err.message : err) };
+  }
+});
+
+// --- Sync folder (free folder-sync on-ramp for #1) ----------------------
+// Point Chervil's state file at a desktop-synced folder (OneDrive / Google Drive
+// / Dropbox) so it rides their sync to your other machines. Set the same folder
+// on each machine. API keys are NOT synced (machine-encrypted via safeStorage).
+ipcMain.handle('chervil:get-sync-folder', async () => {
+  const cfg = readConfig();
+  if (cfg.statePath) return { ok: true, folder: path.dirname(cfg.statePath), path: cfg.statePath };
+  return { ok: true, folder: null };
+});
+
+ipcMain.handle('chervil:set-sync-folder', async (event) => {
+  const win = BrowserWindow.fromWebContents(event.sender);
+  const { canceled, filePaths } = await dialog.showOpenDialog(win, {
+    title: 'Choose a sync folder (e.g. inside OneDrive or Google Drive)',
+    properties: ['openDirectory'],
+  });
+  if (canceled || !filePaths || !filePaths.length) return { ok: false, canceled: true };
+  const folder = filePaths[0];
+  const target = path.join(folder, 'chervil-state.json');
+  try {
+    const adopted = fs.existsSync(target);
+    if (!adopted) {
+      // Seed the new location from the current state so nothing is lost.
+      const cur = stateFile();
+      const seed = fs.existsSync(cur) ? fs.readFileSync(cur, 'utf8') : '{}';
+      fs.writeFileSync(target, seed, 'utf8');
+    }
+    const cfg = readConfig();
+    cfg.statePath = target;
+    if (!writeConfig(cfg)) return { ok: false, error: 'Could not save the sync setting.' };
+    // adopted === true means an existing synced file was found; the renderer should
+    // reload to pick it up (it has stale in-memory state from this machine).
+    return { ok: true, folder, path: target, adopted };
+  } catch (err) {
+    return { ok: false, error: String(err && err.message ? err.message : err) };
+  }
+});
+
+ipcMain.handle('chervil:clear-sync-folder', async () => {
+  try {
+    const cfg = readConfig();
+    const synced = cfg.statePath;
+    // Copy the synced state back to local so the current data stays after unlinking.
+    try {
+      if (synced && fs.existsSync(synced)) fs.copyFileSync(synced, defaultStateFile());
+    } catch { /* best effort */ }
+    delete cfg.statePath;
+    writeConfig(cfg);
     return { ok: true };
   } catch (err) {
     return { ok: false, error: String(err && err.message ? err.message : err) };
