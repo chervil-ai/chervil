@@ -59,8 +59,12 @@ jobs:
           notes="Chervil v$v — alpha, building in public. Windows installer (run-from-source still works too). The setup wizard can set your API keys, default provider, \"About you\" profile, and run-at-startup."
           if gh release view "v$v" >/dev/null 2>&1; then
             gh release upload "v$v" "$asset" --clobber
+            # Make sure an existing (e.g. pre-created) release is published as Latest.
+            gh release edit "v$v" --prerelease=false --latest
           else
-            gh release create "v$v" "$asset" --title "Chervil v$v" --notes "$notes" --prerelease
+            # Publish as a full, Latest release so getchervil.com's /releases/latest
+            # download link always tracks the newest version.
+            gh release create "v$v" "$asset" --title "Chervil v$v" --notes "$notes" --latest
           fi
 
       - name: Upload installer as build artifact
