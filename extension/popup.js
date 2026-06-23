@@ -5,8 +5,9 @@ async function currentTab() {
   return t || {};
 }
 
-function deepLink({ url, title, text }) {
+function deepLink({ url, title, text, action }) {
   const p = new URLSearchParams();
+  if (action) p.set("action", action);
   if (text) p.set("text", text);
   if (url) p.set("url", url);
   if (title) p.set("title", title);
@@ -20,7 +21,12 @@ function openInChervil(link) {
 
 document.getElementById("askpage").addEventListener("click", async () => {
   const t = await currentTab();
-  openInChervil(deepLink({ url: t.url, title: t.title }));
+  openInChervil(deepLink({ action: "summarize", url: t.url, title: t.title }));
+});
+
+document.getElementById("keypage").addEventListener("click", async () => {
+  const t = await currentTab();
+  openInChervil(deepLink({ action: "keypoints", url: t.url, title: t.title }));
 });
 
 document.getElementById("askq").addEventListener("click", async () => {

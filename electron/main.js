@@ -322,9 +322,19 @@ function handleChervilUrl(raw) {
     const text = (u.searchParams.get('text') || '').trim();
     const url = (u.searchParams.get('url') || '').trim();
     const title = (u.searchParams.get('title') || '').trim();
+    const action = (u.searchParams.get('action') || '').trim().toLowerCase();
     const where = title ? `${title} (${url})` : url;
-    if (text) prompt = url ? `${text}\n\n— from ${where}` : text;
-    else if (url) prompt = `Summarize this web page and pull out the key points: ${where}`;
+    const from = url ? `\n\n— from ${where}` : '';
+    if (text) {
+      // Selection-based actions.
+      if (action === 'explain') prompt = `Explain this clearly and simply, for a general reader:\n\n“${text}”${from}`;
+      else if (action === 'keypoints') prompt = `Pull out the key points as a tight bulleted list:\n\n“${text}”${from}`;
+      else prompt = url ? `${text}${from}` : text;
+    } else if (url) {
+      // Page/link actions.
+      if (action === 'keypoints') prompt = `Pull out the key points / TL;DR of this web page as a tight bulleted list: ${where}`;
+      else prompt = `Summarize this web page and pull out the key points: ${where}`;
+    }
   } catch { /* malformed link */ }
   if (prompt) deliverPrompt(prompt);
 }

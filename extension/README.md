@@ -6,13 +6,20 @@ opens the app via a `chervil://` deep link (the app composes the answer).
 
 ## How it works
 
-- **Toolbar popup** — type a question, or "Summarize this page".
-- **Right-click** — "Ask Sprig about this page" / "Ask Sprig about ‘selection’".
+- **Toolbar popup** — type a question, or one-tap **Summarize** / **Key points**.
+- **Right-click → Ask Sprig** (grouped submenu):
+  - *Page:* About this page · Summarize this page · Key points
+  - *Selection:* About “…” · Explain “…” simply · Key points from “…”
+  - *Link:* Open this link in Chervil
+- **Keyboard:** `Alt+Shift+S` summarizes the current page (rebindable at
+  `chrome://extensions/shortcuts`).
 
-Either builds a `chervil://ask?url=…&title=…&text=…` link and opens it. Chervil
-(the desktop app, which registers the `chervil://` protocol) focuses, drops the
-prompt into a new tab, and composes the answer. If Chervil isn't installed, the
-browser shows nothing to open — the popup has a **Get the app** link.
+Each builds a `chervil://ask?url=…&title=…&text=…&action=…` link and opens it.
+The optional `action` (`summarize`, `keypoints`, `explain`) shapes the prompt the
+app composes. Chervil (the desktop app, which registers the `chervil://`
+protocol) focuses, drops the prompt into a new tab, and composes the answer. If
+Chervil isn't installed, the browser shows nothing to open — the popup has a
+**Get the app** link.
 
 ## Install (unpacked, for dev)
 

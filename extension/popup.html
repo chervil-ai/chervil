@@ -9,6 +9,7 @@
     button { width: 100%; border: 0; border-radius: 8px; padding: 9px; font: inherit; font-weight: 600; cursor: pointer; }
     .primary { background: #7be0a3; color: #0b0d12; }
     .ghost { background: transparent; border: 1px solid rgba(255,255,255,.15); color: #e6e6e6; }
+    .row { display: flex; gap: 8px; }
     .or { text-align: center; color: #7c8595; font-size: 11px; margin: 10px 0; }
     .sub { font-size: 12px; color: #9aa3b2; margin: 12px 0 0; text-align: center; }
     a { color: #7be0a3; }
@@ -19,7 +20,10 @@
   <input id="q" placeholder="Ask something about this page…" />
   <button id="askq" class="primary">Ask Sprig</button>
   <div class="or">or</div>
-  <button id="askpage" class="ghost">Summarize this page</button>
+  <div class="row">
+    <button id="askpage" class="ghost">Summarize</button>
+    <button id="keypage" class="ghost">Key points</button>
+  </div>
   <p class="sub">No Chervil yet? <a id="get" href="#" target="_blank">Get the app →</a></p>
   <script src="popup.js"></script>
 </body>

@@ -7,6 +7,11 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- **Browser extension v0.2** — a grouped **Ask Sprig** right-click submenu for
+  pages, selections, and links, with **Summarize**, **Key points**, and **Explain
+  simply** actions; one-tap **Summarize**/**Key points** in the popup; and an
+  `Alt+Shift+S` shortcut to summarize the current page. Actions ride a new
+  `action=` deep-link param that shapes the prompt the app composes.
 - **Tab switcher (Ctrl+K)** — a command palette to jump to any tab by title;
   type to filter, ↑/↓ to move, Enter to open. Tames large tab counts.
 - **Pinned tabs** — right-click → Pin. Pinned tabs sort to the front, show 📌,
