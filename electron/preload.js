@@ -72,6 +72,12 @@ contextBridge.exposeInMainWorld('chervil', {
   listFolder: (payload) => ipcRenderer.invoke('chervil:list-folder', payload),
   readSourceFiles: (payload) => ipcRenderer.invoke('chervil:read-source-files', payload),
 
+  /** Read-only machine info for composed pages (window.chervil.info bridge). */
+  systemInfo: () => ipcRenderer.invoke('chervil:system-info'),
+
+  /** Read-only extended OS details — Windows edition/build, update history, GPU, etc. */
+  systemDetails: () => ipcRenderer.invoke('chervil:system-details'),
+
   /** Export a composed page as PDF via a native save dialog. */
   exportPdf: (payload) => ipcRenderer.invoke('chervil:export-pdf', payload),
 

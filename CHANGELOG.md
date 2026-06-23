@@ -7,6 +7,14 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- **Computer info (read-only OS introspection)** — ask Sprig "check my computer",
+  "how much RAM/disk", "what Windows version am I on", or "when did Windows Update
+  last run" and it composes a real dashboard from live machine facts. Exposed to
+  composed pages via the applet bridge: `window.chervil.info()` (CPU, RAM, disk,
+  uptime, network, versions) and `window.chervil.details()` (Windows
+  edition/build, install date, last boot, Windows Update history, GPU, battery,
+  manufacturer/model, BIOS). Strictly read-only — fixed `Get-*`/registry queries;
+  no settings changes or arbitrary commands.
 - **Browser extension v0.2** — a grouped **Ask Sprig** right-click submenu for
   pages, selections, and links, with **Summarize**, **Key points**, and **Explain
   simply** actions; one-tap **Summarize**/**Key points** in the popup; and an

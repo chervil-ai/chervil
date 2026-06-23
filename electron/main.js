@@ -3,6 +3,7 @@
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
+const { execFile } = require('child_process');
 const { app, BrowserWindow, ipcMain, dialog, safeStorage, Notification, Tray, Menu, globalShortcut, screen, shell, clipboard } = require('electron');
 
 // Load .env from the project root (one level up from /electron).
@@ -781,6 +782,107 @@ ipcMain.handle('chervil:read-source-files', async (_event, payload) => {
     } catch { skipped.push(name); }
   }
   return { ok: true, files, skipped };
+});
+
+// --- Read-only computer info (agentic OS introspection, phase 1) ---------
+// Lets a composed page call window.chervil.info() to show real machine facts
+// (specs, memory, disk, uptime). READ ONLY — no settings changes, no commands.
+ipcMain.handle('chervil:system-info', async () => {
+  try {
+    const cpus = os.cpus() || [];
+    const nets = os.networkInterfaces() || {};
+    const ipv4 = [];
+    for (const name of Object.keys(nets)) {
+      for (const ni of nets[name] || []) {
+        if (ni && ni.family === 'IPv4' && !ni.internal) ipv4.push(ni.address);
+      }
+    }
+    let disk = null;
+    try {
+      const st = fs.statfsSync(os.homedir());
+      const total = st.blocks * st.bsize;
+      const free = st.bfree * st.bsize;
+      disk = { total, free, used: total - free };
+    } catch { /* statfs not available on this platform/Node */ }
+    let username = '';
+    try { username = os.userInfo().username; } catch { /* ignore */ }
+    const mem = { total: os.totalmem(), free: os.freemem() };
+    return {
+      ok: true,
+      info: {
+        platform: process.platform,
+        osType: os.type(),
+        osRelease: os.release(),
+        arch: process.arch,
+        hostname: os.hostname(),
+        username,
+        cpuModel: (cpus[0] && cpus[0].model ? String(cpus[0].model) : 'Unknown CPU').trim(),
+        cpuCores: cpus.length,
+        memory: mem,
+        memoryUsedPct: mem.total ? Math.round((1 - mem.free / mem.total) * 100) : null,
+        disk,
+        uptimeSec: Math.round(os.uptime()),
+        loadavg: typeof os.loadavg === 'function' ? os.loadavg() : [0, 0, 0],
+        ipv4,
+        versions: {
+          chervil: app.getVersion(),
+          electron: process.versions.electron,
+          node: process.versions.node,
+          chrome: process.versions.chrome,
+        },
+        capturedAt: new Date().toISOString(),
+      },
+    };
+  } catch (err) {
+    return { ok: false, error: String(err && err.message ? err.message : err) };
+  }
+});
+
+// --- Extended OS details (read-only, Windows) ---------------------------
+// Richer "Windows Settings"-style facts: OS edition/build, install date, last
+// boot, Windows Update history, GPU, battery, manufacturer/model, BIOS. Gathered
+// via a FIXED set of read-only PowerShell Get-* / registry reads — the model can
+// only trigger this; it never supplies commands. Nothing here changes state.
+const WIN_DETAILS_PS = `
+$ErrorActionPreference='SilentlyContinue'
+function D($d){ if($d){ try { ([datetime]$d).ToString('o') } catch { "$d" } } else { $null } }
+$os=Get-CimInstance Win32_OperatingSystem
+$cs=Get-CimInstance Win32_ComputerSystem
+$bios=Get-CimInstance Win32_BIOS
+$gpu=@(Get-CimInstance Win32_VideoController | ForEach-Object { $_.Name })
+$hf=Get-HotFix | Sort-Object InstalledOn -Descending | Select-Object -First 1
+$batt=Get-CimInstance Win32_Battery | Select-Object -First 1
+$au=(New-Object -ComObject Microsoft.Update.AutoUpdate).Results
+$disp=(Get-ItemProperty 'HKLM:\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion').DisplayVersion
+[pscustomobject]@{
+ edition=$os.Caption; displayVersion=$disp; version=$os.Version; build=$os.BuildNumber
+ installDate=(D $os.InstallDate); lastBoot=(D $os.LastBootUpTime)
+ manufacturer=$cs.Manufacturer; model=$cs.Model; bios=$bios.SMBIOSBIOSVersion; gpu=$gpu
+ lastHotfix=$hf.HotFixID; lastHotfixDate=(D $hf.InstalledOn)
+ lastUpdateInstall=(D $au.LastInstallationSuccessDate); lastUpdateCheck=(D $au.LastSearchSuccessDate)
+ batteryPct=$batt.EstimatedChargeRemaining
+} | ConvertTo-Json -Compress`;
+
+function runWindowsDetails() {
+  return new Promise((resolve) => {
+    const b64 = Buffer.from(WIN_DETAILS_PS, 'utf16le').toString('base64');
+    execFile('powershell.exe',
+      ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', b64],
+      { windowsHide: true, timeout: 15000, maxBuffer: 2 * 1024 * 1024 },
+      (err, stdout) => {
+        if (err && !stdout) return resolve({ ok: false, error: `Query failed: ${err.message}` });
+        try { resolve({ ok: true, details: JSON.parse(String(stdout || '{}')) }); }
+        catch (e) { resolve({ ok: false, error: `Couldn't parse system details: ${e.message}` }); }
+      });
+  });
+}
+
+ipcMain.handle('chervil:system-details', async () => {
+  if (process.platform !== 'win32') {
+    return { ok: true, details: { note: 'Extended OS details are currently Windows-only.', platform: process.platform } };
+  }
+  try { return await runWindowsDetails(); }
+  catch (err) { return { ok: false, error: String(err && err.message ? err.message : err) }; }
 });
 
 // --- System notifications: a Living page changed in the background -------

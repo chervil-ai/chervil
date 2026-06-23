@@ -359,7 +359,9 @@ const CHERVIL_RUNTIME = `<script>(function(){
   }
   window.chervil = {
     call: call,
-    ask: function(prompt){ return call('ask', { prompt: String(prompt || '') }); }
+    ask: function(prompt){ return call('ask', { prompt: String(prompt || '') }); },
+    info: function(){ return call('system_info'); },
+    details: function(){ return call('system_details'); }
   };
   // Back-compat: pages composed before the Chervil rename call window.parslee.*
   try { window.parslee = window.chervil; } catch(e){}
@@ -4433,6 +4435,16 @@ async function handleAppletTool(source, msg) {
       const res = await window.chervil.appletAsk({ prompt, config: providerConfig() });
       if (res && res.ok) reply({ ok: true, result: { text: res.text, sources: res.sources || [] } });
       else reply({ ok: false, error: (res && res.error) || 'Sprig could not answer.' });
+    } else if (msg.name === 'system_info') {
+      // Read-only machine facts for "check my computer" style pages.
+      const res = window.chervil.systemInfo ? await window.chervil.systemInfo() : null;
+      if (res && res.ok) reply({ ok: true, result: res.info });
+      else reply({ ok: false, error: (res && res.error) || 'Could not read system info.' });
+    } else if (msg.name === 'system_details') {
+      // Read-only extended OS facts (Windows edition/build, update history, GPU…).
+      const res = window.chervil.systemDetails ? await window.chervil.systemDetails() : null;
+      if (res && res.ok) reply({ ok: true, result: res.details });
+      else reply({ ok: false, error: (res && res.error) || 'Could not read system details.' });
     } else {
       reply({ ok: false, error: 'Unknown tool: ' + msg.name });
     }
