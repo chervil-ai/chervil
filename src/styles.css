@@ -331,6 +331,8 @@ html, body {
 #send:disabled { opacity: 0.45; cursor: default; transform: none; }
 /* While composing, #send becomes a Stop button. */
 #send.stop { background: linear-gradient(135deg, #ff6b6b, #c0392b); font-size: 15px; }
+/* Bookmark star: gold when the current page is bookmarked. */
+#bookmark-btn.on { color: #f4c542; }
 
 /* Composer icon button (attach) */
 .composer-icon {

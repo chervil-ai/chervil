@@ -7,6 +7,9 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- **Bookmarks** — a ☆ in the toolbar saves the current page or site (★ when saved);
+  a new **Bookmarks** tab in the History drawer lists them. Click to reopen (sites
+  navigate, composed-page bookmarks recompose); Remove to delete. Persists locally.
 - **Live omnibox + back/forward inside real sites** — when you browse a real
   website embedded in Chervil, the omnibox now tracks the current URL, the tab
   title follows the site, and Back/Forward step through that site's own history

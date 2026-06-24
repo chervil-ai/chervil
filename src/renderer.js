@@ -138,7 +138,9 @@ const els = {
   libraryClose: document.getElementById('library-close'),
   libraryList: document.getElementById('library-list'),
   libTabHistory: document.getElementById('lib-tab-history'),
+  libTabBookmarks: document.getElementById('lib-tab-bookmarks'),
   libTabTrash: document.getElementById('lib-tab-trash'),
+  bookmarkBtn: document.getElementById('bookmark-btn'),
   emptyTrash: document.getElementById('empty-trash'),
   libSelectToggle: document.getElementById('lib-select-toggle'),
   libSelectBar: document.getElementById('lib-select-bar'),
@@ -267,6 +269,7 @@ function providerConfig(agentOverride) {
 // Auto-collected library of composed pages, plus a trash bin.
 //   item = { id, createdAt, title, query, html, sources, conversation, history, spaceId }
 let library = { history: [], trash: [] };
+let bookmarks = []; // [{ id, key, kind:'site'|'page', url?, query?, title, at }]
 let drawerTab = 'history';
 // History multi-select (bulk delete) state.
 let librarySelectMode = false;
@@ -987,6 +990,7 @@ function renderCurrentPage() {
   }
   updateNavButtons();
   updatePlaceholder();
+  updateBookmarkStar();
 }
 
 // ---- Remix bar + Audio Overview ----
@@ -3598,15 +3602,65 @@ function renderSpaceBar() {
   }
 }
 
+// ---- Bookmarks ----
+// A stable key per entry so toggling/lookup is reliable (site → URL, page → query).
+function entryBookmarkKey(entry) {
+  if (!entry) return null;
+  if (entry.kind === 'navigate') return 'site:' + (entry.url || '');
+  if (entry.kind === 'page') return 'page:' + (entry.query || entry.title || '');
+  return null;
+}
+function updateBookmarkStar() {
+  if (!els.bookmarkBtn) return;
+  const entry = currentEntry(activeTab());
+  const key = entryBookmarkKey(entry);
+  const on = !!key && bookmarks.some((b) => b.key === key);
+  els.bookmarkBtn.disabled = !key;
+  els.bookmarkBtn.textContent = on ? '★' : '☆';
+  els.bookmarkBtn.classList.toggle('on', on);
+  els.bookmarkBtn.title = !key ? 'Bookmark' : on ? 'Remove bookmark' : 'Bookmark this page';
+}
+function toggleBookmark() {
+  const tab = activeTab();
+  const entry = currentEntry(tab);
+  const key = entryBookmarkKey(entry);
+  if (!key) return;
+  const idx = bookmarks.findIndex((b) => b.key === key);
+  if (idx >= 0) { bookmarks.splice(idx, 1); toast('Bookmark removed.'); }
+  else {
+    const bm = entry.kind === 'navigate'
+      ? { id: uid(), key, kind: 'site', url: entry.url, title: tab.title || hostOf(entry.url) || entry.url, at: Date.now() }
+      : { id: uid(), key, kind: 'page', query: entry.query || '', title: entry.title || tab.title || 'Saved page', at: Date.now() };
+    bookmarks.unshift(bm);
+    toast('Bookmarked.');
+  }
+  updateBookmarkStar();
+  if (els.libraryDrawer.classList.contains('open') && drawerTab === 'bookmarks') renderDrawer();
+  scheduleSave();
+}
+function openBookmark(b) {
+  closeDrawer();
+  if (b.kind === 'site' && b.url) { openUrlInTab(b.url); return; }
+  if (b.query) { newTab(true); submitQuery(b.query); return; }
+  toast('This bookmark can’t be opened.');
+}
+function removeBookmark(id) {
+  bookmarks = bookmarks.filter((b) => b.id !== id);
+  updateBookmarkStar();
+  renderDrawer();
+  scheduleSave();
+}
+
 function renderDrawer() {
   els.libTabHistory.classList.toggle('active', drawerTab === 'history');
   els.libTabTrash.classList.toggle('active', drawerTab === 'trash');
+  if (els.libTabBookmarks) els.libTabBookmarks.classList.toggle('active', drawerTab === 'bookmarks');
   els.emptyTrash.hidden = drawerTab !== 'trash';
   // Select mode only applies to History; leaving History cancels it.
   if (drawerTab !== 'history' && librarySelectMode) { librarySelectMode = false; selectedLibraryIds.clear(); }
   renderSpaceBar();
 
-  const items = drawerTab === 'history' ? spaceItems() : library.trash;
+  const items = drawerTab === 'history' ? spaceItems() : drawerTab === 'bookmarks' ? bookmarks : library.trash;
 
   // Toggle + select-bar visibility (History only).
   if (els.libSelectToggle) els.libSelectToggle.hidden = drawerTab !== 'history' || librarySelectMode || !items.length;
@@ -3625,7 +3679,9 @@ function renderDrawer() {
     empty.className = 'lib-empty';
     empty.textContent = drawerTab === 'history'
       ? 'No pages in this Space yet. Compose some, then synthesize.'
-      : 'Trash is empty.';
+      : drawerTab === 'bookmarks'
+        ? 'No bookmarks yet. Click ☆ in the toolbar to save a page or site.'
+        : 'Trash is empty.';
     els.libraryList.appendChild(empty);
     return;
   }
@@ -3648,10 +3704,14 @@ function renderDrawer() {
     main.className = 'lib-main';
     const title = document.createElement('div');
     title.className = 'lib-title';
-    title.textContent = item.title || item.query || 'Untitled page';
+    title.textContent = drawerTab === 'bookmarks'
+      ? `${item.kind === 'site' ? '🔗' : '📄'} ${item.title || item.url || 'Bookmark'}`
+      : (item.title || item.query || 'Untitled page');
     const meta = document.createElement('div');
     meta.className = 'lib-meta';
-    meta.textContent = relTime(item.createdAt);
+    meta.textContent = drawerTab === 'bookmarks'
+      ? (item.kind === 'site' ? item.url : 'Composed page')
+      : relTime(item.createdAt);
     main.appendChild(title);
     main.appendChild(meta);
     row.appendChild(main);
@@ -3662,6 +3722,15 @@ function renderDrawer() {
       // Whole row toggles selection; no per-row buttons.
       row.title = 'Toggle selection';
       row.addEventListener('click', () => toggleLibrarySelected(item.id));
+    } else if (drawerTab === 'bookmarks') {
+      main.title = 'Open';
+      main.style.cursor = 'pointer';
+      main.addEventListener('click', () => openBookmark(item));
+      const del = document.createElement('button');
+      del.className = 'lib-btn';
+      del.textContent = 'Remove';
+      del.addEventListener('click', () => removeBookmark(item.id));
+      actions.appendChild(del);
     } else if (drawerTab === 'history') {
       main.title = 'Open';
       main.style.cursor = 'pointer';
@@ -4059,7 +4128,7 @@ function scheduleSave() {
   if (saveTimer) clearTimeout(saveTimer);
   saveTimer = setTimeout(() => {
     saveTimer = null;
-    window.chervil.saveState({ tabs, activeId, settings, library, spaces, activeSpaceId, living, schedules, agents, activeAgentId });
+    window.chervil.saveState({ tabs, activeId, settings, library, bookmarks, spaces, activeSpaceId, living, schedules, agents, activeAgentId });
   }, 500);
 }
 
@@ -4124,6 +4193,7 @@ async function init() {
       trash: Array.isArray(restored.library.trash) ? restored.library.trash : [],
     };
   }
+  if (restored && Array.isArray(restored.bookmarks)) bookmarks = restored.bookmarks;
 
   // Spaces: restore, or migrate by creating a default Space and adopting any
   // previously-collected pages into it.
@@ -4679,7 +4749,9 @@ els.libraryDrawer.addEventListener('click', (e) => {
   if (e.target === els.libraryDrawer) closeDrawer();
 });
 els.libTabHistory.addEventListener('click', () => { drawerTab = 'history'; renderDrawer(); });
+if (els.libTabBookmarks) els.libTabBookmarks.addEventListener('click', () => { drawerTab = 'bookmarks'; renderDrawer(); });
 els.libTabTrash.addEventListener('click', () => { drawerTab = 'trash'; renderDrawer(); });
+if (els.bookmarkBtn) els.bookmarkBtn.addEventListener('click', toggleBookmark);
 els.emptyTrash.addEventListener('click', emptyTrash);
 if (els.libSelectToggle) els.libSelectToggle.addEventListener('click', enterLibrarySelect);
 if (els.libSelectAll) els.libSelectAll.addEventListener('click', selectAllLibrary);
