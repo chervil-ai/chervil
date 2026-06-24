@@ -114,6 +114,15 @@
         <!-- Real sites embed here -->
         <webview id="web-view" hidden></webview>
 
+        <!-- Find in page (Ctrl+F) -->
+        <div id="find-bar" hidden>
+          <input id="find-input" type="text" placeholder="Find in page…" spellcheck="false" autocomplete="off" />
+          <span id="find-count" class="find-count"></span>
+          <button id="find-prev" class="find-btn" title="Previous (Shift+Enter)">‹</button>
+          <button id="find-next" class="find-btn" title="Next (Enter)">›</button>
+          <button id="find-close" class="find-btn" title="Close (Esc)">✕</button>
+        </div>
+
         <!-- First-run / loading overlay -->
         <div id="overlay">
           <div class="overlay-card">

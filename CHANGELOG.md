@@ -7,6 +7,9 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- **Find in page (Ctrl+F)** — a find bar that searches the current page: real
+  sites use native find with a match count + next/prev; composed pages search via
+  the in-page runtime. Enter / Shift+Enter cycle matches, Esc closes.
 - **Reopen closed tab (Ctrl+Shift+T)** — restores recently-closed tabs with their
   full conversation and pages intact (keeps the last 12; pinned tabs return to the
   pinned group).

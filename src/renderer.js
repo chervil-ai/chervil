@@ -67,6 +67,12 @@ const els = {
   tabSwitcher: document.getElementById('tab-switcher'),
   tabSwitcherInput: document.getElementById('tab-switcher-input'),
   tabSwitcherList: document.getElementById('tab-switcher-list'),
+  findBar: document.getElementById('find-bar'),
+  findInput: document.getElementById('find-input'),
+  findCount: document.getElementById('find-count'),
+  findPrev: document.getElementById('find-prev'),
+  findNext: document.getElementById('find-next'),
+  findClose: document.getElementById('find-close'),
   back: document.getElementById('back-btn'),
   fwd: document.getElementById('fwd-btn'),
   navTip: document.getElementById('nav-tip'),
@@ -367,6 +373,15 @@ const CHERVIL_RUNTIME = `<script>(function(){
     else if(d.key === 'ArrowUp') window.scrollBy(0, -60);
     else if(d.key === 'Home') window.scrollTo(0, 0);
     else if(d.key === 'End') window.scrollTo(0, max);
+  });
+  // Find-in-page for composed pages: the parent forwards Ctrl+F queries here.
+  window.addEventListener('message', function(e){
+    var d = e.data;
+    if(!d || d.__chervil !== true || d.type !== 'find') return;
+    try {
+      if(!d.text){ var s = window.getSelection && window.getSelection(); if(s) s.removeAllRanges(); return; }
+      window.find(d.text, false, !!d.back, true, false, false, false);
+    } catch(_){}
   });
   function call(name, args){
     return new Promise(function(resolve, reject){
@@ -3016,6 +3031,38 @@ function runOmnibox(raw) {
   else handleComposerSubmit(text);
 }
 
+// ---- Find in page (Ctrl+F) ----
+let lastFindQuery = '';
+function findIsOpen() { return els.findBar && !els.findBar.hidden; }
+function openFind() {
+  if (!els.findBar) return;
+  els.findBar.hidden = false;
+  els.findInput.focus();
+  els.findInput.select();
+  if (els.findInput.value) runFind(true);
+}
+function closeFind() {
+  if (!els.findBar || els.findBar.hidden) return;
+  els.findBar.hidden = true;
+  els.findCount.textContent = '';
+  try { els.webview.stopFindInPage('clearSelection'); } catch { /* ignore */ }
+  try { if (els.frame.contentWindow) els.frame.contentWindow.postMessage({ __chervil: true, type: 'find', text: '' }, '*'); } catch { /* ignore */ }
+  lastFindQuery = '';
+}
+// Search the live site (webview, with a match count) or the composed page (iframe).
+function runFind(forward) {
+  const q = els.findInput.value;
+  if (!q) { els.findCount.textContent = ''; try { els.webview.stopFindInPage('clearSelection'); } catch {} lastFindQuery = ''; return; }
+  const entry = currentEntry(activeTab());
+  if (entry && entry.kind === 'navigate' && !els.webview.hidden) {
+    try { els.webview.findInPage(q, { forward, findNext: q === lastFindQuery }); } catch {}
+    lastFindQuery = q;
+  } else {
+    try { if (els.frame.contentWindow) els.frame.contentWindow.postMessage({ __chervil: true, type: 'find', text: q, back: !forward }, '*'); } catch {}
+    els.findCount.textContent = '';
+  }
+}
+
 function handleComposerSubmit(text) {
   const tab = activeTab();
   if (!tab || isTabBusy(tab.id) || agentRunning) return;
@@ -4634,6 +4681,22 @@ els.pageTitle.addEventListener('keydown', (e) => {
   else if (e.key === 'Escape') { e.preventDefault(); els.pageTitle.value = omniboxCanonical; els.pageTitle.blur(); }
 });
 
+// Find in page (Ctrl+F) wiring.
+if (els.findInput) {
+  els.findInput.addEventListener('input', () => runFind(true));
+  els.findInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); runFind(!e.shiftKey); }
+    else if (e.key === 'Escape') { e.preventDefault(); closeFind(); }
+  });
+}
+if (els.findNext) els.findNext.addEventListener('click', () => runFind(true));
+if (els.findPrev) els.findPrev.addEventListener('click', () => runFind(false));
+if (els.findClose) els.findClose.addEventListener('click', closeFind);
+if (els.webview) els.webview.addEventListener('found-in-page', (e) => {
+  const r = (e && e.result) || {};
+  if (typeof r.matches === 'number') els.findCount.textContent = r.matches ? `${r.activeMatchOrdinal || 1}/${r.matches}` : 'No matches';
+});
+
 // Keep the omnibox, tab title, and back/forward in sync as the user browses
 // inside an embedded real site (the webview's own navigation).
 function onWebviewNavigated(url) {
@@ -4993,6 +5056,7 @@ els.synthInput.addEventListener('keydown', (e) => {
 
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') {
+    if (findIsOpen()) { closeFind(); return; }
     if (tabSwitcherIsOpen()) { closeTabSwitcher(); return; }
     if (els.agentsView.classList.contains('open')) { closeAgents(); return; }
     if (els.schedView.classList.contains('open')) { closeSched(); return; }
@@ -5002,7 +5066,8 @@ document.addEventListener('keydown', (e) => {
     // Nothing else consumed Esc — stop the active tab if it's composing.
     if (activeId && isTabBusy(activeId)) { stopActiveCompose(); return; }
   }
-  if ((e.ctrlKey || e.metaKey) && (e.key === 'l' || e.key === 'L')) { e.preventDefault(); els.pageTitle.focus(); els.pageTitle.select(); }
+  if ((e.ctrlKey || e.metaKey) && (e.key === 'f' || e.key === 'F')) { e.preventDefault(); openFind(); }
+  else if ((e.ctrlKey || e.metaKey) && (e.key === 'l' || e.key === 'L')) { e.preventDefault(); els.pageTitle.focus(); els.pageTitle.select(); }
   else if ((e.ctrlKey || e.metaKey) && (e.key === 'k' || e.key === 'K')) { e.preventDefault(); openTabSwitcher(); }
   else if (e.ctrlKey && e.shiftKey && (e.key === 't' || e.key === 'T')) { e.preventDefault(); reopenClosedTab(); }
   else if (e.ctrlKey && e.key === 't') { e.preventDefault(); newTab(true); }
