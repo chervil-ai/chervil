@@ -3819,9 +3819,20 @@ function refreshKeyStatus() {
   }).catch(() => {});
 }
 
+// Settings topic tabs: show only the sections for the active group.
+function setSettingsTab(group) {
+  const modal = els.settingsModal;
+  modal.querySelectorAll('.settings-tab').forEach((b) => b.classList.toggle('active', b.dataset.sgroup === group));
+  modal.querySelectorAll('[data-sgroup]').forEach((el) => {
+    if (el.classList.contains('settings-tab')) return; // the tab buttons themselves
+    el.style.display = el.dataset.sgroup === group ? '' : 'none';
+  });
+}
+
 function openSettings() {
   applySettingsToUI();
   renderSyncFolder();
+  setSettingsTab('general');
   els.settingsModal.classList.add('open');
 }
 
@@ -4311,6 +4322,13 @@ els.profileInput.addEventListener('input', () => { settings.profile = els.profil
 // Settings
 els.settingsBtn.addEventListener('click', openSettings);
 els.settingsClose.addEventListener('click', closeSettings);
+{
+  const tabs = document.getElementById('settings-tabs');
+  if (tabs) tabs.addEventListener('click', (e) => {
+    const btn = e.target.closest('.settings-tab');
+    if (btn) setSettingsTab(btn.dataset.sgroup);
+  });
+}
 els.settingsModal.addEventListener('click', (e) => {
   if (e.target === els.settingsModal) closeSettings();
 });

@@ -1227,6 +1227,12 @@ html, body {
 
 .settings-version { text-align: center; color: var(--muted); font-size: 12px; margin: 18px 0 4px; }
 
+/* Settings topic tabs */
+.settings-tabs { display: flex; gap: 4px; flex-wrap: wrap; margin-bottom: 16px; border-bottom: 1px solid var(--border); }
+.settings-tab { background: transparent; border: 0; border-bottom: 2px solid transparent; color: var(--muted); font-size: 13px; font-weight: 600; padding: 8px 12px; cursor: pointer; }
+.settings-tab:hover { color: var(--text); }
+.settings-tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+
 /* History multi-select bar (mirrors #tab-select-bar) */
 #lib-select-bar { display: flex; align-items: center; gap: 8px; padding: 8px 12px; background: rgba(123, 224, 163, 0.10); border-bottom: 1px solid var(--border); font-size: 12px; color: var(--text); }
 #lib-select-bar[hidden] { display: none; }

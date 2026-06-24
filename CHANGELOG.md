@@ -11,6 +11,9 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   "🌿 Chervil v0.2.0"), and **Help → About Chervil** shows it in a dialog.
 
 ### Changed
+- **Settings organized into tabs** — the long Settings scroll is now grouped into
+  **General · AI · Voice · Publishing & Sync · You** tabs, so each topic is a short,
+  focused panel instead of one endless page.
 - **Cleaner window chrome** — the native File/Edit/View/Window/Help menu bar is
   replaced by a minimal menu (Edit/View/Help + About) and hidden by default
   (Alt reveals it). Standard accelerators (copy/paste, reload, zoom) still work.

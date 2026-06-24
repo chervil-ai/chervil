@@ -195,7 +195,15 @@
         <button id="settings-close" class="modal-close" title="Close">✕</button>
       </header>
 
-      <section class="setting-group">
+      <nav id="settings-tabs" class="settings-tabs">
+        <button class="settings-tab active" data-sgroup="general">General</button>
+        <button class="settings-tab" data-sgroup="ai">AI</button>
+        <button class="settings-tab" data-sgroup="voice">Voice</button>
+        <button class="settings-tab" data-sgroup="publishing">Publishing &amp; Sync</button>
+        <button class="settings-tab" data-sgroup="you">You</button>
+      </nav>
+
+      <section class="setting-group" data-sgroup="general">
         <h3>When you click a link in a composed page</h3>
         <label class="opt">
           <input type="radio" name="linkBehavior" value="smart" />
@@ -211,7 +219,7 @@
         </label>
       </section>
 
-      <section class="setting-group">
+      <section class="setting-group" data-sgroup="general">
         <h3>When you send a follow-up about the current page</h3>
         <label class="opt">
           <input type="radio" name="followupMode" value="auto" />
@@ -223,7 +231,7 @@
         </label>
       </section>
 
-      <section class="setting-group">
+      <section class="setting-group" data-sgroup="ai">
         <h3>Provider &amp; model — bring your own API</h3>
         <p class="group-hint">Switch providers to save money, work offline, or use a model you prefer. Each has trade-offs — pick what fits the task. Claude, Grok, Gemini, and OpenAI do live web grounding (real, cited sources); Azure and Ollama compose from the model's own knowledge. Claude also offers the full two-phase Deep Dive.</p>
 
@@ -293,7 +301,7 @@
         </div>
       </section>
 
-      <section class="setting-group">
+      <section class="setting-group" data-sgroup="voice">
         <h3>Audio narration (text-to-speech)</h3>
         <p class="group-hint">Used by the 🔊 Audio button on composed pages. Voices come from your operating system — look for ones labelled "Natural" or "Online" for the best quality.</p>
         <div class="prov-block">
@@ -317,7 +325,7 @@
         </div>
       </section>
 
-      <section class="setting-group">
+      <section class="setting-group" data-sgroup="voice">
         <h3>Voice input (speech-to-text)</h3>
         <p class="group-hint">Talk to Sprig with the 🎤 button in the chat box. Recordings are sent to a Whisper-compatible transcription service of your choice (OpenAI, Groq, Azure, or a local whisper server) — Claude can't transcribe audio, so this uses its own key. The audio is sent only to this endpoint, never stored.</p>
         <div class="prov-block">
@@ -345,7 +353,7 @@
         </div>
       </section>
 
-      <section class="setting-group">
+      <section class="setting-group" data-sgroup="publishing">
         <h3>Publishing (Chervil Pro)</h3>
         <p class="group-hint">Publish a lesson, quiz, or any interactive page (clock, calculator, converter…) to a shareable getchervil.com link. Sign in at <code>getchervil.com/me</code>, generate a publish token, and paste it here. Then use <b>🌐 Publish to web</b> from any page's Export menu. (Pages that call Sprig at runtime won't be interactive when hosted.)</p>
         <div class="prov-block">
@@ -365,7 +373,7 @@
         </div>
       </section>
 
-      <section class="setting-group">
+      <section class="setting-group" data-sgroup="publishing">
         <h3>Sync between computers</h3>
         <p class="group-hint">Point Chervil's data (tabs, history, Spaces, agents) at a folder your cloud client already syncs — inside <b>OneDrive</b>, <b>Google Drive</b>, or <b>Dropbox</b>. Set the <i>same</i> folder on each computer and your sessions follow you. Note: API keys aren't synced (they're encrypted per-machine — re-enter once per computer), and running Chervil on two machines at once is last-writer-wins.</p>
         <div class="prov-block">
@@ -381,7 +389,7 @@
         </div>
       </section>
 
-      <section class="setting-group">
+      <section class="setting-group" data-sgroup="general">
         <h3>Appearance</h3>
         <p class="group-hint">Choose how tabs are arranged. Either way, you can click-hold-drag a tab to reorder it, just like a web browser.</p>
         <label class="field">
@@ -400,7 +408,7 @@
         </label>
       </section>
 
-      <section class="setting-group">
+      <section class="setting-group" data-sgroup="general">
         <h3>Notifications</h3>
         <p class="group-hint">Living pages (the ● live control on a composed page) auto-refresh on a schedule. Chervil keeps refreshing them even when minimized or in the background.</p>
         <label class="toggle-row">
@@ -409,7 +417,7 @@
         </label>
       </section>
 
-      <section class="setting-group">
+      <section class="setting-group" data-sgroup="voice">
         <h3>Listening — “Hey Sprig”</h3>
         <p class="group-hint">Let Chervil listen for a wake word and pop the Quick-Ask bar so you can speak a request hands-free. Detection runs <strong>fully on-device</strong> and free (<a href="https://github.com/dscripka/openWakeWord" target="_blank" rel="noreferrer">openWakeWord</a>, no account or key) — your mic audio never leaves the machine until you actually speak a command, which is then transcribed by your configured voice-input service above.</p>
         <label class="toggle-row">
@@ -436,7 +444,7 @@
         </div>
       </section>
 
-      <section class="setting-group">
+      <section class="setting-group" data-sgroup="ai">
         <h3>MCP servers <span class="badge-soft">Claude only</span></h3>
         <p class="group-hint">Connect remote <strong>Model Context Protocol</strong> servers to give Sprig extra tools and data (e.g. your calendar, a database, a SaaS app). Sprig can call their tools while composing a page. Their tools run on Anthropic's side as part of the request — so only add servers you trust, and prefer read-only ones. Works with the Claude provider only; other providers ignore these.</p>
         <div class="prov-block">
@@ -451,14 +459,14 @@
         </div>
       </section>
 
-      <section class="setting-group">
+      <section class="setting-group" data-sgroup="you">
         <h3>About you (personal memory)</h3>
         <p class="group-hint">Tell Sprig about yourself — location, interests, work, preferences, how you like answers. Sprig uses this to tailor every page it composes (kept on this machine, sent only to your chosen model).</p>
         <textarea id="profile-input" class="profile-input" rows="5"
                   placeholder="e.g. I'm a product designer in Chicago. I prefer concise, visual answers with metric units. Into cycling, sci-fi, and home cooking. Vegetarian."></textarea>
       </section>
 
-      <p class="settings-version">🌿 Chervil v<span id="app-version">—</span></p>
+      <p class="settings-version" data-sgroup="you">🌿 Chervil v<span id="app-version">—</span></p>
     </div>
   </div>
 
