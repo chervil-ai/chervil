@@ -596,6 +596,9 @@ app.on('window-all-closed', () => {
  * The renderer asks a question; we run the agent and stream progress back.
  * Returns the final result object: a generated page or a navigation directive.
  */
+// In-flight ask() requests, keyed by requestId, so the renderer can abort them.
+const askAborters = new Map();
+
 ipcMain.handle('chervil:ask', async (event, payload) => {
   const { query, history, requestId, pageContext, allowNavigate, refineMode, spaceContext, deep, verify, profile, attachments, mcpServers, agent } =
     payload || {};
@@ -603,10 +606,15 @@ ipcMain.handle('chervil:ask', async (event, payload) => {
     if (!event.sender.isDestroyed()) event.sender.send(channel, data);
   };
 
+  // Allow the renderer to cancel this request mid-flight (Stop button).
+  const aborter = new AbortController();
+  if (requestId) askAborters.set(requestId, aborter);
+
   try {
     const result = await runAgent({
       query,
       history: Array.isArray(history) ? history : [],
+      signal: aborter.signal,
       // Stream events are tagged with requestId so the renderer can route them to the
       // right tab — multiple tabs can generate concurrently.
       onStatus: (status) => send('chervil:status', { requestId, status }),
@@ -626,7 +634,15 @@ ipcMain.handle('chervil:ask', async (event, payload) => {
     return { ok: true, result };
   } catch (err) {
     return { ok: false, error: String(err && err.message ? err.message : err) };
+  } finally {
+    if (requestId) askAborters.delete(requestId);
   }
+});
+
+// Renderer → "Stop" the in-flight compose for a requestId.
+ipcMain.on('chervil:abort', (_event, requestId) => {
+  const a = askAborters.get(requestId);
+  if (a) { try { a.abort(); } catch { /* ignore */ } askAborters.delete(requestId); }
 });
 
 // --- Applet bridge: a composed page asks Sprig for live data -------------

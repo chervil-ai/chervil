@@ -301,6 +301,7 @@ const LIVE_INTERVALS = [
 //   runState: tabId -> { genId, statusText, streamBuffer }
 const runState = new Map();
 const reqToTab = new Map(); // requestId -> tabId
+const cancelledRequests = new Set(); // requestIds the user stopped — their results are ignored
 
 let saveTimer = null;
 let previewTimer = null; // throttles the active tab's streamed preview
@@ -1881,9 +1882,44 @@ function hideNavTip() {
   els.navTip.hidden = true;
 }
 
+// The send button doubles as a Stop button while the active tab is composing.
+function setSendBusy(busy) {
+  els.send.classList.toggle('stop', busy);
+  els.send.textContent = busy ? '◼' : '↑';
+  els.send.title = busy ? 'Stop composing' : 'Send';
+  els.send.disabled = false; // enabled either way (Send or Stop)
+}
+
 function refreshComposer() {
   const tab = activeTab();
-  els.send.disabled = tab ? isTabBusy(tab.id) : false;
+  setSendBusy(!!(tab && isTabBusy(tab.id)));
+}
+
+// Stop the active tab's in-flight composition: abort the request, ignore its
+// result, and hand the tab back to the user. Partial streamed HTML is discarded.
+function stopActiveCompose() {
+  const tab = activeTab();
+  if (!tab) return;
+  const rs = runState.get(tab.id);
+  if (!rs || !rs.genId) return;
+  const requestId = rs.genId;
+  cancelledRequests.add(requestId);
+  if (window.chervil.abort) window.chervil.abort(requestId); // best-effort network cancel
+  rs.genId = null;
+  rs.statusText = '';
+  rs.streamBuffer = '';
+  reqToTab.delete(requestId);
+  if (previewTimer) { clearTimeout(previewTimer); previewTimer = null; }
+  addMessage(tab, 'bot', 'Stopped.');
+  renderTabs();
+  if (tab.id === activeId) {
+    clearStatus();
+    const cur = currentEntry(tab);
+    setBadge(cur && cur.kind === 'page' ? 'page' : '', cur ? 'composed' : 'ready');
+    renderCurrentPage();
+    refreshComposer();
+  }
+  scheduleSave();
 }
 
 // Add a new page/navigation node as a CHILD of the current node (a branch). Going
@@ -2950,7 +2986,7 @@ async function submitQuery(text, opts = {}) {
   if (isActive()) {
     setStatus(rs.statusText);
     setBadge('working', verify ? 'verifying' : deep ? 'researching' : 'working');
-    els.send.disabled = true;
+    setSendBusy(true);
     setRemixVisible(false);
   }
 
@@ -2971,6 +3007,9 @@ async function submitQuery(text, opts = {}) {
       agent: runAgentObj ? runAgentObj.persona : null,
       config: providerConfig(runAgentObj),
     });
+
+    // The user stopped this request while it was in flight — ignore its result.
+    if (cancelledRequests.has(requestId)) { cancelledRequests.delete(requestId); return; }
 
     if (isActive() && previewTimer) { clearTimeout(previewTimer); previewTimer = null; }
 
@@ -3057,12 +3096,14 @@ async function submitQuery(text, opts = {}) {
     rs.streamBuffer = '';
     rs.statusText = '';
     reqToTab.delete(requestId);
+    // If the user stopped this request, swallow the resulting abort error.
+    if (cancelledRequests.has(requestId)) { cancelledRequests.delete(requestId); return; }
     if (isActive()) { clearStatus(); renderCurrentPage(); }
     addMessage(tab, 'bot', String(err && err.message ? err.message : err), 'error');
     renderTabs();
   } finally {
     if (isActive()) {
-      els.send.disabled = false;
+      setSendBusy(false);
       els.prompt.focus();
     }
   }
@@ -4189,6 +4230,8 @@ function resetPromptHeight() {
 
 els.composer.addEventListener('submit', (e) => {
   e.preventDefault();
+  // While composing, the send button is a Stop button.
+  if (els.send.classList.contains('stop')) { stopActiveCompose(); return; }
   handleComposerSubmit(els.prompt.value);
 });
 
@@ -4523,6 +4566,8 @@ document.addEventListener('keydown', (e) => {
     if (els.mapView.classList.contains('open')) { closeMap(); return; }
     if (els.settingsModal.classList.contains('open')) { closeSettings(); return; }
     if (els.libraryDrawer.classList.contains('open')) { closeDrawer(); return; }
+    // Nothing else consumed Esc — stop the active tab if it's composing.
+    if (activeId && isTabBusy(activeId)) { stopActiveCompose(); return; }
   }
   if ((e.ctrlKey || e.metaKey) && (e.key === 'k' || e.key === 'K')) { e.preventDefault(); openTabSwitcher(); }
   else if (e.ctrlKey && e.key === 't') { e.preventDefault(); newTab(true); }

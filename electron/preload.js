@@ -17,6 +17,9 @@ contextBridge.exposeInMainWorld('chervil', {
    */
   ask: (payload) => ipcRenderer.invoke('chervil:ask', payload),
 
+  /** Stop an in-flight ask() by its requestId (aborts the provider request). */
+  abort: (requestId) => ipcRenderer.send('chervil:abort', requestId),
+
   /**
    * Subscribe to streamed HTML text deltas while a page is being generated.
    * The callback receives { requestId, delta } so the renderer can route to the right tab.

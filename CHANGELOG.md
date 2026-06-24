@@ -7,6 +7,9 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- **Stop a composing page** — the send button turns into a Stop button while Sprig
+  is composing (or press Esc). It aborts the in-flight request, ignores its result,
+  and hands the tab straight back to you. Per-tab, so other tabs keep composing.
 - **App version in Settings** — Settings now shows the running version (e.g.
   "🌿 Chervil v0.2.0"), and **Help → About Chervil** shows it in a dialog.
 
