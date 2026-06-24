@@ -6,6 +6,13 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- **Agentic control layer (foundation)** — the web-agent's actions now pass through
+  a deterministic policy: a fixed registry of allowed action types (unknown types
+  are refused), with allow / confirm / deny decisions, and an audit trail of every
+  action (recorded + persisted). Re-expresses the existing payment refusal and
+  approve-before-risky gates as policy. First step of [RFC 0006](docs/rfcs/0006-agentic-actions.md).
+
 ## [0.3.0] — 2026-06-24
 
 The everyday-browser release. Chervil gains a **universal omnibox**, real browser

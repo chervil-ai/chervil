@@ -274,6 +274,8 @@ let library = { history: [], trash: [] };
 let bookmarks = []; // [{ id, key, kind:'site'|'page', url?, query?, title, at }]
 let siteHistory = []; // [{ id, url, title, at }] newest-first — real sites visited
 const MAX_SITE_HISTORY = 500;
+let agentAudit = []; // [{ at, type, target, decision, ok }] — agent action audit trail (RFC 0006)
+const MAX_AGENT_AUDIT = 500;
 let drawerTab = 'history';
 // History multi-select (bulk delete) state.
 let librarySelectMode = false;
@@ -1729,6 +1731,38 @@ function looksFinancial(a) {
   return /\b(buy now|place order|complete (purchase|order|checkout)|checkout|pay\b|payment|card number|cvv|credit card|transfer|send money|wire transfer|donate)\b/.test(s);
 }
 
+// ---- Agentic control layer (RFC 0006, phase 6.1) ----
+// The deterministic boundary the model sits inside: a fixed registry of action
+// types the agent may invoke, each with a base policy. The model proposes; this
+// decides allow / confirm / deny. Authority lives here, never in the model.
+const WEB_ACTION_POLICY = {
+  navigate: 'allow',
+  scroll: 'allow',
+  click: 'allow',
+  type: 'allow',   // password fields are refused at execution (typeJS)
+  submit: 'allow',
+};
+
+// Decide what happens to a proposed web action: { decision, reason }.
+function decideAction(a) {
+  if (!a || !WEB_ACTION_POLICY[a.action]) {
+    return { decision: 'deny', reason: `Unknown action “${(a && a.action) || ''}” — refused.` };
+  }
+  if (looksFinancial(a)) {
+    return { decision: 'deny', reason: 'That looks like a payment/purchase step — I won’t do that. Please complete it yourself.' };
+  }
+  if (a.risky) return { decision: 'confirm', reason: a.reason || a.action };
+  return { decision: 'allow', reason: a.reason || a.action };
+}
+
+// Append to the (persisted, capped) agent audit trail — so "unauthorized" is
+// detectable, not just hopefully-prevented.
+function auditAction(entry) {
+  agentAudit.unshift({ at: Date.now(), ...entry });
+  if (agentAudit.length > MAX_AGENT_AUDIT) agentAudit.length = MAX_AGENT_AUDIT;
+  scheduleSave();
+}
+
 function actionLabel(a) {
   if (a.action === 'type') return `Typing “${a.value || ''}”${a.reason ? ' — ' + a.reason : ''}`;
   if (a.action === 'navigate') return `Going to ${a.value || ''}`;
@@ -1791,13 +1825,22 @@ async function startAgent(task) {
       steps.push(a);
       if (a.action === 'finish') { addMessage(tab, 'bot', '✅ ' + (a.reason || 'Done.')); break; }
       if (a.action === 'need_user') { addMessage(tab, 'bot', '🙋 ' + (a.reason || 'I’ll let you take it from here.')); break; }
-      if (looksFinancial(a)) { addMessage(tab, 'bot', 'That looks like a payment/purchase step — I won’t do that. Please complete it yourself.', 'error'); break; }
-      if (a.risky) {
+
+      // Every action passes through the deterministic control layer (RFC 0006).
+      const verdict = decideAction(a);
+      const target = a.value || a.reason || '';
+      if (verdict.decision === 'deny') {
+        auditAction({ type: a.action, target, decision: 'deny' });
+        addMessage(tab, 'bot', verdict.reason, 'error');
+        break;
+      }
+      if (verdict.decision === 'confirm') {
         const ok = await confirmAgentAction(a);
-        if (!ok) { addMessage(tab, 'bot', 'Okay, stopping here.'); break; }
+        if (!ok) { auditAction({ type: a.action, target, decision: 'denied-by-user' }); addMessage(tab, 'bot', 'Okay, stopping here.'); break; }
       }
       addMessage(tab, 'bot', '→ ' + actionLabel(a));
       const res = await executeAction(a);
+      auditAction({ type: a.action, target, decision: verdict.decision === 'confirm' ? 'approved' : 'allow', ok: !!(res && res.ok) });
       if (!res || !res.ok) { addMessage(tab, 'bot', 'Couldn’t do that' + (res && res.error ? ` (${res.error})` : '') + '.', 'error'); break; }
       await sleep(1100); // let the page settle
     }
@@ -4165,7 +4208,7 @@ function scheduleSave() {
   if (saveTimer) clearTimeout(saveTimer);
   saveTimer = setTimeout(() => {
     saveTimer = null;
-    window.chervil.saveState({ tabs, activeId, settings, library, bookmarks, siteHistory, spaces, activeSpaceId, living, schedules, agents, activeAgentId });
+    window.chervil.saveState({ tabs, activeId, settings, library, bookmarks, siteHistory, agentAudit, spaces, activeSpaceId, living, schedules, agents, activeAgentId });
   }, 500);
 }
 
@@ -4232,6 +4275,7 @@ async function init() {
   }
   if (restored && Array.isArray(restored.bookmarks)) bookmarks = restored.bookmarks;
   if (restored && Array.isArray(restored.siteHistory)) siteHistory = restored.siteHistory;
+  if (restored && Array.isArray(restored.agentAudit)) agentAudit = restored.agentAudit;
 
   // Spaces: restore, or migrate by creating a default Space and adopting any
   // previously-collected pages into it.
