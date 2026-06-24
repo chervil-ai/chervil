@@ -7,6 +7,11 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- **Per-task action approvals** — when the web agent asks to confirm a
+  state-changing step, you can now **Approve once** or **Allow "&lt;action&gt;" for
+  this task** (so Sprig stops re-asking for that action type mid-task). Scoped to
+  the run, recorded in the audit trail. Reduces approval fatigue without weakening
+  the gate.
 - **Guarded OS actions (first ones)** — composed pages can call
   `window.chervil.os('open_url', {url})` or `os('open_downloads')`; each runs only
   after you confirm, is allowlisted in the main process (no arbitrary commands),

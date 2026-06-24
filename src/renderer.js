@@ -1790,28 +1790,33 @@ function actionLabel(a) {
   return a.reason || a.action;
 }
 
-// Inline approval prompt for state-changing actions.
+// Inline approval prompt for state-changing actions. Resolves 'once' | 'task' | 'stop'
+// — "task" allows this action type for the rest of the current task (scoped allow).
 function confirmAgentAction(a) {
   return new Promise((resolve) => {
     const wrap = document.createElement('div');
     wrap.className = 'msg bot refine-choice';
     const p = document.createElement('div');
-    p.textContent = `Sprig wants to: ${a.reason || a.action}. This changes the site — proceed?`;
+    p.textContent = `Sprig wants to ${actionLabel(a).toLowerCase()}. This changes the site — proceed?`;
     wrap.appendChild(p);
     const row = document.createElement('div');
     row.className = 'choice-row';
     const yes = document.createElement('button');
     yes.textContent = 'Approve';
+    const all = document.createElement('button');
+    all.textContent = `Allow “${a.action}” this task`;
     const no = document.createElement('button');
     no.textContent = 'Stop';
     row.appendChild(yes);
+    row.appendChild(all);
     row.appendChild(no);
     wrap.appendChild(row);
     els.conversation.appendChild(wrap);
     els.conversation.scrollTop = els.conversation.scrollHeight;
     const done = (v) => { wrap.remove(); resolve(v); };
-    yes.addEventListener('click', () => done(true));
-    no.addEventListener('click', () => done(false));
+    yes.addEventListener('click', () => done('once'));
+    all.addEventListener('click', () => done('task'));
+    no.addEventListener('click', () => done('stop'));
   });
 }
 
@@ -1830,6 +1835,7 @@ async function startAgent(task) {
   setBadge('working', 'acting');
 
   const steps = [];
+  const taskAllowed = new Set(); // action types the user approved for this whole task
   try {
     for (let step = 0; step < 8 && agentRunning; step++) {
       setStatus('Sprig is reading the page…');
@@ -1854,13 +1860,19 @@ async function startAgent(task) {
         addMessage(tab, 'bot', verdict.reason, 'error');
         break;
       }
+      let decisionLabel = verdict.decision === 'confirm' ? 'approved' : 'allow';
       if (verdict.decision === 'confirm') {
-        const ok = await confirmAgentAction(a);
-        if (!ok) { auditAction({ type: a.action, target, decision: 'denied-by-user' }); addMessage(tab, 'bot', 'Okay, stopping here.'); break; }
+        if (taskAllowed.has(a.action)) {
+          decisionLabel = 'allow-scoped'; // pre-approved for this task
+        } else {
+          const choice = await confirmAgentAction(a);
+          if (choice === 'stop') { auditAction({ type: a.action, target, decision: 'denied-by-user' }); addMessage(tab, 'bot', 'Okay, stopping here.'); break; }
+          if (choice === 'task') { taskAllowed.add(a.action); addMessage(tab, 'bot', `Got it — I’ll ${a.action} without asking again this task.`); }
+        }
       }
       addMessage(tab, 'bot', '→ ' + actionLabel(a));
       const res = await executeAction(a);
-      auditAction({ type: a.action, target, decision: verdict.decision === 'confirm' ? 'approved' : 'allow', ok: !!(res && res.ok) });
+      auditAction({ type: a.action, target, decision: decisionLabel, ok: !!(res && res.ok) });
       if (!res || !res.ok) { addMessage(tab, 'bot', 'Couldn’t do that' + (res && res.error ? ` (${res.error})` : '') + '.', 'error'); break; }
       await sleep(1100); // let the page settle
     }
