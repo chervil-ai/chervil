@@ -6,6 +6,13 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+- **Attached files were silently cut to 30,000 characters** — so a large file
+  (e.g. a big CSV) reached the model as only its first few percent, and Sprig drew
+  confident conclusions from the sliver it saw. The cap is now ~500,000 chars
+  (≈125k tokens), and when a file is still larger the model is told it's truncated
+  (and to say so) instead of treating the visible part as complete. All providers.
+
 ### Added
 - **Form autofill** — save your details (name, email, phone, address…) in Settings
   → You, then on any real site say "fill the form" and Chervil fills the matching
