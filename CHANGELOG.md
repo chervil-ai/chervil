@@ -6,6 +6,13 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.3.1] — 2026-06-24
+
+Agentic actions land — Sprig can now *do* things on a live site under a
+deterministic control layer (plan → allow/confirm/deny → audit) — plus everyday
+extras (find in page, reopen closed tab, form autofill) and a fix so large
+attached files are actually read.
+
 ### Fixed
 - **Attached files were silently cut to 30,000 characters** — so a large file
   (e.g. a big CSV) reached the model as only its first few percent, and Sprig drew
