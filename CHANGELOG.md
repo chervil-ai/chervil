@@ -7,6 +7,11 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- **Live omnibox + back/forward inside real sites** — when you browse a real
+  website embedded in Chervil, the omnibox now tracks the current URL, the tab
+  title follows the site, and Back/Forward step through that site's own history
+  before falling back to Chervil's page tree. Embedded browsing now feels like a
+  real browser.
 - **Account section in Settings → You** — shows whether you're on Chervil **Pro**
   or **Free**, with links to your getchervil.com account and your public profile
   (if you've claimed a handle). Free users get a short Pro pitch + sign-up link.

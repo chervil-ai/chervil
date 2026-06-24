@@ -1850,9 +1850,12 @@ function updateNavButtons() {
   const e = currentEntry(tab);
   const back = parentOf(tab, e);
   const fwd = e ? lastChild(tab, e.id) : null;
-  els.back.disabled = !back;
-  els.fwd.disabled = !fwd;
+  const webBack = webviewCan('back');
+  const webFwd = webviewCan('forward');
+  els.back.disabled = !(back || webBack);
+  els.fwd.disabled = !(fwd || webFwd);
 
+  // Tree entries get a descriptive tooltip; in-site steps just say Back/Forward.
   const backLabel = back ? entryLabel(back) : '';
   const fwdLabel = fwd ? entryLabel(fwd) : '';
   els.back.dataset.tip = backLabel;
@@ -1944,7 +1947,20 @@ function pruneTree(tab) {
   }
 }
 
+// On a live site, is the embedded webview the thing to step through?
+function webviewActive() {
+  const e = currentEntry(activeTab());
+  return !!(e && e.kind === 'navigate' && els.webview && !els.webview.hidden);
+}
+function webviewCan(dir) {
+  try {
+    return webviewActive() && (dir === 'back' ? els.webview.canGoBack() : els.webview.canGoForward());
+  } catch { return false; }
+}
+
 function goBack() {
+  // Inside an embedded site, walk that site's own history first.
+  if (webviewCan('back')) { try { els.webview.goBack(); return; } catch { /* fall through */ } }
   const tab = activeTab();
   const p = parentOf(tab, currentEntry(tab));
   if (!p) return;
@@ -1954,6 +1970,7 @@ function goBack() {
 }
 
 function goForward() {
+  if (webviewCan('forward')) { try { els.webview.goForward(); return; } catch { /* fall through */ } }
   const tab = activeTab();
   const e = currentEntry(tab);
   const next = e ? lastChild(tab, e.id) : null;
@@ -4355,6 +4372,26 @@ els.pageTitle.addEventListener('keydown', (e) => {
   if (e.key === 'Enter') { e.preventDefault(); runOmnibox(els.pageTitle.value); }
   else if (e.key === 'Escape') { e.preventDefault(); els.pageTitle.value = omniboxCanonical; els.pageTitle.blur(); }
 });
+
+// Keep the omnibox, tab title, and back/forward in sync as the user browses
+// inside an embedded real site (the webview's own navigation).
+function onWebviewNavigated(url) {
+  const tab = activeTab();
+  const e = currentEntry(tab);
+  if (!e || e.kind !== 'navigate') return;          // only while a live site is showing
+  if (url && /^https?:\/\//i.test(url)) {
+    e.url = url;                                      // the entry now reflects where you are
+    tab.title = hostOf(url);
+    setOmnibox(url);
+    renderTabs();
+    scheduleSave();
+  }
+  updateNavButtons();
+}
+if (els.webview) {
+  els.webview.addEventListener('did-navigate', (e) => onWebviewNavigated(e.url));
+  els.webview.addEventListener('did-navigate-in-page', (e) => { if (e.isMainFrame) onWebviewNavigated(e.url); });
+}
 
 els.deepToggle.addEventListener('click', () => setDeepMode(!deepMode));
 els.learnToggle.addEventListener('click', () => setSkillMode('learn'));
