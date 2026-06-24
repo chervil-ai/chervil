@@ -4375,30 +4375,36 @@ function publishCurrentToWeb() {
   const entry = currentEntry(tab);
   if (!entry || entry.kind !== 'page') { toast('Open a page first, then publish it.'); return; }
   if (entry.artifact || entry.lesson) return publishCurrentLesson();
-  return publishCurrentPage();
+  // Plain composed page → let the user choose where it goes.
+  showActionSheet('Publish to web', 'How should this go out?', [
+    { label: '🌐 As a Page', primary: true, onClick: () => publishCurrentPage('page') },
+    { label: '✍️ As a Blog post', onClick: () => publishCurrentPage('blog') },
+  ]);
 }
 
 // Publish any composed page (self-contained interactive HTML — clock, calculator,
 // converter, etc.) to a shareable getchervil.com link (Chervil Pro). Model-dependent
 // applets that call Sprig at runtime won't work when hosted.
-async function publishCurrentPage() {
+async function publishCurrentPage(kind = 'page') {
   const tab = activeTab();
   const entry = currentEntry(tab);
   if (!entry || entry.kind !== 'page' || !entry.html) { toast('Open a page first, then publish it.'); return; }
   if (!settings.publishToken) { toast('Add a publish token in Settings → Publishing (from getchervil.com/me).'); return; }
   if (!window.chervil.publishPage) { toast('Publishing isn’t available in this build.'); return; }
-  toast('Publishing…');
+  const noun = kind === 'blog' ? 'blog post' : 'page';
+  toast(`Publishing ${noun}…`);
   try {
     const res = await window.chervil.publishPage({
       html: entry.html,
       title: entry.title || 'Chervil page',
+      kind,
       token: settings.publishToken,
       baseUrl: settings.publishBase || 'https://getchervil.com',
     });
     if (res && res.ok && res.url) {
       entry.publishedUrl = res.url;
       scheduleSave();
-      addMessage(tab, 'bot', `${res.updated ? 'Updated' : 'Published'} — it’s live at ${res.url}`);
+      addMessage(tab, 'bot', `${res.updated ? 'Updated' : 'Published'} your ${noun} — it’s live at ${res.url}`);
       try { await navigator.clipboard.writeText(res.url); toast('Published — link copied to clipboard.'); } catch { toast('Published.'); }
     } else {
       addMessage(tab, 'bot', `Couldn’t publish: ${(res && res.error) || 'unknown error'}`, 'error');

@@ -774,13 +774,14 @@ ipcMain.handle('chervil:publish-page', async (_event, payload) => {
   try {
     const { token, baseUrl, title } = payload || {};
     const html = payload && payload.html;
+    const kind = (payload && payload.kind) === 'blog' ? 'blog' : 'page';
     if (!html) return { ok: false, error: 'Nothing to publish.' };
     if (!token) return { ok: false, error: 'Missing publish token.' };
     const base = String(baseUrl || 'https://getchervil.com').replace(/\/+$/, '');
     const res = await fetch(`${base}/api/pages`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-      body: JSON.stringify({ kind: 'page', title: title || 'Chervil page', html }),
+      body: JSON.stringify({ kind, title: title || 'Chervil page', html }),
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) {

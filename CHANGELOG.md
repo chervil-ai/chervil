@@ -7,6 +7,9 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- **Publish as a Page or a Blog post** — publishing a composed page now asks where
+  it should go. Blog posts are a distinct content type; your public profile groups
+  everything by type (Lessons · Quizzes · Blog · Pages).
 - **Browsing history** — a **Sites** tab in the History drawer logs the real
   websites you visit (newest-first, deduped). Click to reopen, Remove one, or
   Clear history. Separate from composed-page History.
