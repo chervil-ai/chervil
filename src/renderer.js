@@ -173,6 +173,8 @@ const els = {
 //   entry = { kind:'page'|'navigate', html?, title, url?, query, sources? }
 let tabs = [];
 let activeId = null;
+let closedTabs = []; // recently-closed tab snapshots for Ctrl+Shift+T (in-memory)
+const MAX_CLOSED_TABS = 12;
 
 // Global, persisted settings (non-secret). The API key is handled separately by
 // the main process (encrypted), never stored here.
@@ -462,9 +464,32 @@ function newTab(activate = true) {
   return tab;
 }
 
+// Remember a closed tab so Ctrl+Shift+T can reopen it (keeps its full state).
+function recordClosedTab(tab) {
+  if (!tab) return;
+  closedTabs.push(tab);
+  if (closedTabs.length > MAX_CLOSED_TABS) closedTabs.shift();
+}
+
+// Reopen the most recently closed tab, restoring its conversation/pages.
+function reopenClosedTab() {
+  const tab = closedTabs.pop();
+  if (!tab) { toast('No recently closed tabs.'); return; }
+  if (tabs.some((t) => t.id === tab.id)) tab.id = uid(); // avoid an id collision
+  if (tab.pinned) tabs.splice(lastPinnedIndex() + 1, 0, tab);
+  else tabs.push(tab);
+  activeId = tab.id;
+  renderTabs();
+  renderConversation();
+  showActiveTabView();
+  refreshComposer();
+  scheduleSave();
+}
+
 function closeTab(id) {
   const idx = tabs.findIndex((t) => t.id === id);
   if (idx === -1) return;
+  recordClosedTab(tabs[idx]);
   tabs.splice(idx, 1);
   runState.delete(id);
   living = living.filter((r) => r.tabId !== id); // drop this tab's living pages
@@ -516,7 +541,7 @@ function closeTabs(ids) {
   }
   for (const id of idSet) {
     const idx = tabs.findIndex((t) => t.id === id);
-    if (idx !== -1) tabs.splice(idx, 1);
+    if (idx !== -1) { recordClosedTab(tabs[idx]); tabs.splice(idx, 1); }
     runState.delete(id);
   }
   living = living.filter((r) => !idSet.has(r.tabId));
@@ -4979,6 +5004,7 @@ document.addEventListener('keydown', (e) => {
   }
   if ((e.ctrlKey || e.metaKey) && (e.key === 'l' || e.key === 'L')) { e.preventDefault(); els.pageTitle.focus(); els.pageTitle.select(); }
   else if ((e.ctrlKey || e.metaKey) && (e.key === 'k' || e.key === 'K')) { e.preventDefault(); openTabSwitcher(); }
+  else if (e.ctrlKey && e.shiftKey && (e.key === 't' || e.key === 'T')) { e.preventDefault(); reopenClosedTab(); }
   else if (e.ctrlKey && e.key === 't') { e.preventDefault(); newTab(true); }
   else if (e.ctrlKey && e.key === 'w') { e.preventDefault(); if (activeId) closeTab(activeId); }
   else if (e.altKey && e.key === 'ArrowLeft') { e.preventDefault(); goBack(); }

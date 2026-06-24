@@ -7,6 +7,9 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- **Reopen closed tab (Ctrl+Shift+T)** — restores recently-closed tabs with their
+  full conversation and pages intact (keeps the last 12; pinned tabs return to the
+  pinned group).
 - **Per-task action approvals** — when the web agent asks to confirm a
   state-changing step, you can now **Approve once** or **Allow "&lt;action&gt;" for
   this task** (so Sprig stops re-asking for that action type mid-task). Scoped to
