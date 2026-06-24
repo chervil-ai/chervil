@@ -967,19 +967,19 @@ function renderCurrentPage() {
 
   if (!entry) {
     showOverlay();
-    els.pageTitle.textContent = 'Welcome to Chervil';
+    setOmnibox('');
     setBadge('', 'ready');
     els.save.disabled = true;
     setRemixVisible(false);
   } else if (entry.kind === 'navigate') {
     renderSite(entry.url);
-    els.pageTitle.textContent = entry.url;
+    setOmnibox(entry.url);
     setBadge('live', 'live site');
     els.save.disabled = true;
     setRemixVisible(false);
   } else {
     renderPageHtml(entry.html);
-    els.pageTitle.textContent = entry.title || 'Chervil page';
+    setOmnibox(entry.title || 'Chervil page');
     setBadge('page', 'composed');
     els.save.disabled = false;
     setRemixVisible(true);
@@ -1827,7 +1827,7 @@ function showActiveTabView() {
   if (rs && rs.genId && hasDoctype(rs.streamBuffer)) {
     const idx = rs.streamBuffer.search(DOCTYPE_RE);
     renderPageHtml(idx >= 0 ? rs.streamBuffer.slice(idx) : rs.streamBuffer);
-    els.pageTitle.textContent = 'Composing…';
+    setOmnibox('Composing…');
     setBadge('working', 'composing');
     els.save.disabled = true;
     updateNavButtons();
@@ -2803,6 +2803,46 @@ async function summarizeVideo(tab, url) {
   const prompt = `Turn the following ${label} of the YouTube video “${title}” (${srcUrl}) into a clean, well-structured page: a 2–3 sentence overview, the key takeaways as bullets, and a “Timestamped highlights” section linking the most important moments as ${srcUrl}&t=SECONDSs (convert each [m:ss] marker to total seconds). ${truncated ? 'The source was long and truncated — summarize what is present and say so.' : ''} Use ONLY the material below; do not invent details.`;
   const attachments = [{ name: 'video.txt', kind: 'text', text: `${label} of “${title}” (${srcUrl}):\n\n${content}` }];
   submitQuery(prompt, { tab, attachments, allowNavigate: false, skipFollowup: true, skipUserMessage: true, displayText: `Summarize video: ${title}` });
+}
+
+// ---- Omnibox: the editable address/ask bar in the omnibar ----
+let omniboxCanonical = '';
+// Set the omnibox's canonical text without clobbering what the user is typing.
+function setOmnibox(text) {
+  omniboxCanonical = text || '';
+  if (document.activeElement !== els.pageTitle) els.pageTitle.value = omniboxCanonical;
+}
+// Does this look like a URL/host to navigate to (vs. a question for Sprig)?
+function looksLikeUrl(s) {
+  const t = (s || '').trim();
+  if (!t) return false;
+  if (/^https?:\/\/\S+$/i.test(t)) return true;                  // explicit scheme
+  if (/\s/.test(t)) return false;                                 // spaces, no scheme => a query
+  if (/^localhost(:\d+)?(\/.*)?$/i.test(t)) return true;
+  if (/^\d{1,3}(\.\d{1,3}){3}(:\d+)?(\/.*)?$/.test(t)) return true; // IPv4
+  return /^[a-z0-9-]+(\.[a-z0-9-]+)*\.[a-z]{2,24}(:\d+)?(\/.*)?$/i.test(t); // domain.tld[/path]
+}
+// Open a real site in the active tab (mirrors the 'live' link behavior).
+function openUrlInTab(url) {
+  const tab = activeTab();
+  if (!tab || isTabBusy(tab.id)) return;
+  let href = url.trim();
+  if (!/^https?:\/\//i.test(href)) href = 'https://' + href;
+  pushEntry(tab, { kind: 'navigate', url: href, title: href, query: href });
+  tab.title = hostOf(href);
+  renderTabs();
+  renderCurrentPage();
+  scheduleSave();
+}
+// Route an omnibox submission: a URL navigates; anything else goes to Sprig
+// (handleComposerSubmit already handles /commands, skills, deep mode, the web
+// agent on live sites, and composing).
+function runOmnibox(raw) {
+  const text = (raw || '').trim();
+  if (!text) return;
+  els.pageTitle.blur();
+  if (looksLikeUrl(text)) openUrlInTab(text);
+  else handleComposerSubmit(text);
 }
 
 function handleComposerSubmit(text) {
@@ -4235,6 +4275,14 @@ els.composer.addEventListener('submit', (e) => {
   handleComposerSubmit(els.prompt.value);
 });
 
+// Omnibox: focus selects all; Enter routes; Escape restores the canonical value.
+els.pageTitle.addEventListener('focus', () => els.pageTitle.select());
+els.pageTitle.addEventListener('blur', () => { els.pageTitle.value = omniboxCanonical; });
+els.pageTitle.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') { e.preventDefault(); runOmnibox(els.pageTitle.value); }
+  else if (e.key === 'Escape') { e.preventDefault(); els.pageTitle.value = omniboxCanonical; els.pageTitle.blur(); }
+});
+
 els.deepToggle.addEventListener('click', () => setDeepMode(!deepMode));
 els.learnToggle.addEventListener('click', () => setSkillMode('learn'));
 els.quizToggle.addEventListener('click', () => setSkillMode('quiz'));
@@ -4569,7 +4617,8 @@ document.addEventListener('keydown', (e) => {
     // Nothing else consumed Esc — stop the active tab if it's composing.
     if (activeId && isTabBusy(activeId)) { stopActiveCompose(); return; }
   }
-  if ((e.ctrlKey || e.metaKey) && (e.key === 'k' || e.key === 'K')) { e.preventDefault(); openTabSwitcher(); }
+  if ((e.ctrlKey || e.metaKey) && (e.key === 'l' || e.key === 'L')) { e.preventDefault(); els.pageTitle.focus(); els.pageTitle.select(); }
+  else if ((e.ctrlKey || e.metaKey) && (e.key === 'k' || e.key === 'K')) { e.preventDefault(); openTabSwitcher(); }
   else if (e.ctrlKey && e.key === 't') { e.preventDefault(); newTab(true); }
   else if (e.ctrlKey && e.key === 'w') { e.preventDefault(); if (activeId) closeTab(activeId); }
   else if (e.altKey && e.key === 'ArrowLeft') { e.preventDefault(); goBack(); }

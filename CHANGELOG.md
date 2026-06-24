@@ -7,6 +7,11 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- **Universal omnibox** — the bar at the top of every page is now editable and
+  smart: type a **URL** to open the real site, a **question** to have Sprig compose
+  a page, or a **command** (`/learn`, `/quiz`) — one bar routes them all. `Ctrl+L`
+  focuses it; Enter goes, Esc restores. Reuses the existing routing brain (slash
+  commands, skill modes, Deep Dive, the web agent, and composing).
 - **Stop a composing page** — the send button turns into a Stop button while Sprig
   is composing (or press Esc). It aborts the in-flight request, ignores its result,
   and hands the tab straight back to you. Per-tab, so other tabs keep composing.
