@@ -73,6 +73,9 @@ contextBridge.exposeInMainWorld('chervil', {
   /** Web-agent: ask Sprig for the next action on a live site. */
   agentStep: (payload) => ipcRenderer.invoke('chervil:agent-step', payload),
 
+  /** Web-agent: draft a short up-front plan for a task. */
+  agentPlan: (payload) => ipcRenderer.invoke('chervil:agent-plan', payload),
+
   /** Save a composed page to disk via a native save dialog. */
   savePage: (payload) => ipcRenderer.invoke('chervil:save-page', payload),
 

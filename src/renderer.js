@@ -1876,14 +1876,29 @@ async function startAgent(task) {
 
   const steps = [];
   const taskAllowed = new Set(); // action types the user approved for this whole task
+  let plan = [];
   try {
+    // Draft a short plan up front and show it (RFC 0006 6.2) — best-effort.
+    try {
+      setStatus('Sprig is planning…');
+      const state0 = await readWebview();
+      if (state0 && agentRunning) {
+        const planResp = await window.chervil.agentPlan({ task, pageState: state0, config: providerConfig() });
+        if (planResp && planResp.ok && Array.isArray(planResp.plan) && planResp.plan.length) {
+          plan = planResp.plan;
+          addMessage(tab, 'bot', '📋 Plan:\n' + plan.map((p, i) => `${i + 1}. ${p}`).join('\n'));
+        }
+      }
+      clearStatus();
+    } catch { clearStatus(); }
+
     for (let step = 0; step < 8 && agentRunning; step++) {
       setStatus('Sprig is reading the page…');
       const state = await readWebview();
       if (!state) { clearStatus(); addMessage(tab, 'bot', 'I couldn’t read this page (it may block automation).', 'error'); break; }
 
       setStatus('Sprig is deciding the next step…');
-      const resp = await window.chervil.agentStep({ task, pageState: state, steps, config: providerConfig() });
+      const resp = await window.chervil.agentStep({ task, pageState: state, steps, plan, config: providerConfig() });
       clearStatus();
       if (!resp.ok) { addMessage(tab, 'bot', resp.error || 'Agent error.', 'error'); break; }
 

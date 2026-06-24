@@ -7,6 +7,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- **The web agent plans first** — before acting on a live site, Sprig drafts a
+  short numbered plan, shows it to you, and keeps each step grounded in it (it
+  still adapts as the page reveals reality). More reliable multi-step task
+  completion and clearer intent (RFC 0006 6.2).
 - **Find in page (Ctrl+F)** — a find bar that searches the current page: real
   sites use native find with a match count + next/prev; composed pages search via
   the in-page runtime. Enter / Shift+Enter cycle matches, Esc closes.

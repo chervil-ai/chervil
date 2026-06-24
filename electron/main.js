@@ -12,7 +12,7 @@ const { app, BrowserWindow, ipcMain, dialog, safeStorage, Notification, Tray, Me
 require('dotenv').config({ path: path.join(__dirname, '..', '.env'), quiet: true });
 
 const QRCode = require('qrcode');
-const { runAgent, runAppletAsk, runListModels, runAgentStep, runExtractSlides, runExtractDoc, runExtractSheets, runSynthesizeAgent } = require('../lib/agent');
+const { runAgent, runAppletAsk, runListModels, runAgentStep, runAgentPlan, runExtractSlides, runExtractDoc, runExtractSheets, runSynthesizeAgent } = require('../lib/agent');
 const { getSkill } = require('../lib/skills');
 
 let mainWindow = null;
@@ -1092,9 +1092,20 @@ ipcMain.handle('chervil:set-api-key', async (_event, payload) => {
 // Web-agent: decide the next action on a live site.
 ipcMain.handle('chervil:agent-step', async (_event, payload) => {
   try {
-    const { task, pageState, steps } = payload || {};
-    const action = await runAgentStep({ task, pageState, steps, config: providerConfigFrom(payload) });
+    const { task, pageState, steps, plan } = payload || {};
+    const action = await runAgentStep({ task, pageState, steps, plan, config: providerConfigFrom(payload) });
     return { ok: true, action };
+  } catch (err) {
+    return { ok: false, error: String(err && err.message ? err.message : err) };
+  }
+});
+
+// Up-front plan for an agent task (RFC 0006 6.2): a short list of steps.
+ipcMain.handle('chervil:agent-plan', async (_event, payload) => {
+  try {
+    const { task, pageState } = payload || {};
+    const plan = await runAgentPlan({ task, pageState, config: providerConfigFrom(payload) });
+    return { ok: true, plan };
   } catch (err) {
     return { ok: false, error: String(err && err.message ? err.message : err) };
   }
