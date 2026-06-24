@@ -417,6 +417,29 @@ ipcMain.handle('chervil:open-external', async (_event, url) => {
   catch (err) { return { ok: false, error: String(err && err.message ? err.message : err) }; }
 });
 
+// Guarded OS write-actions (RFC 0006 Track B). Renderer gates with a confirm, but
+// the main process independently allowlists each type — no arbitrary command/app
+// execution is reachable.
+ipcMain.handle('chervil:os-action', async (_event, payload) => {
+  const type = payload && payload.type;
+  const args = (payload && payload.args) || {};
+  try {
+    if (type === 'open_url') {
+      const u = String(args.url || '');
+      if (!/^https?:\/\//i.test(u)) return { ok: false, error: 'Not a web URL.' };
+      await shell.openExternal(u);
+      return { ok: true };
+    }
+    if (type === 'open_downloads') {
+      const err = await shell.openPath(app.getPath('downloads'));
+      return err ? { ok: false, error: err } : { ok: true };
+    }
+    return { ok: false, error: 'Unknown OS action.' };
+  } catch (err) {
+    return { ok: false, error: String(err && err.message ? err.message : err) };
+  }
+});
+
 // Account status for Settings → You (publish-token auth → { pro, username }).
 ipcMain.handle('chervil:account-status', async (_event, payload) => {
   try {

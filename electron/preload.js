@@ -91,6 +91,8 @@ contextBridge.exposeInMainWorld('chervil', {
   openExternal: (url) => ipcRenderer.invoke('chervil:open-external', url),
   /** Notified when a download from an embedded site finishes. */
   onDownloadDone: (cb) => ipcRenderer.on('chervil:download-done', (_e, d) => cb(d)),
+  /** Guarded OS write-action (allowlisted in main): { type, args } → { ok }. */
+  osAction: (payload) => ipcRenderer.invoke('chervil:os-action', payload),
   /** Account status for Settings → You: { ok, pro, username }. */
   accountStatus: (payload) => ipcRenderer.invoke('chervil:account-status', payload),
 

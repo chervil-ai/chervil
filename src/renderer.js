@@ -379,7 +379,10 @@ const CHERVIL_RUNTIME = `<script>(function(){
     call: call,
     ask: function(prompt){ return call('ask', { prompt: String(prompt || '') }); },
     info: function(){ return call('system_info'); },
-    details: function(){ return call('system_details'); }
+    details: function(){ return call('system_details'); },
+    // Guarded OS actions (RFC 0006 Track B). Each runs only after the user
+    // confirms; types are allowlisted. e.g. os('open_url', { url }), os('open_downloads').
+    os: function(type, args){ return call('os_action', { type: String(type||''), args: args||{} }); }
   };
   // Back-compat: pages composed before the Chervil rename call window.parslee.*
   try { window.parslee = window.chervil; } catch(e){}
@@ -1755,6 +1758,21 @@ function decideAction(a) {
   }
   if (a.risky) return { decision: 'confirm', reason: a.reason || a.action };
   return { decision: 'allow', reason: a.reason || a.action };
+}
+
+// Guarded OS write-actions (RFC 0006 Track B). A small allowlist; each requires
+// explicit user confirmation. No arbitrary command/app execution is reachable.
+const OS_ACTION_POLICY = {
+  open_url: 'confirm',        // open a URL in the real browser
+  open_downloads: 'confirm',  // open the Downloads folder
+};
+function osActionLabel(type, args) {
+  if (type === 'open_url') return `Open ${args && args.url ? args.url : 'a link'} in your browser?`;
+  if (type === 'open_downloads') return 'Open your Downloads folder?';
+  return `Run “${type}”?`;
+}
+function decideOsAction(type) {
+  return OS_ACTION_POLICY[type] ? { decision: OS_ACTION_POLICY[type] } : { decision: 'deny', reason: `Unknown OS action “${type}”.` };
 }
 
 // Append to the (persisted, capped) agent audit trail — so "unauthorized" is
@@ -3331,10 +3349,12 @@ function handleLinkClick(href, text) {
 }
 
 // A small centered modal with a title, a subtitle, and a stack of action buttons.
-function showActionSheet(title, subtitle, actions) {
+function showActionSheet(title, subtitle, actions, onClose) {
   const overlay = document.createElement('div');
   overlay.className = 'chervil-sheet-overlay';
-  const close = () => overlay.remove();
+  let chosen = false;
+  function onEsc(e) { if (e.key === 'Escape') close(); }
+  const close = () => { overlay.remove(); document.removeEventListener('keydown', onEsc); if (!chosen && onClose) onClose(); };
   overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
 
   const sheet = document.createElement('div');
@@ -3353,7 +3373,7 @@ function showActionSheet(title, subtitle, actions) {
     const b = document.createElement('button');
     b.className = 'chervil-sheet-btn' + (a.primary ? ' primary' : '');
     b.textContent = a.label;
-    b.addEventListener('click', () => { close(); Promise.resolve().then(a.onClick); });
+    b.addEventListener('click', () => { chosen = true; close(); Promise.resolve().then(a.onClick); });
     sheet.appendChild(b);
   });
   const cancel = document.createElement('button');
@@ -3364,7 +3384,6 @@ function showActionSheet(title, subtitle, actions) {
 
   overlay.appendChild(sheet);
   document.body.appendChild(overlay);
-  const onEsc = (e) => { if (e.key === 'Escape') { close(); document.removeEventListener('keydown', onEsc); } };
   document.addEventListener('keydown', onEsc);
 }
 
@@ -5013,6 +5032,26 @@ async function handleAppletTool(source, msg) {
       const res = window.chervil.systemDetails ? await window.chervil.systemDetails() : null;
       if (res && res.ok) reply({ ok: true, result: res.details });
       else reply({ ok: false, error: (res && res.error) || 'Could not read system details.' });
+    } else if (msg.name === 'os_action') {
+      // Guarded OS write-action (RFC 0006 Track B): policy → confirm → execute → audit.
+      const type = (msg.args && msg.args.type) || '';
+      const args = (msg.args && msg.args.args) || {};
+      const verdict = decideOsAction(type);
+      if (verdict.decision === 'deny') {
+        auditAction({ type: 'os:' + type, target: args.url || '', decision: 'deny' });
+        return reply({ ok: false, error: verdict.reason || 'Action not allowed.' });
+      }
+      const ok = await new Promise((res) => showActionSheet('Allow this action?', osActionLabel(type, args), [
+        { label: 'Allow', primary: true, onClick: () => res(true) },
+        { label: 'Deny', onClick: () => res(false) },
+      ], () => res(false)));
+      if (!ok) {
+        auditAction({ type: 'os:' + type, target: args.url || '', decision: 'denied-by-user' });
+        return reply({ ok: false, error: 'Denied.' });
+      }
+      const r = window.chervil.osAction ? await window.chervil.osAction({ type, args }) : { ok: false, error: 'unavailable' };
+      auditAction({ type: 'os:' + type, target: args.url || '', decision: 'approved', ok: !!(r && r.ok) });
+      reply(r && r.ok ? { ok: true, result: { done: true } } : { ok: false, error: (r && r.error) || 'Action failed.' });
     } else {
       reply({ ok: false, error: 'Unknown tool: ' + msg.name });
     }

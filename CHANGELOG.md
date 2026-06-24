@@ -7,6 +7,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- **Guarded OS actions (first ones)** — composed pages can call
+  `window.chervil.os('open_url', {url})` or `os('open_downloads')`; each runs only
+  after you confirm, is allowlisted in the main process (no arbitrary commands),
+  and is recorded to the agent audit trail. The first of RFC 0006's Track B.
 - **Agent activity log** — the Agents view now shows a 🛡 activity trail of every
   action Sprig took on a live site and what the control layer allowed, confirmed,
   or denied (with a Clear button). Surfaces the RFC 0006 audit trail.
