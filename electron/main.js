@@ -265,6 +265,43 @@ function buildAppMenu() {
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
 
+// Save downloads from embedded sites to the Downloads folder (browser-style, no
+// save dialog), de-duplicating filenames, with a clickable completion toast.
+const _dlSessions = new WeakSet();
+function attachDownloadHandler(session) {
+  if (!session || _dlSessions.has(session)) return;
+  _dlSessions.add(session);
+  session.on('will-download', (_event, item) => {
+    try {
+      const dir = app.getPath('downloads');
+      let target = path.join(dir, item.getFilename());
+      if (fs.existsSync(target)) {
+        const ext = path.extname(target);
+        const base = target.slice(0, target.length - ext.length);
+        let i = 1;
+        while (fs.existsSync(`${base} (${i})${ext}`)) i++;
+        target = `${base} (${i})${ext}`;
+      }
+      item.setSavePath(target);
+    } catch { /* fall back to Electron's default (a save dialog) */ }
+    item.on('done', (_e, state) => {
+      const name = item.getFilename();
+      const savePath = item.getSavePath();
+      const send = (d) => { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('chervil:download-done', d); };
+      if (state === 'completed') {
+        if (Notification.isSupported()) {
+          const n = new Notification({ title: 'Download complete', body: name });
+          n.on('click', () => { try { shell.showItemInFolder(savePath); } catch { /* ignore */ } });
+          n.show();
+        }
+        send({ ok: true, filename: name, path: savePath });
+      } else {
+        send({ ok: false, filename: name, state });
+      }
+    });
+  });
+}
+
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1280,
@@ -297,7 +334,10 @@ function createWindow() {
 
   // Native right-click menus for the app UI (and any embedded real sites).
   attachContextMenu(mainWindow.webContents, { isMainUI: true });
-  mainWindow.webContents.on('did-attach-webview', (_e, wc) => attachContextMenu(wc, { isMainUI: false }));
+  mainWindow.webContents.on('did-attach-webview', (_e, wc) => {
+    attachContextMenu(wc, { isMainUI: false });
+    attachDownloadHandler(wc.session);
+  });
 
   // Allow microphone access for voice input, but ONLY for Chervil's own UI
   // (the file:// origin) — never auto-grant mic/camera to remote sites embedded

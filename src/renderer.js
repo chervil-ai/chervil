@@ -4988,6 +4988,14 @@ if (window.chervil.onContextAsk) {
   });
 }
 
+// A file downloaded from an embedded site — let the user know.
+if (window.chervil.onDownloadDone) {
+  window.chervil.onDownloadDone((d) => {
+    if (d && d.ok) toast(`⬇ Downloaded ${d.filename} to your Downloads folder.`);
+    else if (d) toast(`Download failed: ${d.filename || ''}`);
+  });
+}
+
 // Show the running app version in Settings (from the preload bridge).
 {
   const av = document.getElementById('app-version');

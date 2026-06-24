@@ -7,6 +7,9 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- **Downloads** — files downloaded from embedded real sites now save straight to
+  your Downloads folder (no save dialog, with name de-duplication), a toast
+  confirms, and a "Download complete" notification opens the folder on click.
 - **Publish as a Page or a Blog post** — publishing a composed page now asks where
   it should go. Blog posts are a distinct content type; your public profile groups
   everything by type (Lessons · Quizzes · Blog · Pages).
