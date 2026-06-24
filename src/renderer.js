@@ -108,6 +108,7 @@ const els = {
   syncChoose: document.getElementById('sync-choose'),
   syncClear: document.getElementById('sync-clear'),
   syncStatus: document.getElementById('sync-status'),
+  accountBox: document.getElementById('account-box'),
   publishSave: document.getElementById('publish-save'),
   publishStatus: document.getElementById('publish-status'),
   sttKeyInput: document.getElementById('stt-key-input'),
@@ -3913,8 +3914,80 @@ function setSettingsTab(group) {
 function openSettings() {
   applySettingsToUI();
   renderSyncFolder();
+  renderAccountBox();
   setSettingsTab('general');
   els.settingsModal.classList.add('open');
+}
+
+// Settings → You: show the user's Chervil account (Pro/free) with links to /me
+// and their public profile, or a sign-in / Pro upsell. Account status comes from
+// getchervil.com (publish-token auth) via the main process (renderer CSP blocks it).
+async function renderAccountBox() {
+  const box = els.accountBox;
+  if (!box) return;
+  const base = (settings.publishBase || 'https://getchervil.com').replace(/\/+$/, '');
+  const linkBtn = (label, url, primary) => {
+    const b = document.createElement('button');
+    b.className = 'lib-btn' + (primary ? ' primary' : '');
+    b.textContent = label;
+    b.addEventListener('click', () => { if (window.chervil.openExternal) window.chervil.openExternal(url); });
+    return b;
+  };
+  const hint = (text) => {
+    const p = document.createElement('p');
+    p.className = 'group-hint';
+    p.style.margin = '0';
+    p.textContent = text;
+    return p;
+  };
+
+  box.innerHTML = '';
+  if (!settings.publishToken) {
+    box.appendChild(hint('Create a free account at getchervil.com, then add your publish token under Publishing & Sync to connect — publish your pages, get a public profile, and unlock Chervil Pro.'));
+    const acts = document.createElement('div');
+    acts.className = 'account-actions';
+    acts.appendChild(linkBtn('Create an account →', base + '/me', true));
+    acts.appendChild(linkBtn('About Chervil Pro', base + '/pro'));
+    box.appendChild(acts);
+    return;
+  }
+
+  box.appendChild(hint('Checking your account…'));
+  let res = null;
+  try { res = window.chervil.accountStatus ? await window.chervil.accountStatus({ token: settings.publishToken, baseUrl: base }) : null; } catch { /* ignore */ }
+  if (!els.settingsModal.classList.contains('open')) return; // closed while we waited
+  box.innerHTML = '';
+
+  if (!res || !res.ok) {
+    box.appendChild(hint(res && res.error ? `Couldn't verify your account (${res.error}).` : 'Couldn’t reach getchervil.com to check your account.'));
+    const acts = document.createElement('div');
+    acts.className = 'account-actions';
+    acts.appendChild(linkBtn('Open your account →', base + '/me', true));
+    box.appendChild(acts);
+    return;
+  }
+
+  const plan = document.createElement('div');
+  plan.className = 'account-plan';
+  const pill = document.createElement('span');
+  pill.className = 'pill ' + (res.pro ? 'pro' : 'free');
+  pill.textContent = res.pro ? 'Pro' : 'Free';
+  const planLabel = document.createElement('span');
+  planLabel.textContent = res.pro ? 'Chervil Pro' : 'Chervil Free';
+  plan.appendChild(pill);
+  plan.appendChild(planLabel);
+  box.appendChild(plan);
+
+  box.appendChild(hint(res.pro
+    ? 'Thanks for supporting Chervil. Manage your account and everything you’ve published on the web.'
+    : 'You’re on the free plan. Chervil Pro adds hosted publishing — shareable links, a public profile, and analytics.'));
+
+  const acts = document.createElement('div');
+  acts.className = 'account-actions';
+  acts.appendChild(linkBtn('Open your account →', base + '/me', true));
+  if (res.username) acts.appendChild(linkBtn('View public profile', base + '/profile/' + encodeURIComponent(res.username)));
+  if (!res.pro) acts.appendChild(linkBtn('Get Chervil Pro', base + '/pro'));
+  box.appendChild(acts);
 }
 
 function closeSettings() {

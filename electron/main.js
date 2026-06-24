@@ -369,6 +369,29 @@ ipcMain.handle('chervil:dial', async (_event, tel) => {
   catch (err) { return { ok: false, error: String(err && err.message ? err.message : err) }; }
 });
 
+// Open a web URL in the user's real browser (for Settings/account links).
+ipcMain.handle('chervil:open-external', async (_event, url) => {
+  const u = String(url || '');
+  if (!/^https?:\/\//i.test(u)) return { ok: false, error: 'Not a web URL.' };
+  try { await shell.openExternal(u); return { ok: true }; }
+  catch (err) { return { ok: false, error: String(err && err.message ? err.message : err) }; }
+});
+
+// Account status for Settings → You (publish-token auth → { pro, username }).
+ipcMain.handle('chervil:account-status', async (_event, payload) => {
+  try {
+    const token = payload && payload.token;
+    if (!token) return { ok: false, error: 'No token' };
+    const base = String((payload && payload.baseUrl) || 'https://getchervil.com').replace(/\/+$/, '');
+    const res = await fetch(`${base}/api/account`, { headers: { Authorization: `Bearer ${token}` } });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) return { ok: false, error: data.error || `Account check failed (${res.status}).` };
+    return { ok: true, pro: !!data.pro, username: data.username || null };
+  } catch (err) {
+    return { ok: false, error: String(err && err.message ? err.message : err) };
+  }
+});
+
 // Handle a chervil:// deep link from the browser extension (or anywhere):
 //   chervil://ask?url=<page>&title=<title>&text=<selection>
 function handleChervilUrl(raw) {

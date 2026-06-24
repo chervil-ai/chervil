@@ -1241,6 +1241,15 @@ html, body {
 
 .settings-version { text-align: center; color: var(--muted); font-size: 12px; margin: 18px 0 4px; }
 
+/* Settings → You: account box */
+.account-box { border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px; background: var(--panel-2); }
+.account-plan { display: flex; align-items: center; gap: 8px; font-size: 15px; font-weight: 600; margin-bottom: 4px; }
+.account-plan .pill { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.03em; padding: 2px 8px; border-radius: 999px; }
+.account-plan .pill.pro { color: #0b0d12; background: var(--accent); }
+.account-plan .pill.free { color: var(--muted); border: 1px solid var(--border); }
+.account-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.account-actions .lib-btn { cursor: pointer; }
+
 /* Settings topic tabs */
 .settings-tabs { display: flex; gap: 4px; flex-wrap: wrap; margin-bottom: 16px; border-bottom: 1px solid var(--border); }
 .settings-tab { background: transparent; border: 0; border-bottom: 2px solid transparent; color: var(--muted); font-size: 13px; font-weight: 600; padding: 8px 12px; cursor: pointer; }

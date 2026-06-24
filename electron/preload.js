@@ -87,6 +87,11 @@ contextBridge.exposeInMainWorld('chervil', {
   /** Read-only extended OS details — Windows edition/build, update history, GPU, etc. */
   systemDetails: () => ipcRenderer.invoke('chervil:system-details'),
 
+  /** Open a web URL in the user's real browser. */
+  openExternal: (url) => ipcRenderer.invoke('chervil:open-external', url),
+  /** Account status for Settings → You: { ok, pro, username }. */
+  accountStatus: (payload) => ipcRenderer.invoke('chervil:account-status', payload),
+
   /** Sync folder (#1): point the state file at a synced folder, read it, or unlink. */
   getSyncFolder: () => ipcRenderer.invoke('chervil:get-sync-folder'),
   setSyncFolder: () => ipcRenderer.invoke('chervil:set-sync-folder'),

@@ -7,6 +7,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- **Account section in Settings → You** — shows whether you're on Chervil **Pro**
+  or **Free**, with links to your getchervil.com account and your public profile
+  (if you've claimed a handle). Free users get a short Pro pitch + sign-up link.
+  Backed by a new `GET /api/account` (publish-token auth).
 - **Universal omnibox** — the bar at the top of every page is now editable and
   smart: type a **URL** to open the real site, a **question** to have Sprig compose
   a page, or a **command** (`/learn`, `/quiz`) — one bar routes them all. `Ctrl+L`
