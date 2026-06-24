@@ -6,6 +6,14 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.3.0] — 2026-06-24
+
+The everyday-browser release. Chervil gains a **universal omnibox**, real browser
+table stakes (**bookmarks**, **browsing history**, **downloads**, in-site
+back/forward), a **Stop** button for composing, a tabbed **Settings**, and an
+account panel — while the creator platform grows **blogs** as a publishable type
+with type-grouped profiles and avatars.
+
 ### Added
 - **Downloads** — files downloaded from embedded real sites now save straight to
   your Downloads folder (no save dialog, with name de-duplication), a toast
