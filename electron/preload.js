@@ -2,8 +2,14 @@
 
 const { contextBridge, ipcRenderer } = require('electron');
 
+// The app version, read from package.json — shown in Settings ("About").
+let APP_VERSION = '';
+try { APP_VERSION = require('../package.json').version || ''; } catch { /* ignore */ }
+
 // Minimal, safe bridge between the renderer UI and the agent in the main process.
 contextBridge.exposeInMainWorld('chervil', {
+  /** Running app version (e.g. "0.2.0"). */
+  version: APP_VERSION,
   /**
    * Ask Chervil something.
    * @param {{query: string, history: Array}} payload

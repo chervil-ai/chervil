@@ -214,6 +214,57 @@ function attachContextMenu(wc, opts = {}) {
   });
 }
 
+// "About Chervil" — shows the running version (read-only, native dialog).
+function showAboutDialog() {
+  const win = BrowserWindow.getFocusedWindow() || mainWindow;
+  dialog.showMessageBox(win, {
+    type: 'info',
+    title: 'About Chervil',
+    message: `Chervil ${app.getVersion()}`,
+    detail: 'The agentic, conversational web browser — the web comes to you.\n\n© 2026 Rod Trent · MIT licensed',
+    buttons: ['OK', 'View on GitHub'],
+    defaultId: 0,
+    cancelId: 0,
+    icon: path.join(__dirname, '..', 'build', 'icon.ico'),
+  }).then((r) => { if (r.response === 1) shell.openExternal('https://github.com/chervil-ai/chervil'); })
+    .catch(() => {});
+}
+
+// Replace Electron's default File/Edit/View/Window/Help bar with a minimal menu:
+// drops "File", keeps standard accelerators (copy/paste, reload, zoom…), and adds
+// an About item. The bar is hidden by default (autoHideMenuBar) — Alt reveals it.
+function buildAppMenu() {
+  const isDev = !app.isPackaged;
+  const template = [
+    {
+      label: 'Edit',
+      submenu: [
+        { role: 'undo' }, { role: 'redo' }, { type: 'separator' },
+        { role: 'cut' }, { role: 'copy' }, { role: 'paste' }, { role: 'selectAll' },
+      ],
+    },
+    {
+      label: 'View',
+      submenu: [
+        { role: 'reload' }, { role: 'forceReload' },
+        ...(isDev ? [{ role: 'toggleDevTools' }] : []),
+        { type: 'separator' },
+        { role: 'resetZoom' }, { role: 'zoomIn' }, { role: 'zoomOut' },
+        { type: 'separator' }, { role: 'togglefullscreen' },
+      ],
+    },
+    {
+      label: 'Help',
+      submenu: [
+        { label: 'About Chervil', click: showAboutDialog },
+        { label: 'Chervil on GitHub', click: () => shell.openExternal('https://github.com/chervil-ai/chervil') },
+        { label: 'Report an issue', click: () => shell.openExternal('https://github.com/chervil-ai/chervil/issues') },
+      ],
+    },
+  ];
+  Menu.setApplicationMenu(Menu.buildFromTemplate(template));
+}
+
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1280,
@@ -222,6 +273,9 @@ function createWindow() {
     minHeight: 600,
     backgroundColor: '#0b0d12',
     title: 'Chervil',
+    // Chervil has its own chrome (tabs, omnibar), so hide the native menu bar by
+    // default. A minimal menu (set below) keeps standard accelerators; Alt reveals it.
+    autoHideMenuBar: true,
     // Sprig as the window/taskbar icon (multi-resolution .ico).
     icon: path.join(__dirname, '..', 'build', 'icon.ico'),
     webPreferences: {
@@ -238,6 +292,8 @@ function createWindow() {
   });
 
   mainWindow.loadFile(path.join(__dirname, '..', 'src', 'index.html'));
+  mainWindow.setMenuBarVisibility(false);
+  buildAppMenu();
 
   // Native right-click menus for the app UI (and any embedded real sites).
   attachContextMenu(mainWindow.webContents, { isMainUI: true });

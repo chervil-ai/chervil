@@ -6,6 +6,15 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- **App version in Settings** — Settings now shows the running version (e.g.
+  "🌿 Chervil v0.2.0"), and **Help → About Chervil** shows it in a dialog.
+
+### Changed
+- **Cleaner window chrome** — the native File/Edit/View/Window/Help menu bar is
+  replaced by a minimal menu (Edit/View/Help + About) and hidden by default
+  (Alt reveals it). Standard accelerators (copy/paste, reload, zoom) still work.
+
 ## [0.2.0] — 2026-06-23
 
 A platform release. Chervil grows past "build interactive pages" into a tool that

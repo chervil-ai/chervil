@@ -1225,6 +1225,8 @@ html, body {
 
 .lib-empty { color: var(--muted); font-size: 14px; text-align: center; padding: 40px 0; }
 
+.settings-version { text-align: center; color: var(--muted); font-size: 12px; margin: 18px 0 4px; }
+
 /* History multi-select bar (mirrors #tab-select-bar) */
 #lib-select-bar { display: flex; align-items: center; gap: 8px; padding: 8px 12px; background: rgba(123, 224, 163, 0.10); border-bottom: 1px solid var(--border); font-size: 12px; color: var(--text); }
 #lib-select-bar[hidden] { display: none; }

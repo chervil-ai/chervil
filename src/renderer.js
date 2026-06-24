@@ -4639,4 +4639,10 @@ if (window.chervil.onContextAsk) {
   });
 }
 
+// Show the running app version in Settings (from the preload bridge).
+{
+  const av = document.getElementById('app-version');
+  if (av && window.chervil && window.chervil.version) av.textContent = window.chervil.version;
+}
+
 init();
