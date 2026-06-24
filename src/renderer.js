@@ -139,7 +139,9 @@ const els = {
   libraryList: document.getElementById('library-list'),
   libTabHistory: document.getElementById('lib-tab-history'),
   libTabBookmarks: document.getElementById('lib-tab-bookmarks'),
+  libTabSites: document.getElementById('lib-tab-sites'),
   libTabTrash: document.getElementById('lib-tab-trash'),
+  clearSites: document.getElementById('clear-sites'),
   bookmarkBtn: document.getElementById('bookmark-btn'),
   emptyTrash: document.getElementById('empty-trash'),
   libSelectToggle: document.getElementById('lib-select-toggle'),
@@ -270,6 +272,8 @@ function providerConfig(agentOverride) {
 //   item = { id, createdAt, title, query, html, sources, conversation, history, spaceId }
 let library = { history: [], trash: [] };
 let bookmarks = []; // [{ id, key, kind:'site'|'page', url?, query?, title, at }]
+let siteHistory = []; // [{ id, url, title, at }] newest-first — real sites visited
+const MAX_SITE_HISTORY = 500;
 let drawerTab = 'history';
 // History multi-select (bulk delete) state.
 let librarySelectMode = false;
@@ -3651,16 +3655,34 @@ function removeBookmark(id) {
   scheduleSave();
 }
 
+function removeSite(id) {
+  siteHistory = siteHistory.filter((s) => s.id !== id);
+  renderDrawer();
+  scheduleSave();
+}
+function clearSiteHistory() {
+  if (!siteHistory.length) return;
+  if (!confirm('Clear all browsing history?')) return;
+  siteHistory = [];
+  renderDrawer();
+  scheduleSave();
+}
+
 function renderDrawer() {
   els.libTabHistory.classList.toggle('active', drawerTab === 'history');
   els.libTabTrash.classList.toggle('active', drawerTab === 'trash');
   if (els.libTabBookmarks) els.libTabBookmarks.classList.toggle('active', drawerTab === 'bookmarks');
+  if (els.libTabSites) els.libTabSites.classList.toggle('active', drawerTab === 'sites');
   els.emptyTrash.hidden = drawerTab !== 'trash';
+  if (els.clearSites) els.clearSites.hidden = drawerTab !== 'sites' || !siteHistory.length;
   // Select mode only applies to History; leaving History cancels it.
   if (drawerTab !== 'history' && librarySelectMode) { librarySelectMode = false; selectedLibraryIds.clear(); }
   renderSpaceBar();
 
-  const items = drawerTab === 'history' ? spaceItems() : drawerTab === 'bookmarks' ? bookmarks : library.trash;
+  const items = drawerTab === 'history' ? spaceItems()
+    : drawerTab === 'bookmarks' ? bookmarks
+      : drawerTab === 'sites' ? siteHistory
+        : library.trash;
 
   // Toggle + select-bar visibility (History only).
   if (els.libSelectToggle) els.libSelectToggle.hidden = drawerTab !== 'history' || librarySelectMode || !items.length;
@@ -3681,7 +3703,9 @@ function renderDrawer() {
       ? 'No pages in this Space yet. Compose some, then synthesize.'
       : drawerTab === 'bookmarks'
         ? 'No bookmarks yet. Click ☆ in the toolbar to save a page or site.'
-        : 'Trash is empty.';
+        : drawerTab === 'sites'
+          ? 'No browsing history yet. Open a website and it shows up here.'
+          : 'Trash is empty.';
     els.libraryList.appendChild(empty);
     return;
   }
@@ -3706,12 +3730,16 @@ function renderDrawer() {
     title.className = 'lib-title';
     title.textContent = drawerTab === 'bookmarks'
       ? `${item.kind === 'site' ? '🔗' : '📄'} ${item.title || item.url || 'Bookmark'}`
-      : (item.title || item.query || 'Untitled page');
+      : drawerTab === 'sites'
+        ? `🌐 ${item.title || item.url}`
+        : (item.title || item.query || 'Untitled page');
     const meta = document.createElement('div');
     meta.className = 'lib-meta';
     meta.textContent = drawerTab === 'bookmarks'
       ? (item.kind === 'site' ? item.url : 'Composed page')
-      : relTime(item.createdAt);
+      : drawerTab === 'sites'
+        ? `${item.url} · ${relTime(item.at)}`
+        : relTime(item.createdAt);
     main.appendChild(title);
     main.appendChild(meta);
     row.appendChild(main);
@@ -3730,6 +3758,15 @@ function renderDrawer() {
       del.className = 'lib-btn';
       del.textContent = 'Remove';
       del.addEventListener('click', () => removeBookmark(item.id));
+      actions.appendChild(del);
+    } else if (drawerTab === 'sites') {
+      main.title = 'Open';
+      main.style.cursor = 'pointer';
+      main.addEventListener('click', () => { closeDrawer(); openUrlInTab(item.url); });
+      const del = document.createElement('button');
+      del.className = 'lib-btn';
+      del.textContent = 'Remove';
+      del.addEventListener('click', () => removeSite(item.id));
       actions.appendChild(del);
     } else if (drawerTab === 'history') {
       main.title = 'Open';
@@ -4128,7 +4165,7 @@ function scheduleSave() {
   if (saveTimer) clearTimeout(saveTimer);
   saveTimer = setTimeout(() => {
     saveTimer = null;
-    window.chervil.saveState({ tabs, activeId, settings, library, bookmarks, spaces, activeSpaceId, living, schedules, agents, activeAgentId });
+    window.chervil.saveState({ tabs, activeId, settings, library, bookmarks, siteHistory, spaces, activeSpaceId, living, schedules, agents, activeAgentId });
   }, 500);
 }
 
@@ -4194,6 +4231,7 @@ async function init() {
     };
   }
   if (restored && Array.isArray(restored.bookmarks)) bookmarks = restored.bookmarks;
+  if (restored && Array.isArray(restored.siteHistory)) siteHistory = restored.siteHistory;
 
   // Spaces: restore, or migrate by creating a default Space and adopting any
   // previously-collected pages into it.
@@ -4453,10 +4491,19 @@ function onWebviewNavigated(url) {
     e.url = url;                                      // the entry now reflects where you are
     tab.title = hostOf(url);
     setOmnibox(url);
+    recordSiteVisit(url);
     renderTabs();
     scheduleSave();
   }
   updateNavButtons();
+}
+
+// Log a visited real site into browsing history (newest-first, deduped, capped).
+function recordSiteVisit(url, title) {
+  if (!url || !/^https?:\/\//i.test(url)) return;
+  if (siteHistory[0] && siteHistory[0].url === url) { siteHistory[0].at = Date.now(); return; }
+  siteHistory.unshift({ id: uid(), url, title: title || hostOf(url), at: Date.now() });
+  if (siteHistory.length > MAX_SITE_HISTORY) siteHistory.length = MAX_SITE_HISTORY;
 }
 if (els.webview) {
   els.webview.addEventListener('did-navigate', (e) => onWebviewNavigated(e.url));
@@ -4750,7 +4797,9 @@ els.libraryDrawer.addEventListener('click', (e) => {
 });
 els.libTabHistory.addEventListener('click', () => { drawerTab = 'history'; renderDrawer(); });
 if (els.libTabBookmarks) els.libTabBookmarks.addEventListener('click', () => { drawerTab = 'bookmarks'; renderDrawer(); });
+if (els.libTabSites) els.libTabSites.addEventListener('click', () => { drawerTab = 'sites'; renderDrawer(); });
 els.libTabTrash.addEventListener('click', () => { drawerTab = 'trash'; renderDrawer(); });
+if (els.clearSites) els.clearSites.addEventListener('click', clearSiteHistory);
 if (els.bookmarkBtn) els.bookmarkBtn.addEventListener('click', toggleBookmark);
 els.emptyTrash.addEventListener('click', emptyTrash);
 if (els.libSelectToggle) els.libSelectToggle.addEventListener('click', enterLibrarySelect);

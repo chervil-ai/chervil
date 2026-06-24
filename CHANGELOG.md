@@ -7,6 +7,9 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- **Browsing history** — a **Sites** tab in the History drawer logs the real
+  websites you visit (newest-first, deduped). Click to reopen, Remove one, or
+  Clear history. Separate from composed-page History.
 - **Bookmarks** — a ☆ in the toolbar saves the current page or site (★ when saved);
   a new **Bookmarks** tab in the History drawer lists them. Click to reopen (sites
   navigate, composed-page bookmarks recompose); Remove to delete. Persists locally.
