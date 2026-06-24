@@ -7,6 +7,9 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- **Form autofill** — save your details (name, email, phone, address…) in Settings
+  → You, then on any real site say "fill the form" and Chervil fills the matching
+  fields. Passwords and card details are never stored or auto-filled.
 - **The web agent plans first** — before acting on a live site, Sprig drafts a
   short numbered plan, shows it to you, and keeps each step grounded in it (it
   still adapts as the page reveals reality). More reliable multi-step task

@@ -218,6 +218,9 @@ let settings = {
   publishBase: 'https://getchervil.com',
   // Data folders (RFC 0004 local on-ramp): designated folders to pull files from.
   dataFolders: [],           // [{ id, name, path }] — local or desktop-synced OneDrive/GDrive
+  // Autofill identity (non-sensitive only — never passwords/cards). Filled into
+  // forms on real sites on request.
+  autofill: {},              // { fullName, givenName, familyName, email, phone, address, city, postal, country, organization }
 };
 
 // Per-provider metadata for the Settings UI.
@@ -1770,6 +1773,54 @@ async function executeAction(a) {
   } catch (e) { return { ok: false, error: String(e && e.message ? e.message : e) }; }
 }
 
+// Fill a live site's form fields from the user's saved autofill identity. Matches
+// fields by autocomplete/name/id/placeholder; NEVER touches password/hidden fields.
+function autofillScript(idJson) {
+  return `(function(){
+    var id = ${idJson};
+    function pick(el){
+      var hay = ((el.getAttribute('autocomplete')||'')+' '+(el.name||'')+' '+(el.id||'')+' '+(el.placeholder||'')+' '+(el.getAttribute('aria-label')||'')).toLowerCase();
+      var t = (el.type||'').toLowerCase();
+      if (t==='password' || t==='hidden') return null;
+      if (t==='email' || /e-?mail/.test(hay)) return id.email;
+      if (t==='tel' || /phone|mobile|\\btel\\b/.test(hay)) return id.phone;
+      if (/given|first.?name|fname/.test(hay)) return id.givenName;
+      if (/family|last.?name|lname|surname/.test(hay)) return id.familyName;
+      if (/full.?name|your.?name|^name$|\\bname\\b/.test(hay)) return id.fullName;
+      if (/street|address.?line.?1|address1|^address$|addr/.test(hay)) return id.address;
+      if (/city|town|locality|address.?level.?2/.test(hay)) return id.city;
+      if (/zip|postal|postcode/.test(hay)) return id.postal;
+      if (/country/.test(hay)) return id.country;
+      if (/organi|company|employer/.test(hay)) return id.organization;
+      return null;
+    }
+    var n = 0;
+    document.querySelectorAll('input, textarea, select').forEach(function(el){
+      if (el.disabled || el.readOnly) return;
+      if (el.offsetParent === null) return; // not visible
+      var v = pick(el);
+      if (v == null || v === '') return;
+      try { el.focus(); el.value = v; el.dispatchEvent(new Event('input',{bubbles:true})); el.dispatchEvent(new Event('change',{bubbles:true})); n++; } catch(e){}
+    });
+    return n;
+  })()`;
+}
+
+async function autofillCurrentForm() {
+  const tab = activeTab();
+  const cur = currentEntry(tab);
+  if (!cur || cur.kind !== 'navigate' || els.webview.hidden) { toast('Open a website with a form first.'); return; }
+  const id = settings.autofill || {};
+  if (!Object.values(id).some((v) => v)) { toast('Add your autofill details in Settings → You first.'); return; }
+  try {
+    const n = await els.webview.executeJavaScript(autofillScript(JSON.stringify(id)), true);
+    auditAction({ type: 'autofill', target: cur.url || '', decision: 'allow', ok: !!n });
+    addMessage(tab, 'bot', n ? `Filled ${n} field${n === 1 ? '' : 's'} from your saved details. (Passwords are never auto-filled.)` : 'No matching fields found to fill here.');
+  } catch (e) {
+    addMessage(tab, 'bot', `Couldn’t autofill: ${(e && e.message) || e}`, 'error');
+  }
+}
+
 // Hard stop on payment/purchase/transfer language — Sprig never does these.
 function looksFinancial(a) {
   const s = ((a.reason || '') + ' ' + (a.value || '')).toLowerCase();
@@ -3107,7 +3158,11 @@ function handleComposerSubmit(text) {
     return;
   }
 
-  if (cur && cur.kind === 'navigate') { startAgent(query); return; }
+  if (cur && cur.kind === 'navigate') {
+    if (/^\s*(auto-?fill|fill\s+(in|out)?\s*(the|this|my)?\s*form|fill\s+my\s+(details|info|information))\b/i.test(query)) { autofillCurrentForm(); return; }
+    startAgent(query);
+    return;
+  }
 
   // Deep Dive always composes a fresh research report (no in-place refine).
   if (deepMode) {
@@ -4010,7 +4065,13 @@ function closeDrawer() {
 }
 
 // ---- Settings ----
+const AUTOFILL_FIELDS = ['fullName', 'email', 'phone', 'organization', 'address', 'city', 'postal', 'country'];
+
 function applySettingsToUI() {
+  for (const k of AUTOFILL_FIELDS) {
+    const el = document.getElementById('af-' + k);
+    if (el) el.value = (settings.autofill && settings.autofill[k]) || '';
+  }
   for (const r of els.settingsModal.querySelectorAll('input[name="linkBehavior"]')) {
     r.checked = r.value === settings.linkBehavior;
   }
@@ -4931,6 +4992,12 @@ if (els.voiceAutosend) els.voiceAutosend.addEventListener('change', () => { sett
 // Sync folder (#1)
 if (els.syncChoose) els.syncChoose.addEventListener('click', chooseSyncFolder);
 if (els.syncClear) els.syncClear.addEventListener('click', clearSyncFolder);
+
+// Autofill identity fields — save on input.
+for (const k of AUTOFILL_FIELDS) {
+  const el = document.getElementById('af-' + k);
+  if (el) el.addEventListener('input', () => { settings.autofill = settings.autofill || {}; settings.autofill[k] = el.value.trim(); scheduleSave(); });
+}
 
 // Listening — "Hey Sprig"
 if (els.wakeToggle) els.wakeToggle.addEventListener('change', async () => {
