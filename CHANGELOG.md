@@ -6,6 +6,13 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- **Smart attachments for large files** — when an attached file is bigger than fits
+  in one request, Chervil now selects the **rows relevant to your question** instead
+  of just sending the first chunk. Ask "Scottish royalty heritage" of a huge family
+  tree and it pulls every matching row (local, on-device row matching — no server).
+  The first step toward full indexed retrieval (RFC 0004).
+
 ## [0.3.1] — 2026-06-24
 
 Agentic actions land — Sprig can now *do* things on a live site under a
