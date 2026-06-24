@@ -1243,6 +1243,20 @@ html, body {
 
 .settings-version { text-align: center; color: var(--muted); font-size: 12px; margin: 18px 0 4px; }
 
+/* Agent activity (RFC 0006 audit trail) */
+.audit-head { display: flex; align-items: center; justify-content: space-between; }
+.audit-list { display: flex; flex-direction: column; gap: 4px; max-height: 240px; overflow-y: auto; }
+.audit-empty { color: var(--muted); font-size: 13px; padding: 8px 2px; }
+.audit-row { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 7px; background: var(--panel-2); font-size: 12px; }
+.audit-row .ar-dec { flex: none; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.03em; padding: 2px 6px; border-radius: 999px; }
+.audit-row .ar-dec.allow, .audit-row .ar-dec.approved { color: #0b0d12; background: var(--accent); }
+.audit-row .ar-dec.confirm { color: #ffd27a; border: 1px solid #6b551f; }
+.audit-row .ar-dec.deny, .audit-row .ar-dec[class*="denied"] { color: #ffb0b0; border: 1px solid #7a2c2c; }
+.audit-row .ar-type { flex: none; font-weight: 600; color: var(--text); }
+.audit-row .ar-target { flex: 1; min-width: 0; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.audit-row .ar-time { flex: none; color: var(--muted); }
+.audit-row .ar-fail { color: #ffb0b0; }
+
 /* Settings → You: account box */
 .account-box { border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px; background: var(--panel-2); }
 .account-plan { display: flex; align-items: center; gap: 8px; font-size: 15px; font-weight: 600; margin-bottom: 4px; }

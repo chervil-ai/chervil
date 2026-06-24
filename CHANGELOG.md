@@ -7,6 +7,9 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- **Agent activity log** — the Agents view now shows a 🛡 activity trail of every
+  action Sprig took on a live site and what the control layer allowed, confirmed,
+  or denied (with a Clear button). Surfaces the RFC 0006 audit trail.
 - **Agentic control layer (foundation)** — the web-agent's actions now pass through
   a deterministic policy: a fixed registry of allowed action types (unknown types
   are refused), with allow / confirm / deny decisions, and an audit trail of every

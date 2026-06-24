@@ -76,6 +76,8 @@ const els = {
   schedView: document.getElementById('sched-view'),
   agentsBtn: document.getElementById('agents-btn'),
   agentsView: document.getElementById('agents-view'),
+  auditList: document.getElementById('audit-list'),
+  auditClear: document.getElementById('audit-clear'),
   agentChip: document.getElementById('agent-chip'),
   mapClose: document.getElementById('map-close'),
   mapCanvas: document.getElementById('map-canvas'),
@@ -2283,7 +2285,52 @@ function parseAgentFile(text, fallbackName) {
   };
 }
 
-function openAgents() { renderAgents(); renderStarterAgents(); els.agentsView.classList.add('open'); }
+function openAgents() { renderAgents(); renderStarterAgents(); renderAuditLog(); els.agentsView.classList.add('open'); }
+
+// Render the agent action audit trail (RFC 0006) — what Sprig did, and what the
+// control layer allowed, confirmed, or denied.
+function renderAuditLog() {
+  const list = els.auditList;
+  if (!list) return;
+  if (els.auditClear) els.auditClear.hidden = !agentAudit.length;
+  list.innerHTML = '';
+  if (!agentAudit.length) {
+    const e = document.createElement('div');
+    e.className = 'audit-empty';
+    e.textContent = 'No agent actions yet. When Sprig acts on a live site, every step is logged here.';
+    list.appendChild(e);
+    return;
+  }
+  for (const a of agentAudit.slice(0, 100)) {
+    const row = document.createElement('div');
+    row.className = 'audit-row';
+    const dec = document.createElement('span');
+    dec.className = 'ar-dec ' + (a.decision || 'allow');
+    dec.textContent = a.decision || 'allow';
+    const type = document.createElement('span');
+    type.className = 'ar-type';
+    type.textContent = a.type || 'action';
+    const target = document.createElement('span');
+    target.className = 'ar-target' + (a.ok === false ? ' ar-fail' : '');
+    target.textContent = (a.ok === false ? '✗ ' : '') + (a.target || '');
+    target.title = a.target || '';
+    const time = document.createElement('span');
+    time.className = 'ar-time';
+    time.textContent = relTime(a.at);
+    row.appendChild(dec);
+    row.appendChild(type);
+    row.appendChild(target);
+    row.appendChild(time);
+    list.appendChild(row);
+  }
+}
+function clearAuditLog() {
+  if (!agentAudit.length) return;
+  if (!confirm('Clear the agent activity log?')) return;
+  agentAudit = [];
+  renderAuditLog();
+  scheduleSave();
+}
 function closeAgents() { els.agentsView.classList.remove('open'); }
 function setActiveAgent(id) { activeAgentId = id; scheduleSave(); renderAgents(); updateAgentChip(); }
 
@@ -4658,6 +4705,7 @@ document.getElementById('sched-form').addEventListener('submit', (e) => { e.prev
 els.agentsBtn.addEventListener('click', openAgents);
 els.agentsView.addEventListener('click', (e) => { if (e.target === els.agentsView) closeAgents(); });
 document.getElementById('agents-close').addEventListener('click', closeAgents);
+if (els.auditClear) els.auditClear.addEventListener('click', clearAuditLog);
 document.getElementById('agent-import').addEventListener('click', importAgentFile);
 document.getElementById('agent-add').addEventListener('click', addAgentFromPaste);
 {
