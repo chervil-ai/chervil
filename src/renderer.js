@@ -9,6 +9,7 @@ const els = {
   deepToggle: document.getElementById('deep-toggle'),
   learnToggle: document.getElementById('learn-toggle'),
   quizToggle: document.getElementById('quiz-toggle'),
+  chatToggle: document.getElementById('chat-toggle'),
   attachBtn: document.getElementById('attach-btn'),
   foldersBtn: document.getElementById('folders-btn'),
   micBtn: document.getElementById('mic-btn'),
@@ -36,6 +37,7 @@ const els = {
   remixMin: document.getElementById('remix-min'),
   remixHandle: document.getElementById('remix-handle'),
   verifyBtn: document.getElementById('verify-btn'),
+  refreshPageBtn: document.getElementById('refresh-page-btn'),
   sourcesBtn: document.getElementById('sources-btn'),
   exportSelect: document.getElementById('export-select'),
   sourcesPanel: document.getElementById('sources-panel'),
@@ -55,6 +57,8 @@ const els = {
   rateSelect: document.getElementById('rate-select'),
   profileInput: document.getElementById('profile-input'),
   suggestions: document.getElementById('suggestions'),
+  main: document.getElementById('main'),
+  sidebarToggle: document.getElementById('sidebar-toggle'),
   tabs: document.getElementById('tabs'),
   newTab: document.getElementById('new-tab'),
   tabActions: document.getElementById('tab-actions'),
@@ -134,6 +138,9 @@ const els = {
   remixDefaultSelect: document.getElementById('remix-default-select'),
   // Notifications
   notifyToggle: document.getElementById('notify-toggle'),
+  heroToggle: document.getElementById('hero-toggle'),
+  heroNote: document.getElementById('hero-note'),
+  credsPanel: document.getElementById('creds-panel'),
   // MCP servers (Claude's native remote MCP connector)
   mcpList: document.getElementById('mcp-list'),
   mcpName: document.getElementById('mcp-name'),
@@ -151,6 +158,7 @@ const els = {
   libTabTrash: document.getElementById('lib-tab-trash'),
   clearSites: document.getElementById('clear-sites'),
   bookmarkBtn: document.getElementById('bookmark-btn'),
+  pwFillBtn: document.getElementById('autofill-pw-btn'),
   emptyTrash: document.getElementById('empty-trash'),
   libSelectToggle: document.getElementById('lib-select-toggle'),
   libSelectBar: document.getElementById('lib-select-bar'),
@@ -221,6 +229,10 @@ let settings = {
   // Autofill identity (non-sensitive only — never passwords/cards). Filled into
   // forms on real sites on request.
   autofill: {},              // { fullName, givenName, familyName, email, phone, address, city, postal, country, organization }
+  sidebarCollapsed: false,   // hide the left chat sidebar for a full-width page (Ctrl+\)
+  chatMode: false,           // "Just a chatbot" — plain conversational replies, no page composed
+  heroImages: false,         // generate an AI hero image for composed pages (opt-in; BYO image key, costs money)
+  credsAutoLock: 'hide',     // password vault auto-lock: 'hide' | '5' | '15' | '30' (min idle) | 'never'
 };
 
 // Per-provider metadata for the Settings UI.
@@ -859,6 +871,22 @@ function toggleTabLayout() {
   scheduleSave();
 }
 
+// ---- Chat sidebar collapse (full-width composed page) ----
+function applySidebarCollapsed() {
+  const on = !!settings.sidebarCollapsed;
+  if (els.main) els.main.classList.toggle('sidebar-collapsed', on);
+  if (els.sidebarToggle) {
+    els.sidebarToggle.setAttribute('aria-pressed', String(on));
+    els.sidebarToggle.title = on ? 'Show chat sidebar (Ctrl+\\)' : 'Hide chat sidebar (Ctrl+\\)';
+  }
+}
+
+function toggleSidebar() {
+  settings.sidebarCollapsed = !settings.sidebarCollapsed;
+  applySidebarCollapsed();
+  scheduleSave();
+}
+
 // ---- Drag-to-reorder tabs (works horizontally or vertically) ----
 let tabDragId = null;
 let tabSelectMode = false;
@@ -985,12 +1013,93 @@ function setBadge(kind, label) {
   els.badge.textContent = label;
 }
 
+// A varied pool of starter ideas for the welcome overlay. Each entry is
+// [chip label, full "Hey Sprig, …" query]. We shuffle-pick a few each time the
+// overlay appears so users keep seeing fresh suggestions. Mix of categories:
+// research, planning, learn/quiz, open-a-real-site, agentic "do", comparisons,
+// and a little fun.
+const SUGGESTION_POOL = [
+  // Research / news
+  ['Latest in AI this week', "what's the latest in AI this week?"],
+  ['What happened in tech today', 'what happened in tech today?'],
+  ['Explain the news on a topic', 'catch me up on the biggest news story today'],
+  ['Best new sci-fi books', 'what are the best new sci-fi books this year?'],
+  ['How does mRNA work?', 'explain how mRNA vaccines work, simply'],
+  ['Why is the sky blue?', 'why is the sky blue? explain like I have 5 minutes'],
+  // Planning
+  ['3-day Tokyo food tour', 'plan a 3-day food tour of Tokyo'],
+  ['Weekend in Lisbon', 'plan a weekend trip to Lisbon on a budget'],
+  ['Meal plan for the week', 'build me a healthy 7-day dinner meal plan'],
+  ['Plan a home gym', 'help me plan a budget home gym in a small space'],
+  ['Beginner garden plan', 'plan a beginner vegetable garden for spring'],
+  // Learn / quiz
+  ['Learn Python basics', '/learn the basics of Python programming'],
+  ['Teach me chess openings', '/learn the most useful chess openings for beginners'],
+  ['Quiz me on world capitals', '/quiz me on world capitals'],
+  ['Learn how SSL works', '/learn how HTTPS and SSL certificates work'],
+  ['Quiz me on the solar system', '/quiz me on the planets and the solar system'],
+  // Open a real site
+  ['Open YouTube', 'open YouTube'],
+  ['Open Wikipedia', 'open Wikipedia'],
+  ['Open Hacker News', 'open Hacker News'],
+  ['Go to GitHub', 'go to github.com'],
+  ['Open my email', 'open Gmail'],
+  // Agentic "do"
+  ['Find flights to Denver', 'find me flights to Denver next month'],
+  ['Summarize a webpage', 'summarize this article for me: '],
+  ['Draft a quick email', 'help me draft a polite email asking for a deadline extension'],
+  ['Compare two products', 'compare the best robot vacuums under $400'],
+  // Comparisons
+  ['iPhone 16 vs Pixel 9', 'compare the iPhone 16 and Pixel 9'],
+  ['React vs Vue in 2026', 'compare React and Vue for a new project in 2026'],
+  ['Coffee vs tea for focus', 'is coffee or tea better for focus? give me the science'],
+  // Fun
+  ['Build a trivia game', 'make me a quick trivia game about movies'],
+  ['Tell me a fun fact', 'tell me a genuinely surprising fun fact and explain it'],
+  ['Plan a movie night', 'plan a cozy movie night with snacks and a theme'],
+  ['Write a haiku about code', 'write a haiku about debugging code'],
+];
+
+// Remember the last shown set so we don't repeat it back-to-back.
+let _lastSuggestionKeys = [];
+
+function shuffleSuggestions(count = 4) {
+  // Fisher–Yates on a copy (Math.random is fine for cosmetic shuffling).
+  const pool = SUGGESTION_POOL.slice();
+  for (let i = pool.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [pool[i], pool[j]] = [pool[j], pool[i]];
+  }
+  let pick = pool.slice(0, count);
+  // If the new set fully overlaps the previous one, reshuffle once to vary it.
+  const keyOf = (p) => p[0];
+  const lastSet = new Set(_lastSuggestionKeys);
+  if (pick.every((p) => lastSet.has(keyOf(p))) && pool.length > count) {
+    pick = pool.slice(count, count * 2);
+  }
+  _lastSuggestionKeys = pick.map(keyOf);
+  return pick;
+}
+
+function renderSuggestions() {
+  if (!els.suggestions) return;
+  const picks = shuffleSuggestions(4);
+  els.suggestions.innerHTML = '';
+  for (const [label, query] of picks) {
+    const btn = document.createElement('button');
+    btn.setAttribute('data-q', `Hey Sprig, ${query}`);
+    btn.textContent = label;
+    els.suggestions.appendChild(btn);
+  }
+}
+
 function showOverlay() {
   els.frame.hidden = false;
   els.frame.removeAttribute('srcdoc');
   els.webview.hidden = true;
   els.webview.removeAttribute('src');
   els.overlay.hidden = false;
+  renderSuggestions();
 }
 
 function renderPageHtml(html, scrollY = 0) {
@@ -1045,6 +1154,7 @@ function renderCurrentPage() {
   updateNavButtons();
   updatePlaceholder();
   updateBookmarkStar();
+  updatePwFillButton();
 }
 
 // ---- Remix bar + Audio Overview ----
@@ -1102,6 +1212,26 @@ function verifyPage() {
     allowNavigate: false,
     displayText: 'Verify this page',
   });
+}
+
+// Manually re-ground the current composed page: re-run its own query and replace
+// it in place (the same in-place update the "Living pages" auto-refresh does, but
+// on demand). Lessons/quizzes are skill-built, not composed via ask — skip them.
+function refreshCurrentPage() {
+  const tab = activeTab();
+  if (!tab) return;
+  if (isTabBusy(tab.id) || agentRunning) { toast('Sprig is busy — try again in a moment.'); return; }
+  const cur = currentEntry(tab);
+  if (!cur || cur.kind !== 'page') { toast('Open a composed page to refresh it.'); return; }
+  if (cur.lesson || cur.skill) { toast('Rebuild lessons and quizzes from the composer instead.'); return; }
+  if (!cur.query) { toast('This page has no query to refresh from.'); return; }
+  els.sourcesPanel.hidden = true;
+  submitQuery(cur.query, {
+    refineMode: 'force',     // replace this page in place rather than branching a new one
+    allowNavigate: false,
+    skipUserMessage: true,   // a refresh isn't a new question — don't add a chat bubble
+  });
+  toast('Sprig is refreshing this page…');
 }
 
 function updateSourcesButton() {
@@ -1821,6 +1951,218 @@ async function autofillCurrentForm() {
   }
 }
 
+// ---- Password autofill (RFC 0008, Phase 8.2): user-initiated, origin-scoped ----
+// Injected into the live <webview> to fill ONE login from a saved credential.
+// Top document only; finds the password field + a nearby username field; NEVER
+// submits. Returns { found, filled }.
+function passwordFillScript(credJson) {
+  return `(function(){
+    var c = ${credJson};
+    function vis(el){ return el && el.offsetParent !== null && !el.disabled && !el.readOnly; }
+    var all = Array.prototype.slice.call(document.querySelectorAll('input'));
+    var pws = all.filter(function(el){ return (el.type||'').toLowerCase()==='password' && vis(el); });
+    if(!pws.length) return { found:false, filled:0 };
+    var pw = pws[0];
+    var pwIdx = all.indexOf(pw);
+    var user = null;
+    for(var i=pwIdx-1;i>=0;i--){ var el=all[i]; var t=(el.type||'').toLowerCase(); if(!vis(el)) continue; if(t==='text'||t==='email'||t===''){ user=el; break; } }
+    if(!user){
+      user = all.find(function(el){ var t=(el.type||'').toLowerCase(); var hay=((el.name||'')+(el.id||'')+(el.getAttribute('autocomplete')||'')).toLowerCase(); return vis(el)&&(t==='email'||t==='text')&&/user|email|login|account/.test(hay); }) || null;
+    }
+    var n=0;
+    function set(el,val){ try{ el.focus(); el.value=val; el.dispatchEvent(new Event('input',{bubbles:true})); el.dispatchEvent(new Event('change',{bubbles:true})); n++; }catch(e){} }
+    if(user && c.username) set(user, c.username);
+    if(c.password) set(pw, c.password);
+    return { found:true, filled:n };
+  })()`;
+}
+
+// ---- Vault auto-lock (RFC 0008, Phase 8.4) ----
+// Re-auth = the master passphrase is required again after the vault locks. The
+// vault locks on app hide/minimize (unless "never") and after an idle timeout.
+let lastActivityAt = Date.now();
+async function lockVault(reason) {
+  if (!window.chervil.creds) return;
+  try {
+    const st = await window.chervil.creds.status();
+    if (!st || !st.ok || !st.unlocked) return; // already locked / not set up
+    await window.chervil.creds.lock();
+    updatePwFillButton();
+    if (els.settingsModal && els.settingsModal.classList.contains('open')) renderCredsPanel();
+    if (reason === 'idle') toast('Passwords locked (idle).');
+  } catch { /* ignore */ }
+}
+// Single low-frequency idle checker; activity just stamps a timestamp.
+['mousemove', 'mousedown', 'keydown', 'wheel', 'touchstart'].forEach((ev) =>
+  window.addEventListener(ev, () => { lastActivityAt = Date.now(); }, { passive: true }));
+setInterval(() => {
+  const mins = parseInt(settings.credsAutoLock, 10);
+  if (Number.isFinite(mins) && mins > 0 && (Date.now() - lastActivityAt) >= mins * 60000) lockVault('idle');
+}, 30000);
+// Lock when Chervil is hidden/minimized (it lives in the tray), unless "never".
+// On becoming visible again, also check for a newer synced session (RFC 0005).
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) { if (settings.credsAutoLock !== 'never') lockVault('hide'); }
+  else checkSyncConflict();
+});
+window.addEventListener('focus', () => { checkSyncConflict(); });
+
+// A labeled auto-lock <select>, built for the (configured) credential panel.
+function credsAutoLockRow() {
+  const sel = credsEl('select', { class: 'live-select' });
+  const opts = [['hide', 'When Chervil is hidden'], ['5', 'After 5 minutes idle'], ['15', 'After 15 minutes idle'], ['30', 'After 30 minutes idle'], ['never', 'Only when I quit']];
+  for (const [v, label] of opts) {
+    const o = document.createElement('option');
+    o.value = v; o.textContent = label;
+    if (String(settings.credsAutoLock) === v) o.selected = true;
+    sel.appendChild(o);
+  }
+  sel.addEventListener('change', () => { settings.credsAutoLock = sel.value; lastActivityAt = Date.now(); scheduleSave(); });
+  return credsEl('div', { class: 'creds-toolbar' }, [credsEl('span', { class: 'field-note', text: 'Auto-lock' }), sel]);
+}
+
+// Make sure the vault is unlocked (the master-passphrase gate), prompting inline
+// if needed. Returns true if unlocked and ready.
+async function ensureVaultUnlocked() {
+  if (!window.chervil.creds) { toast('Password storage isn’t available in this build.'); return false; }
+  let st;
+  try { st = await window.chervil.creds.status(); } catch { st = null; }
+  if (!st || !st.ok || !st.encryptionAvailable) { toast('Password storage isn’t available on this system.'); return false; }
+  if (!st.configured) { toast('Set up a master passphrase first in Settings → Security.'); return false; }
+  if (st.unlocked) return true;
+  const pass = await showInputSheet({
+    title: 'Unlock your passwords',
+    subtitle: 'Enter your master passphrase to fill this login.',
+    placeholder: 'Master passphrase', type: 'password', okLabel: 'Unlock',
+  });
+  if (pass == null) return false;
+  const r = await window.chervil.creds.unlock(pass);
+  if (!r || !r.ok) { toast((r && r.error) || 'Wrong passphrase.'); return false; }
+  return true;
+}
+
+async function doFillCredential(cred, cur) {
+  const tab = activeTab();
+  try {
+    const r = await els.webview.executeJavaScript(passwordFillScript(JSON.stringify({ username: cred.username, password: cred.password })), true);
+    // Audit records WHAT happened, never the credential itself.
+    auditAction({ type: 'password_fill', target: cur.url || '', decision: 'allow', ok: !!(r && r.filled) });
+    if (r && r.found) {
+      addMessage(tab, 'bot', r.filled ? `Filled your saved login for ${hostOf(cur.url) || 'this site'}. Review it and submit yourself — Chervil never auto-submits.` : 'Found a login form but couldn’t fill it.');
+    } else {
+      toast('No login form found on this page.');
+    }
+  } catch (e) {
+    toast(`Couldn’t fill: ${(e && e.message) || e}`);
+  }
+}
+
+async function fillPasswordOnSite() {
+  const tab = activeTab();
+  const cur = currentEntry(tab);
+  if (!cur || cur.kind !== 'navigate' || els.webview.hidden) { toast('Open a website with a login form first.'); return; }
+  if (!(await ensureVaultUnlocked())) return;
+  const url = (els.webview.getURL && els.webview.getURL()) || cur.url || '';
+  let res;
+  try { res = await window.chervil.creds.forOrigin(url); } catch { res = null; }
+  const items = (res && res.ok && res.items) || [];
+  const site = (res && res.origin) || hostOf(url) || 'this site';
+  if (!items.length) {
+    // Nothing saved for this site — offer to save the login currently on the page.
+    showActionSheet('No saved login', `Save a login for ${site}?`, [
+      { label: 'Save the login on this page', primary: true, onClick: () => saveCurrentPageLogin(cur) },
+    ]);
+    updatePwFillButton();
+    return;
+  }
+  if (items.length === 1) { doFillCredential(items[0], cur); return; }
+  showActionSheet('Choose a login', `Fill credentials for ${site}`,
+    items.map((it) => ({ label: it.username || '(no username)', onClick: () => doFillCredential(it, cur) })));
+}
+
+// Read the username/password currently typed into the live page's login form.
+function readLoginFieldsScript() {
+  return `(function(){
+    function vis(el){ return el && el.offsetParent !== null; }
+    var all = Array.prototype.slice.call(document.querySelectorAll('input'));
+    var pw = all.find(function(el){ return (el.type||'').toLowerCase()==='password' && vis(el); });
+    var username='';
+    if(pw){ var idx=all.indexOf(pw); for(var i=idx-1;i>=0;i--){ var el=all[i]; var t=(el.type||'').toLowerCase(); if(!vis(el))continue; if(t==='email'||t==='text'||t===''){ username=el.value||''; break; } } }
+    return { username: username, password: pw ? (pw.value||'') : '' };
+  })()`;
+}
+
+// Manual save: capture whatever login is on the current page (or ask for the
+// missing pieces), then store it in the vault.
+async function saveCurrentPageLogin(cur) {
+  let fields = null;
+  try { fields = await els.webview.executeJavaScript(readLoginFieldsScript(), true); } catch { /* ignore */ }
+  let username = (fields && fields.username) || '';
+  let password = (fields && fields.password) || '';
+  const site = hostOf(cur.url) || 'this site';
+  if (!password) {
+    password = await showInputSheet({ title: 'Save login', subtitle: `Password for ${site}`, placeholder: 'Password', type: 'password', okLabel: 'Next' });
+    if (password == null || password === '') return;
+  }
+  if (!username) {
+    username = (await showInputSheet({ title: 'Save login', subtitle: `Username or email for ${site} (optional)`, placeholder: 'Username / email', type: 'text', okLabel: 'Save' })) || '';
+  }
+  if (!(await ensureVaultUnlocked())) return;
+  const url = (els.webview.getURL && els.webview.getURL()) || cur.url || '';
+  const r = await window.chervil.creds.save({ origin: url, username, password });
+  toast(r && r.ok ? 'Login saved.' : ((r && r.error) || 'Couldn’t save.'));
+  updatePwFillButton();
+}
+
+// Save-on-submit: the webview preload reports a submitted login. Offer to save it
+// to the vault (only for users who've set up the vault), skipping unchanged ones.
+let lastCapture = { sig: '', at: 0 };
+async function onCapturedLogin(data) {
+  if (!data || !data.password || !window.chervil.creds) return;
+  // Debounce the submit/click/Enter burst for the same login.
+  const sig = `${data.href}|${data.username}|${data.password}`;
+  const now = Date.now();
+  if (sig === lastCapture.sig && now - lastCapture.at < 8000) return;
+  lastCapture = { sig, at: now };
+
+  let st;
+  try { st = await window.chervil.creds.status(); } catch { return; }
+  if (!st || !st.ok || !st.configured) return; // only prompt users who opted into the vault
+  // Skip if this exact login is already saved (only checkable while unlocked).
+  if (st.unlocked) {
+    try { const h = await window.chervil.creds.hasExact(data.href, data.username, data.password); if (h && h.ok && h.exists) return; } catch { /* ignore */ }
+  }
+  const site = hostOf(data.href) || 'this site';
+  const label = data.username ? `Save (${data.username})` : 'Save login';
+  showActionSheet('Save this login?', `Save your login for ${site} to the encrypted vault? Chervil never shares it.`, [
+    { label, primary: true, onClick: async () => {
+      if (!(await ensureVaultUnlocked())) return;
+      const r = await window.chervil.creds.save({ origin: data.href, username: data.username, password: data.password });
+      toast(r && r.ok ? 'Login saved.' : ((r && r.error) || 'Couldn’t save.'));
+      updatePwFillButton();
+    } },
+  ]);
+}
+
+// Show/enable the 🔑 fill button based on context: only on a live site, enabled
+// when there's a saved login to fill (or the vault needs unlocking first).
+async function updatePwFillButton() {
+  const btn = els.pwFillBtn;
+  if (!btn) return;
+  const cur = currentEntry(activeTab());
+  const onLive = !!(cur && cur.kind === 'navigate' && els.webview && !els.webview.hidden);
+  btn.hidden = !onLive || !window.chervil.creds;
+  if (btn.hidden) return;
+  try {
+    const url = (els.webview.getURL && els.webview.getURL()) || cur.url || '';
+    const r = await window.chervil.creds.countForOrigin(url);
+    if (!r || !r.ok || !r.configured) { btn.disabled = true; btn.classList.add('dim'); btn.title = 'No saved logins yet (set up in Settings → Security)'; return; }
+    if (!r.unlocked) { btn.disabled = false; btn.classList.remove('dim'); btn.title = 'Fill a saved login (unlock required)'; return; }
+    if (r.count > 0) { btn.disabled = false; btn.classList.remove('dim'); btn.title = `Fill saved login (${r.count})`; }
+    else { btn.disabled = true; btn.classList.add('dim'); btn.title = 'No saved login for this site'; }
+  } catch { btn.disabled = true; btn.classList.add('dim'); }
+}
+
 // Hard stop on payment/purchase/transfer language — Sprig never does these.
 function looksFinancial(a) {
   const s = ((a.reason || '') + ' ' + (a.value || '')).toLowerCase();
@@ -1995,6 +2337,7 @@ function updatePlaceholder() {
   const tab = activeTab();
   const cur = currentEntry(tab);
   if (cur && cur.kind === 'navigate') els.prompt.placeholder = 'Hey Sprig, act here…';
+  else if (settings.chatMode) els.prompt.placeholder = 'Chat with Sprig…';
   else els.prompt.placeholder = skillMode === 'learn' ? 'What do you want to learn?' : skillMode === 'quiz' ? 'Quiz me on…' : deepMode ? 'Hey Sprig, research…' : 'Hey Sprig, ask…';
 }
 
@@ -2727,8 +3070,25 @@ function setDeepMode(on) {
   deepMode = !!on;
   els.deepToggle.classList.toggle('active', deepMode);
   els.deepToggle.setAttribute('aria-pressed', String(deepMode));
-  if (deepMode) setSkillMode(''); // the two pipelines are mutually exclusive
+  if (deepMode) { setSkillMode(''); setChatMode(false); } // the pipelines are mutually exclusive
   updatePlaceholder();
+}
+
+// "Just a chatbot" mode (sticky): the next messages are plain conversation —
+// Sprig replies as text in the chat panel instead of composing a page.
+function setChatMode(on) {
+  settings.chatMode = !!on;
+  if (els.chatToggle) {
+    els.chatToggle.classList.toggle('active', settings.chatMode);
+    els.chatToggle.setAttribute('aria-pressed', String(settings.chatMode));
+  }
+  if (settings.chatMode) {
+    // Mutually exclusive with the page-composing pipelines.
+    if (deepMode) { deepMode = false; els.deepToggle.classList.remove('active'); els.deepToggle.setAttribute('aria-pressed', 'false'); }
+    setSkillMode('');
+  }
+  updatePlaceholder();
+  scheduleSave();
 }
 
 // Skill picker (sticky): when a skill mode is active, the next query builds that
@@ -2748,6 +3108,10 @@ function setSkillMode(id) {
     deepMode = false;
     els.deepToggle.classList.remove('active');
     els.deepToggle.setAttribute('aria-pressed', 'false');
+  }
+  if (skillMode && settings.chatMode) { // skills compose pages — leave chat mode
+    settings.chatMode = false;
+    if (els.chatToggle) { els.chatToggle.classList.remove('active'); els.chatToggle.setAttribute('aria-pressed', 'false'); }
   }
   updatePlaceholder();
 }
@@ -3074,6 +3438,53 @@ function looksLikeUrl(s) {
   if (/^\d{1,3}(\.\d{1,3}){3}(:\d+)?(\/.*)?$/.test(t)) return true; // IPv4
   return /^[a-z0-9-]+(\.[a-z0-9-]+)*\.[a-z]{2,24}(:\d+)?(\/.*)?$/i.test(t); // domain.tld[/path]
 }
+// Friendly names → real URLs, so "open YouTube" / "go to my email" navigate
+// reliably instead of composing a page about the site.
+const KNOWN_SITES = {
+  youtube: 'https://www.youtube.com', yt: 'https://www.youtube.com',
+  gmail: 'https://mail.google.com', 'my email': 'https://mail.google.com',
+  email: 'https://mail.google.com', mail: 'https://mail.google.com',
+  google: 'https://www.google.com', 'google maps': 'https://maps.google.com',
+  maps: 'https://maps.google.com', wikipedia: 'https://www.wikipedia.org',
+  reddit: 'https://www.reddit.com', twitter: 'https://x.com', x: 'https://x.com',
+  facebook: 'https://www.facebook.com', instagram: 'https://www.instagram.com',
+  github: 'https://github.com', 'hacker news': 'https://news.ycombinator.com',
+  hn: 'https://news.ycombinator.com', amazon: 'https://www.amazon.com',
+  netflix: 'https://www.netflix.com', spotify: 'https://open.spotify.com',
+  linkedin: 'https://www.linkedin.com', chatgpt: 'https://chatgpt.com',
+  claude: 'https://claude.ai', wikipedia_org: 'https://www.wikipedia.org',
+};
+// App/agent concepts that should NOT be turned into "<word>.com" navigation.
+const NAV_WORD_DENYLIST = new Set([
+  'settings', 'downloads', 'download', 'history', 'bookmarks', 'bookmark',
+  'help', 'file', 'menu', 'find', 'library', 'profile', 'account', 'tab',
+  'page', 'devtools', 'console', 'cart', 'checkout', 'home', 'back', 'forward',
+]);
+
+// Detect a "go to / open <site>" navigation intent and resolve it to a URL.
+// Returns the URL string, or null if it isn't a confident navigation request.
+// `strict` (used while a live site is showing) only honors explicit domains and
+// known site names, so agent commands like "open the cart" aren't hijacked.
+function parseNavIntent(query, { strict = false } = {}) {
+  const m = (query || '').trim().match(
+    /^(?:go\s*to|goto|navigate\s+to|visit|open(?:\s+up)?|launch|pull\s+up|bring\s+up|take\s+me\s+to)\s+(.+)$/i
+  );
+  if (!m) return null;
+  let target = m[1].trim().replace(/[.?!,;:'"]+$/, '').replace(/^(?:the|my|a|an)\s+/i, '').trim();
+  if (!target) return null;
+  // 1) Explicit URL / domain.
+  if (looksLikeUrl(target)) return /^https?:\/\//i.test(target) ? target : 'https://' + target;
+  // 2) Known friendly name (whole-target match).
+  const key = target.toLowerCase();
+  if (KNOWN_SITES[key]) return KNOWN_SITES[key];
+  if (strict) return null;
+  // 3) A single bare word → treat as "<word>.com" (unless it's an app concept).
+  if (/^[a-z0-9][a-z0-9-]*$/i.test(target) && !NAV_WORD_DENYLIST.has(key)) {
+    return 'https://www.' + key + '.com';
+  }
+  return null;
+}
+
 // Open a real site in the active tab (mirrors the 'live' link behavior).
 function openUrlInTab(url) {
   const tab = activeTab();
@@ -3148,6 +3559,9 @@ function handleComposerSubmit(text) {
   if (quizCmd) { buildAndRenderSkill(tab, 'quiz', quizCmd[1].trim(), 'quiz'); return; }
   if (skillMode) { buildAndRenderSkill(tab, skillMode, query, skillMode === 'learn' ? 'lesson' : 'quiz'); return; }
 
+  // "Just a chatbot" mode: a plain conversational reply, no page composed.
+  if (settings.chatMode) { chatSubmit(tab, query); return; }
+
   // On a live site, the composer drives the web agent instead of composing a page.
   const cur = currentEntry(tab);
 
@@ -3157,6 +3571,12 @@ function handleComposerSubmit(text) {
     summarizeVideo(tab, ytUrl);
     return;
   }
+
+  // "Go to / open <site>" navigates to a real URL instead of composing a page.
+  // On a live site we stay strict (explicit domains / known names only) so the
+  // web agent's own "open …" commands aren't hijacked.
+  const navUrl = parseNavIntent(query, { strict: !!(cur && cur.kind === 'navigate') });
+  if (navUrl) { openUrlInTab(navUrl); return; }
 
   if (cur && cur.kind === 'navigate') {
     if (/^\s*(auto-?fill|fill\s+(in|out)?\s*(the|this|my)?\s*form|fill\s+my\s+(details|info|information))\b/i.test(query)) { autofillCurrentForm(); return; }
@@ -3244,6 +3664,203 @@ function promptRefineChoice(query, attachments = []) {
     cleanup();
     submitQuery(query, { tab, skipFollowup: true, attachments });
   });
+}
+
+// The hero block is delimited by marker comments so we can swap the loading
+// placeholder for the real image (or remove it on failure) with an exact match.
+const HERO_START = '<!--chervil-hero-start-->';
+const HERO_END = '<!--chervil-hero-end-->';
+
+// A shimmering skeleton shown in the hero's spot while the image generates, so
+// the user sees that something is happening (gen can take ~10s). Neutral colors
+// read on both light and dark composed pages.
+const HERO_PLACEHOLDER =
+  '<figure class="chervil-hero" style="margin:0 0 24px;width:100%;">' +
+    '<div style="position:relative;width:100%;height:240px;border-radius:12px;overflow:hidden;background:#e6e9ee;display:flex;align-items:center;justify-content:center;">' +
+      '<div style="position:absolute;inset:0;background:linear-gradient(90deg,#e6e9ee 0%,#f3f5f8 50%,#e6e9ee 100%);background-size:200% 100%;animation:chervilHeroShimmer 1.2s linear infinite;"></div>' +
+      '<span style="position:relative;color:#5b6472;font:600 14px/1.4 system-ui,-apple-system,sans-serif;">🎨 Generating hero image…</span>' +
+    '</div>' +
+  '</figure>' +
+  '<style>@keyframes chervilHeroShimmer{0%{background-position:200% 0}100%{background-position:-200% 0}}</style>';
+
+function heroFigure(dataUrl) {
+  // Show the full generated illustration (no crop). max-height caps very tall
+  // (e.g. square) images while object-fit:contain keeps the whole image visible.
+  return `<figure class="chervil-hero" style="margin:0 0 24px;width:100%;"><img src="${dataUrl}" alt="" style="display:block;width:100%;height:auto;max-height:70vh;object-fit:contain;border-radius:12px;"></figure>`;
+}
+
+// Downscale + recompress a (large, often multi-MB PNG) hero data URL to a compact
+// JPEG so the inlined image stays small — important because a composed page is
+// inlined whole, and the publish API caps page HTML at ~2 MB. Also makes pages
+// load faster. Falls back to the original on any failure.
+function compressHeroDataUrl(dataUrl, maxW = 1200, quality = 0.82) {
+  return new Promise((resolve) => {
+    try {
+      const img = new Image();
+      img.onload = () => {
+        try {
+          const ow = img.naturalWidth || maxW;
+          const oh = img.naturalHeight || maxW;
+          const scale = Math.min(1, maxW / ow);
+          const w = Math.max(1, Math.round(ow * scale));
+          const h = Math.max(1, Math.round(oh * scale));
+          const canvas = document.createElement('canvas');
+          canvas.width = w; canvas.height = h;
+          const ctx = canvas.getContext('2d');
+          ctx.drawImage(img, 0, 0, w, h);
+          const out = canvas.toDataURL('image/jpeg', quality);
+          resolve(out && out.length < dataUrl.length ? out : dataUrl);
+        } catch { resolve(dataUrl); }
+      };
+      img.onerror = () => resolve(dataUrl);
+      img.src = dataUrl;
+    } catch { resolve(dataUrl); }
+  });
+}
+
+// Insert a marker-wrapped hero block as the first child of <body>.
+function insertHeroBlock(html, inner) {
+  const block = HERO_START + inner + HERO_END;
+  const s = String(html || '');
+  const m = s.match(/<body[^>]*>/i);
+  if (m) {
+    const idx = m.index + m[0].length;
+    return s.slice(0, idx) + '\n' + block + s.slice(idx);
+  }
+  return block + s;
+}
+
+const HERO_BLOCK_RE = /<!--chervil-hero-start-->[\s\S]*?<!--chervil-hero-end-->/;
+// Swap whatever is inside the hero markers for new content (the real image).
+function replaceHeroBlock(html, inner) {
+  const s = String(html || '');
+  if (HERO_BLOCK_RE.test(s)) return s.replace(HERO_BLOCK_RE, HERO_START + inner + HERO_END);
+  return insertHeroBlock(s, inner);
+}
+// Strip the hero block entirely (generation failed, or a stale pending block).
+function stripHeroBlock(html) {
+  return String(html || '').replace(HERO_BLOCK_RE, '');
+}
+
+// Does this composed page actually suit a hero image? Heroes belong on content-
+// rich pages (articles, guides, explainers) — NOT on small interactive tools like
+// clocks, timers, calculators, or converters, where a big photo at the top looks
+// out of place. Judge by the page itself: measure the visible prose (ignoring
+// scripts/styles/markup). Sparse pages — and interactive pages with little prose —
+// are widgets, so skip the hero.
+function pageSuitsHero(html) {
+  const s = String(html || '');
+  const hasScript = /<script[\s>]/i.test(s);
+  const text = s
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  const len = text.length;
+  if (len < 600) return false;              // sparse → a utility/widget, not an article
+  if (hasScript && len < 1500) return false; // interactive + light prose → a tool, not content
+  return true;
+}
+
+// Opt-in: generate an AI hero image for a just-composed page. Shows a loading
+// skeleton in the hero's spot immediately, then swaps in the image when ready
+// (gen is slow). One image per page (guarded by entry.hero) so a refresh won't
+// regenerate it. Skips tool/widget pages (see pageSuitsHero).
+async function maybeAddHeroImage(tab, entry, title, topic) {
+  if (!tab || !entry || entry.kind !== 'page' || entry.hero || entry.heroPending) return;
+  if (!window.chervil || !window.chervil.generateHero) return;
+  if (!pageSuitsHero(entry.html)) return; // don't put a hero on a clock/calculator/etc.
+  const targetId = entry.id;
+
+  const findEntry = () => {
+    const t = tabs.find((x) => x.id === tab.id);
+    const e = t && t.pages.find((p) => p.id === targetId);
+    return { t, e };
+  };
+  const rerenderIfActive = (t, e) => { if (activeTab() === t && currentEntry(t) === e) renderCurrentPage(); };
+
+  // 1) Show the loading placeholder right away (not persisted — it's transient).
+  entry.heroPending = true;
+  entry.html = insertHeroBlock(entry.html, HERO_PLACEHOLDER);
+  rerenderIfActive(tab, entry);
+
+  try {
+    const resp = await window.chervil.generateHero({ title: title || '', topic: topic || '' });
+    const { t, e } = findEntry();
+    if (!e || e.kind !== 'page') return; // page closed while generating
+    if (!resp || !resp.ok) {
+      e.html = stripHeroBlock(e.html);
+      delete e.heroPending;
+      rerenderIfActive(t, e);
+      if (resp && resp.error === 'no-image-key') toast('Hero images need an OpenAI, Gemini, or Grok key (Settings → AI).');
+      else toast('Couldn’t generate a hero image.');
+      return;
+    }
+    // 2) Compress, then swap the placeholder for the real image.
+    const compact = await compressHeroDataUrl(resp.dataUrl);
+    e.html = replaceHeroBlock(e.html, heroFigure(compact));
+    e.hero = true;
+    delete e.heroPending;
+    rerenderIfActive(t, e);
+    scheduleSave();
+  } catch {
+    const { t, e } = findEntry();
+    if (e && e.kind === 'page') { e.html = stripHeroBlock(e.html); delete e.heroPending; rerenderIfActive(t, e); }
+    toast('Couldn’t generate a hero image.');
+  }
+}
+
+// "Just a chatbot" mode: send a plain conversational turn and append Sprig's
+// text reply to the chat panel — no page composed. Reuses the tab's single-flight
+// run state so it can't collide with a composing request.
+async function chatSubmit(tab, text) {
+  const query = (text || '').trim();
+  if (!query || !tab || isTabBusy(tab.id) || agentRunning) return;
+
+  els.prompt.value = '';
+  resetPromptHeight();
+
+  const requestId = uid();
+  const rs = runStateFor(tab.id);
+  rs.genId = requestId;
+  rs.statusText = 'Sprig is typing…';
+
+  addMessage(tab, 'user', query);
+  if (tab.title === 'New Tab') tab.title = query.length > 40 ? query.slice(0, 37) + '…' : query;
+  renderTabs();
+
+  const sentHistory = tab.history.slice();
+  tab.history.push({ role: 'user', content: query });
+
+  const isActive = () => tab.id === activeId;
+  if (isActive()) { setStatus(rs.statusText); setBadge('working', 'working'); setSendBusy(true); }
+
+  try {
+    const resp = await window.chervil.chat({
+      query,
+      history: sentHistory,
+      profile: settings.profile || null,
+      config: providerConfig(),
+    });
+    rs.genId = null; rs.statusText = '';
+    if (isActive()) clearStatus();
+    if (!resp || !resp.ok) {
+      addMessage(tab, 'bot', (resp && resp.error) || 'Something went wrong.', 'error');
+    } else {
+      const reply = resp.text || '…';
+      addMessage(tab, 'bot', reply);
+      tab.history.push({ role: 'assistant', content: reply });
+    }
+  } catch (e) {
+    rs.genId = null; rs.statusText = '';
+    if (isActive()) clearStatus();
+    addMessage(tab, 'bot', String(e && e.message ? e.message : e), 'error');
+  } finally {
+    if (isActive()) { setSendBusy(false); setBadge('', 'ready'); els.prompt.focus(); }
+    renderTabs();
+    scheduleSave();
+  }
 }
 
 // Runs one generation against a tab. Multiple tabs may run concurrently; a single
@@ -3400,6 +4017,12 @@ async function submitQuery(text, opts = {}) {
       });
       addToLibrary(tab, result, query);
 
+      // Opt-in AI hero image for a freshly composed page (not refines, remixes,
+      // or trust-checks). Runs after the page is shown; injects when ready.
+      if (settings.heroImages && !isRefine && !opts.remix && !opts.verify) {
+        maybeAddHeroImage(tab, currentEntry(tab), result.title || query, query);
+      }
+
       // If the user stepped away while this composed (minimized to tray / window
       // unfocused), raise an OS notification so a finished page doesn't sit
       // unseen. Scheduled/background runs notify via runSchedule, so skip those
@@ -3503,6 +4126,37 @@ function handleLinkClick(href, text) {
 }
 
 // A small centered modal with a title, a subtitle, and a stack of action buttons.
+// A sheet with a single text/password input → resolves to the value (or null if
+// cancelled). Used for the password-vault unlock prompt.
+function showInputSheet({ title, subtitle, placeholder = '', type = 'text', okLabel = 'OK' }) {
+  return new Promise((resolve) => {
+    const overlay = document.createElement('div');
+    overlay.className = 'chervil-sheet-overlay';
+    let done = false;
+    const finish = (v) => { if (done) return; done = true; overlay.remove(); document.removeEventListener('keydown', onEsc); resolve(v); };
+    function onEsc(e) { if (e.key === 'Escape') finish(null); }
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) finish(null); });
+    const sheet = document.createElement('div');
+    sheet.className = 'chervil-sheet';
+    const h = document.createElement('div'); h.className = 'chervil-sheet-title'; h.textContent = title; sheet.appendChild(h);
+    if (subtitle) { const s = document.createElement('div'); s.className = 'chervil-sheet-sub'; s.textContent = subtitle; sheet.appendChild(s); }
+    const input = document.createElement('input');
+    input.type = type; input.className = 'mcp-field'; input.placeholder = placeholder; input.style.width = '100%';
+    input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); finish(input.value); } });
+    sheet.appendChild(input);
+    const ok = document.createElement('button'); ok.className = 'chervil-sheet-btn primary'; ok.textContent = okLabel;
+    ok.addEventListener('click', () => finish(input.value));
+    sheet.appendChild(ok);
+    const cancel = document.createElement('button'); cancel.className = 'chervil-sheet-btn cancel'; cancel.textContent = 'Cancel';
+    cancel.addEventListener('click', () => finish(null));
+    sheet.appendChild(cancel);
+    overlay.appendChild(sheet);
+    document.body.appendChild(overlay);
+    document.addEventListener('keydown', onEsc);
+    input.focus();
+  });
+}
+
 function showActionSheet(title, subtitle, actions, onClose) {
   const overlay = document.createElement('div');
   overlay.className = 'chervil-sheet-overlay';
@@ -3897,7 +4551,21 @@ function toggleBookmark() {
   else {
     const bm = entry.kind === 'navigate'
       ? { id: uid(), key, kind: 'site', url: entry.url, title: tab.title || hostOf(entry.url) || entry.url, at: Date.now() }
-      : { id: uid(), key, kind: 'page', query: entry.query || '', title: entry.title || tab.title || 'Saved page', at: Date.now() };
+      : {
+          id: uid(), key, kind: 'page',
+          query: entry.query || '',
+          title: entry.title || tab.title || 'Saved page',
+          at: Date.now(),
+          // Snapshot the whole tab (conversation + history + page tree) so reopening
+          // restores the full session like History does — not a recompose-from-query.
+          tab: {
+            title: tab.title,
+            conversation: (tab.conversation || []).map((m) => ({ ...m })),
+            history: (tab.history || []).map((h) => ({ ...h })),
+            pages: (tab.pages || []).map((p) => ({ ...p })),
+            currentId: tab.currentId,
+          },
+        };
     bookmarks.unshift(bm);
     toast('Bookmarked.');
   }
@@ -3905,9 +4573,42 @@ function toggleBookmark() {
   if (els.libraryDrawer.classList.contains('open') && drawerTab === 'bookmarks') renderDrawer();
   scheduleSave();
 }
+// Rebuild a full tab from a bookmark/snapshot, remapping page ids so the restored
+// copy never collides with the still-open original tab.
+function restoreTabSnapshot(snap) {
+  const srcPages = Array.isArray(snap.pages) ? snap.pages : [];
+  const idMap = new Map();
+  for (const p of srcPages) if (p && p.id) idMap.set(p.id, uid());
+  const pages = srcPages.map((p) => ({
+    ...p,
+    id: idMap.get(p.id) || uid(),
+    parentId: p.parentId != null ? (idMap.get(p.parentId) || null) : null,
+  }));
+  const currentId = idMap.get(snap.currentId) || (pages.length ? pages[pages.length - 1].id : null);
+  const tab = {
+    id: uid(),
+    title: snap.title || 'Saved page',
+    conversation: (snap.conversation || []).map((m) => ({ ...m })),
+    history: (snap.history || []).map((h) => ({ ...h })),
+    pages,
+    currentId,
+    pinned: false,
+  };
+  tabs.push(tab);
+  activeId = tab.id;
+  renderTabs();
+  renderConversation();
+  renderCurrentPage();
+  refreshComposer();
+  scheduleSave();
+}
+
 function openBookmark(b) {
   closeDrawer();
   if (b.kind === 'site' && b.url) { openUrlInTab(b.url); return; }
+  // New bookmarks carry a full tab snapshot; restore the whole session.
+  if (b.tab && Array.isArray(b.tab.pages) && b.tab.pages.length) { restoreTabSnapshot(b.tab); return; }
+  // Legacy lightweight bookmarks ({query,title}) — recompose from the query.
   if (b.query) { newTab(true); submitQuery(b.query); return; }
   toast('This bookmark can’t be opened.');
 }
@@ -4097,8 +4798,162 @@ function applySettingsToUI() {
   if (els.wakeKeywordNote) els.wakeKeywordNote.textContent = (settings.wakeKeyword === 'custom' && settings.wakeKeywordLabel)
     ? `Loaded: ${settings.wakeKeywordLabel}` : 'No custom model loaded.';
   if (els.sttKeyInput) els.sttKeyInput.value = '';
+  if (els.heroToggle) els.heroToggle.checked = !!settings.heroImages;
   refreshSttKeyStatus();
+  refreshImageKeyStatus();
+  renderCredsPanel();
   renderMcpServers();
+}
+
+// ---- Credential vault UI (RFC 0008, Phase 8.1) ----
+// A stateful panel: not-configured → set a master passphrase; configured+locked
+// → unlock; unlocked → list/add/delete saved logins. Plaintext passwords stay in
+// the main process; the renderer only holds one momentarily for "Reveal"/add.
+function credsEl(tag, props = {}, children = []) {
+  const el = document.createElement(tag);
+  for (const [k, v] of Object.entries(props)) {
+    if (k === 'class') el.className = v;
+    else if (k === 'text') el.textContent = v;
+    else if (k === 'type' && tag === 'input') el.type = v;
+    else if (k.startsWith('on') && typeof v === 'function') el.addEventListener(k.slice(2), v);
+    else el.setAttribute(k, v);
+  }
+  for (const c of children) if (c) el.appendChild(c);
+  return el;
+}
+
+// Generate a strong random password (crypto-strong; excludes ambiguous chars like
+// l/I/O/0/1). Guarantees at least one lower/upper/digit/symbol, then shuffles.
+function generatePassword(len = 20) {
+  const lower = 'abcdefghijkmnpqrstuvwxyz';
+  const upper = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
+  const digits = '23456789';
+  const symbols = '!@#$%^&*-_=+?';
+  const all = lower + upper + digits + symbols;
+  const rand = (n) => crypto.getRandomValues(new Uint32Array(1))[0] % n;
+  const pick = (set) => set[rand(set.length)];
+  const out = [pick(lower), pick(upper), pick(digits), pick(symbols)];
+  for (let i = out.length; i < Math.max(8, len); i++) out.push(pick(all));
+  for (let i = out.length - 1; i > 0; i--) { const j = rand(i + 1); [out[i], out[j]] = [out[j], out[i]]; }
+  return out.join('');
+}
+
+async function renderCredsPanel() {
+  const panel = els.credsPanel;
+  if (!panel || !window.chervil.creds) return;
+  panel.innerHTML = '';
+  let st;
+  try { st = await window.chervil.creds.status(); } catch { st = null; }
+  if (!st || !st.ok) { panel.appendChild(credsEl('p', { class: 'field-note warn', text: 'Password storage is unavailable in this build.' })); return; }
+
+  if (!st.encryptionAvailable) {
+    panel.appendChild(credsEl('p', { class: 'field-note warn', text: 'Your OS has no encryption backend available, so passwords can’t be stored securely here. Password autofill is disabled.' }));
+    return;
+  }
+
+  // 1) First-time setup — choose a master passphrase.
+  if (!st.configured) {
+    const input = credsEl('input', { type: 'password', class: 'mcp-field', placeholder: 'Create a master passphrase (min 8 chars)', autocomplete: 'new-password' });
+    const note = credsEl('small', { class: 'field-note' });
+    const submit = async () => {
+      const r = await window.chervil.creds.setup(input.value);
+      if (r && r.ok) { toast('Password vault created.'); renderCredsPanel(); }
+      else { note.textContent = (r && r.error) || 'Couldn’t create the vault.'; note.className = 'field-note warn'; }
+    };
+    input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); submit(); } });
+    panel.appendChild(credsEl('p', { class: 'group-hint', text: 'Set a master passphrase to protect your saved logins. You’ll enter it once per session to unlock them. It can’t be recovered if forgotten — there’s no backdoor.' }));
+    panel.appendChild(credsEl('div', { class: 'mcp-add' }, [input, credsEl('button', { class: 'lib-btn primary', text: 'Create vault', onclick: submit })]));
+    panel.appendChild(note);
+    return;
+  }
+
+  // 2) Locked — unlock with the passphrase.
+  if (!st.unlocked) {
+    const input = credsEl('input', { type: 'password', class: 'mcp-field', placeholder: 'Master passphrase', autocomplete: 'current-password' });
+    const note = credsEl('small', { class: 'field-note' });
+    const submit = async () => {
+      const r = await window.chervil.creds.unlock(input.value);
+      if (r && r.ok) { toast('Passwords unlocked.'); renderCredsPanel(); }
+      else { note.textContent = (r && r.error) || 'Wrong passphrase.'; note.className = 'field-note warn'; input.select(); }
+    };
+    input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); submit(); } });
+    panel.appendChild(credsEl('p', { class: 'group-hint', text: 'Enter your master passphrase to view and manage saved logins.' }));
+    panel.appendChild(credsEl('div', { class: 'mcp-add' }, [input, credsEl('button', { class: 'lib-btn primary', text: 'Unlock', onclick: submit })]));
+    panel.appendChild(note);
+    panel.appendChild(credsAutoLockRow());
+    return;
+  }
+
+  // 3) Unlocked — manage entries.
+  const lockBtn = credsEl('button', { class: 'lib-btn', text: '🔒 Lock', title: 'Lock the vault now', onclick: async () => { await window.chervil.creds.lock(); toast('Passwords locked.'); renderCredsPanel(); } });
+  panel.appendChild(credsEl('div', { class: 'creds-toolbar' }, [credsEl('span', { class: 'field-note ok', text: 'Unlocked for this session.' }), lockBtn]));
+
+  // Add-new form.
+  const oInput = credsEl('input', { type: 'text', class: 'mcp-field', placeholder: 'Site (e.g. github.com)', spellcheck: 'false' });
+  const uInput = credsEl('input', { type: 'text', class: 'mcp-field', placeholder: 'Username / email', spellcheck: 'false', autocomplete: 'off' });
+  const pInput = credsEl('input', { type: 'password', class: 'mcp-field', placeholder: 'Password', autocomplete: 'new-password' });
+  const genBtn = credsEl('button', { class: 'lib-btn', title: 'Generate a strong password', text: '🎲 Generate', onclick: () => {
+    pInput.value = generatePassword(20);
+    pInput.type = 'text'; // reveal what was generated so the user can see/copy it
+  } });
+  const addNote = credsEl('small', { class: 'field-note' });
+  const addBtn = credsEl('button', { class: 'lib-btn primary', text: 'Save login', onclick: async () => {
+    if (!oInput.value.trim() || !pInput.value) { addNote.textContent = 'Site and password are required.'; addNote.className = 'field-note warn'; return; }
+    const r = await window.chervil.creds.save({ origin: oInput.value.trim(), username: uInput.value.trim(), password: pInput.value });
+    if (r && r.ok) { oInput.value = uInput.value = pInput.value = ''; pInput.type = 'password'; addNote.textContent = ''; toast('Login saved.'); renderCredsList(listWrap); }
+    else { addNote.textContent = (r && r.error) || 'Couldn’t save.'; addNote.className = 'field-note warn'; }
+  } });
+  panel.appendChild(credsEl('div', { class: 'mcp-add creds-add' }, [oInput, uInput, pInput, genBtn, addBtn]));
+  panel.appendChild(addNote);
+
+  const listWrap = credsEl('div', { class: 'creds-list' });
+  panel.appendChild(listWrap);
+  renderCredsList(listWrap);
+  panel.appendChild(credsAutoLockRow());
+}
+
+async function renderCredsList(wrap) {
+  wrap.innerHTML = '';
+  let items = [];
+  try { const r = await window.chervil.creds.list(); items = (r && r.ok && r.items) || []; } catch { /* ignore */ }
+  if (!items.length) { wrap.appendChild(credsEl('div', { class: 'lib-empty', text: 'No saved logins yet.' })); return; }
+  items.sort((a, b) => (a.origin || '').localeCompare(b.origin || ''));
+  for (const it of items) {
+    const meta = credsEl('div', { class: 'creds-meta' }, [
+      credsEl('div', { class: 'creds-origin', text: it.origin }),
+      credsEl('div', { class: 'creds-user', text: it.username || '(no username)' }),
+    ]);
+    const revealBtn = credsEl('button', { class: 'lib-btn', text: '👁 Reveal', onclick: async (e) => {
+      const r = await window.chervil.creds.reveal(it.id);
+      if (r && r.ok) {
+        const shown = e.target.dataset.shown === '1';
+        if (shown) { e.target.textContent = '👁 Reveal'; e.target.dataset.shown = '0'; meta.querySelector('.creds-pass')?.remove(); }
+        else { e.target.textContent = '🙈 Hide'; e.target.dataset.shown = '1'; meta.appendChild(credsEl('div', { class: 'creds-pass', text: r.password })); }
+      } else { toast((r && r.error) || 'Couldn’t reveal.'); }
+    } });
+    const delBtn = credsEl('button', { class: 'lib-btn danger', text: 'Delete', onclick: async () => {
+      if (!confirm(`Delete the saved login for ${it.origin}?`)) return;
+      const r = await window.chervil.creds.remove(it.id);
+      if (r && r.ok) { toast('Login deleted.'); renderCredsList(wrap); } else { toast('Couldn’t delete.'); }
+    } });
+    wrap.appendChild(credsEl('div', { class: 'creds-row' }, [meta, credsEl('div', { class: 'creds-actions' }, [revealBtn, delBtn])]));
+  }
+}
+
+// Reflect whether an image-capable key (OpenAI/Gemini) is configured.
+async function refreshImageKeyStatus() {
+  if (!els.heroNote || !window.chervil.imageKeyStatus) return;
+  try {
+    const st = await window.chervil.imageKeyStatus();
+    if (st && st.hasKey) {
+      const which = st.openai ? 'OpenAI' : st.gemini ? 'Gemini' : 'Grok';
+      els.heroNote.textContent = `Using your ${which} key. Each page generates one image (billed to your key).`;
+      els.heroNote.className = 'field-note ok';
+    } else {
+      els.heroNote.textContent = 'No image key found. Add an OpenAI, Gemini, or Grok key under the provider settings above to enable this.';
+      els.heroNote.className = 'field-note warn';
+    }
+  } catch { /* ignore */ }
 }
 
 // Reflect whether a speech-to-text key is saved (key lives in the main process).
@@ -4430,12 +5285,40 @@ async function clearSyncFolder() {
 }
 
 // ---- Persistence ----
+// Tracks the synced state file's last-known mtime so we can tell when ANOTHER
+// computer updated the shared folder-synced session (RFC 0005, decision 3).
+let lastStateMtimeMs = 0;
+let syncConflictPrompting = false;
+
 function scheduleSave() {
   if (saveTimer) clearTimeout(saveTimer);
   saveTimer = setTimeout(() => {
     saveTimer = null;
-    window.chervil.saveState({ tabs, activeId, settings, library, bookmarks, siteHistory, agentAudit, spaces, activeSpaceId, living, schedules, agents, activeAgentId });
+    window.chervil.saveState({ tabs, activeId, settings, library, bookmarks, siteHistory, agentAudit, spaces, activeSpaceId, living, schedules, agents, activeAgentId })
+      .then((r) => { if (r && r.mtimeMs) lastStateMtimeMs = r.mtimeMs; }) // our own write — keep baseline current
+      .catch(() => {});
   }, 500);
+}
+
+async function refreshStateMtime() {
+  try { const r = await window.chervil.stateInfo(); if (r && r.ok) lastStateMtimeMs = r.mtimeMs || 0; } catch { /* ignore */ }
+}
+
+// On focus/visibility, if the synced state file is newer than our baseline (and we
+// have no pending write of our own), another machine updated it — offer to reload.
+async function checkSyncConflict() {
+  if (syncConflictPrompting || saveTimer) return;          // don't fight our own pending save
+  if (!window.chervil.stateInfo) return;
+  let r;
+  try { r = await window.chervil.stateInfo(); } catch { return; }
+  if (!r || !r.ok || !r.synced || !r.mtimeMs) return;       // local-only sessions never prompt
+  if (r.mtimeMs > lastStateMtimeMs + 1500) {                // 1.5s epsilon vs filesystem jitter
+    syncConflictPrompting = true;
+    const reload = confirm('Your Chervil session was updated on another computer (synced folder). Reload to load the latest? Unsaved changes on this computer will be replaced.');
+    if (reload) { location.reload(); return; }
+    lastStateMtimeMs = r.mtimeMs;                            // declined — don't nag again for this version
+    syncConflictPrompting = false;
+  }
 }
 
 function sanitizeTab(t) {
@@ -4446,6 +5329,9 @@ function sanitizeTab(t) {
   for (const p of pages) {
     if (!p.id) p.id = uid();
     if (p.parentId === undefined) p.parentId = prevId;
+    // If the app closed while a hero image was still generating, drop the stale
+    // loading placeholder so the page doesn't show a frozen skeleton.
+    if (p.heroPending && p.html) { p.html = stripHeroBlock(p.html); delete p.heroPending; }
     prevId = p.id;
   }
   let currentId = t.currentId;
@@ -4536,6 +5422,8 @@ async function init() {
   startScheduler();
 
   applyTabLayout();
+  applySidebarCollapsed();
+  setChatMode(settings.chatMode); // reflect the persisted "Just a chatbot" toggle
   renderTabs();
   renderConversation();
   renderCurrentPage();
@@ -4544,6 +5432,9 @@ async function init() {
 
   // Resume "Hey Sprig" listening if it was on last session.
   if (settings.wakeEnabled) startWake();
+
+  // Baseline for folder-sync conflict detection (RFC 0005, decision 3).
+  refreshStateMtime();
 }
 
 // ---- Save (to disk) ----
@@ -4646,10 +5537,54 @@ function publishCurrentToWeb() {
   if (!entry || entry.kind !== 'page') { toast('Open a page first, then publish it.'); return; }
   if (entry.artifact || entry.lesson) return publishCurrentLesson();
   // Plain composed page → let the user choose where it goes.
-  showActionSheet('Publish to web', 'How should this go out?', [
+  const opts = [
     { label: '🌐 As a Page', primary: true, onClick: () => publishCurrentPage('page') },
     { label: '✍️ As a Blog post', onClick: () => publishCurrentPage('blog') },
-  ]);
+  ];
+  // Already published as a page → offer cloud auto-refresh settings.
+  if (entry.publishedId) {
+    opts.push({ label: entry.cloudLiveMs ? '☁ Cloud refresh: on — change…' : '☁ Keep it live in the cloud…', onClick: () => chooseCloudLive(entry) });
+  }
+  showActionSheet('Publish to web', 'How should this go out?', opts);
+}
+
+// Cloud living pages (RFC 0007 7.3): keep a PUBLISHED page current server-side on
+// a schedule (Pro). Re-grounds the page's query in the cloud even when the app is
+// closed. (The client-side "● Live" control only refreshes while Chervil is open.)
+function cloudLiveOptions(entry) {
+  const opts = [
+    { label: 'Every hour', onClick: () => setCloudLive(entry, 3600000) },
+    { label: 'Every 6 hours', onClick: () => setCloudLive(entry, 21600000) },
+    { label: 'Once a day', onClick: () => setCloudLive(entry, 86400000) },
+  ];
+  if (entry.cloudLiveMs) opts.push({ label: 'Turn off cloud refresh', onClick: () => setCloudLive(entry, null) });
+  return opts;
+}
+
+function chooseCloudLive(entry) {
+  if (!entry.query) { toast('This page has no query to keep current.'); return; }
+  showActionSheet('Cloud auto-refresh', 'Keep this published page current on a schedule — runs in the cloud even when Chervil is closed (Pro).', cloudLiveOptions(entry));
+}
+
+async function setCloudLive(entry, intervalMs) {
+  if (!entry.publishedId) { toast('Publish the page first.'); return; }
+  if (!window.chervil.setCloudLiving) { toast('Not available in this build.'); return; }
+  const res = await window.chervil.setCloudLiving({
+    pageId: entry.publishedId,
+    query: entry.query || '',
+    intervalMs: intervalMs || 0,
+    enabled: !!intervalMs,
+    token: settings.publishToken,
+    baseUrl: settings.publishBase || 'https://getchervil.com',
+  });
+  if (res && res.ok) {
+    entry.cloudLiveMs = intervalMs || 0;
+    scheduleSave();
+    toast(intervalMs ? 'Cloud auto-refresh is on for this page.' : 'Cloud auto-refresh turned off.');
+  } else {
+    const e = (res && res.error) || '';
+    toast(/pro/i.test(e) ? 'Cloud living pages are a Chervil Pro feature.' : (e || 'Couldn’t update cloud refresh.'));
+  }
 }
 
 // Publish any composed page (self-contained interactive HTML — clock, calculator,
@@ -4668,14 +5603,20 @@ async function publishCurrentPage(kind = 'page') {
       html: entry.html,
       title: entry.title || 'Chervil page',
       kind,
+      sourceId: entry.id,   // stable id → re-publish updates in place + stable cloud-live target
       token: settings.publishToken,
       baseUrl: settings.publishBase || 'https://getchervil.com',
     });
     if (res && res.ok && res.url) {
       entry.publishedUrl = res.url;
+      if (res.id) entry.publishedId = res.id;
       scheduleSave();
       addMessage(tab, 'bot', `${res.updated ? 'Updated' : 'Published'} your ${noun} — it’s live at ${res.url}`);
       try { await navigator.clipboard.writeText(res.url); toast('Published — link copied to clipboard.'); } catch { toast('Published.'); }
+      // Pages (not blog posts) can be kept current in the cloud — offer it once.
+      if (kind === 'page' && entry.query && entry.publishedId && !entry.cloudLiveMs) {
+        showActionSheet('Keep it live in the cloud?', 'Auto-refresh this page on a schedule — runs in the cloud even when Chervil is closed (Pro). Or skip and do it later from Publish.', cloudLiveOptions(entry));
+      }
     } else {
       addMessage(tab, 'bot', `Couldn’t publish: ${(res && res.error) || 'unknown error'}`, 'error');
     }
@@ -4788,6 +5729,7 @@ function onWebviewNavigated(url) {
     scheduleSave();
   }
   updateNavButtons();
+  updatePwFillButton();
 }
 
 // Log a visited real site into browsing history (newest-first, deduped, capped).
@@ -4800,11 +5742,16 @@ function recordSiteVisit(url, title) {
 if (els.webview) {
   els.webview.addEventListener('did-navigate', (e) => onWebviewNavigated(e.url));
   els.webview.addEventListener('did-navigate-in-page', (e) => { if (e.isMainFrame) onWebviewNavigated(e.url); });
+  // Login-capture messages from the webview preload (RFC 0008 8.3).
+  els.webview.addEventListener('ipc-message', (e) => {
+    if (e.channel === 'chervil:login-submit') onCapturedLogin(e.args && e.args[0]);
+  });
 }
 
 els.deepToggle.addEventListener('click', () => setDeepMode(!deepMode));
 els.learnToggle.addEventListener('click', () => setSkillMode('learn'));
 els.quizToggle.addEventListener('click', () => setSkillMode('quiz'));
+if (els.chatToggle) els.chatToggle.addEventListener('click', () => setChatMode(!settings.chatMode));
 
 // File attachments: button, picker, and drag-and-drop.
 els.attachBtn.addEventListener('click', () => els.fileInput.click());
@@ -4919,6 +5866,7 @@ els.audioBtn.addEventListener('click', playPageAudio);
 els.audioToggle.addEventListener('click', toggleAudio);
 els.audioStop.addEventListener('click', stopAudio);
 els.verifyBtn.addEventListener('click', verifyPage);
+if (els.refreshPageBtn) els.refreshPageBtn.addEventListener('click', refreshCurrentPage);
 els.sourcesBtn.addEventListener('click', toggleSourcesPanel);
 els.exportSelect.addEventListener('change', onExportSelect);
 els.remixMin.addEventListener('click', minimizeRemix);
@@ -5048,6 +5996,9 @@ if (els.sttKeySave) els.sttKeySave.addEventListener('click', async () => {
   }
 });
 
+// Collapse / show the chat sidebar (full-width page).
+if (els.sidebarToggle) els.sidebarToggle.addEventListener('click', toggleSidebar);
+
 // Tab layout (horizontal strip vs. vertical rail).
 if (els.tabLayoutSelect) els.tabLayoutSelect.addEventListener('change', () => {
   settings.tabLayout = els.tabLayoutSelect.value === 'vertical' ? 'vertical' : 'horizontal';
@@ -5066,6 +6017,13 @@ if (els.remixDefaultSelect) els.remixDefaultSelect.addEventListener('change', ()
 // Notifications toggle.
 if (els.notifyToggle) els.notifyToggle.addEventListener('change', () => {
   settings.notifications = els.notifyToggle.checked;
+  scheduleSave();
+});
+
+// Hero-image toggle (opt-in; uses a BYO OpenAI/Gemini key).
+if (els.heroToggle) els.heroToggle.addEventListener('change', () => {
+  settings.heroImages = els.heroToggle.checked;
+  if (settings.heroImages) refreshImageKeyStatus(); // remind the user if no key is set
   scheduleSave();
 });
 
@@ -5100,6 +6058,7 @@ if (els.libTabSites) els.libTabSites.addEventListener('click', () => { drawerTab
 els.libTabTrash.addEventListener('click', () => { drawerTab = 'trash'; renderDrawer(); });
 if (els.clearSites) els.clearSites.addEventListener('click', clearSiteHistory);
 if (els.bookmarkBtn) els.bookmarkBtn.addEventListener('click', toggleBookmark);
+if (els.pwFillBtn) els.pwFillBtn.addEventListener('click', fillPasswordOnSite);
 els.emptyTrash.addEventListener('click', emptyTrash);
 if (els.libSelectToggle) els.libSelectToggle.addEventListener('click', enterLibrarySelect);
 if (els.libSelectAll) els.libSelectAll.addEventListener('click', selectAllLibrary);
@@ -5154,6 +6113,7 @@ document.addEventListener('keydown', (e) => {
   else if (e.ctrlKey && e.shiftKey && (e.key === 't' || e.key === 'T')) { e.preventDefault(); reopenClosedTab(); }
   else if (e.ctrlKey && e.key === 't') { e.preventDefault(); newTab(true); }
   else if (e.ctrlKey && e.key === 'w') { e.preventDefault(); if (activeId) closeTab(activeId); }
+  else if ((e.ctrlKey || e.metaKey) && e.key === '\\') { e.preventDefault(); toggleSidebar(); }
   else if (e.altKey && e.key === 'ArrowLeft') { e.preventDefault(); goBack(); }
   else if (e.altKey && e.key === 'ArrowRight') { e.preventDefault(); goForward(); }
 });

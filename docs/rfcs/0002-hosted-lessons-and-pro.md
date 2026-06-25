@@ -1,6 +1,6 @@
 # RFC 0002 — Hosted lessons & Chervil Pro (Phase 2B)
 
-- **Status:** Draft (design — no code yet)
+- **Status:** IMPLEMENTED in the `chervil-web` repo (2B.1–2B.4 + lesson moderation are live as of 2026-06-25). Accounts (Clerk), Stripe Pro at **$8/mo**, the Postgres schema, the publish pipeline, profiles, and analytics all exist and are deployed. REMAINING: **2B.3 hosted `/api/ask` applet bridge** (does not exist yet — overlaps Bet #3 / RFC 0007 7.1) and a **report flow on published pages** (`/p/[id]`; lessons already have one). This design doc is kept for history — treat `chervil-web` as the source of truth.
 - **Author:** Rod Trent (with Sprig)
 - **Created:** 2026-06-22
 - **Depends on:** [RFC 0001](0001-interactive-lessons.md) (the learning vertical, shipped)

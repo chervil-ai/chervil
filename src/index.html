@@ -79,6 +79,8 @@
                   title="Learn mode — build an interactive lesson on a topic">🎓</button>
           <button id="quiz-toggle" type="button" class="deep-toggle" aria-pressed="false"
                   title="Quiz mode — build a graded quiz on a topic">❓</button>
+          <button id="chat-toggle" type="button" class="deep-toggle" aria-pressed="false"
+                  title="Chat mode — plain conversation, no page composed">💬</button>
           <button id="send" type="submit" title="Send">↑</button>
         </div>
         <input id="file-input" type="file" multiple hidden />
@@ -88,6 +90,7 @@
     <!-- Live page canvas -->
     <main id="canvas">
       <div id="omnibar">
+        <button id="sidebar-toggle" class="omni-btn" title="Hide chat sidebar (Ctrl+\)" aria-pressed="false">☰</button>
         <button id="back-btn" class="omni-btn" title="Back" disabled>‹</button>
         <button id="fwd-btn" class="omni-btn" title="Forward" disabled>›</button>
         <input id="page-title" class="omnibox" value="Welcome to Chervil" spellcheck="false"
@@ -99,6 +102,7 @@
           <button id="history-btn" class="omni-btn text" title="History &amp; Trash">History</button>
           <button id="sched-btn" class="omni-btn text" title="Scheduled agents">⏰ Schedules</button>
           <button id="agents-btn" class="omni-btn text" title="Agents — personas &amp; tools">👤 Agents</button>
+          <button id="autofill-pw-btn" class="omni-btn" title="Fill a saved login" hidden>🔑</button>
           <button id="bookmark-btn" class="omni-btn" title="Bookmark this page" disabled>☆</button>
           <button id="save-btn" class="omni-btn text" title="Save this page to disk" disabled>⤓ Save</button>
           <button id="settings-btn" class="omni-btn" title="Settings">⚙</button>
@@ -151,6 +155,7 @@
           <button class="remix-btn" data-remix="keypoints">Key points</button>
           <button id="audio-btn" class="remix-btn audio">🔊 Audio</button>
           <span class="remix-sep"></span>
+          <button id="refresh-page-btn" class="remix-btn" title="Re-run this page's query and update it in place">↻ Refresh</button>
           <button id="verify-btn" class="remix-btn verify" title="Fact-check this page against the live web">✓ Verify</button>
           <button id="sources-btn" class="remix-btn" title="Sources Sprig used">Sources</button>
           <select id="export-select" class="live-select" title="Export this page as a file">
@@ -213,6 +218,7 @@
         <button class="settings-tab" data-sgroup="ai">AI</button>
         <button class="settings-tab" data-sgroup="voice">Voice</button>
         <button class="settings-tab" data-sgroup="publishing">Publishing &amp; Sync</button>
+        <button class="settings-tab" data-sgroup="security">Security</button>
         <button class="settings-tab" data-sgroup="you">You</button>
       </nav>
 
@@ -470,6 +476,22 @@
           </div>
           <small class="field-note">Remote URL servers only (SSE/HTTP). Local/stdio servers aren't supported yet. The token is stored on this machine and sent to Anthropic as the server's authorization.</small>
         </div>
+      </section>
+
+      <section class="setting-group" data-sgroup="ai">
+        <h3>Images</h3>
+        <p class="group-hint">Claude can't generate images, so Chervil uses your <strong>OpenAI</strong>, <strong>Google&nbsp;Gemini</strong>, or <strong>Grok&nbsp;(xAI)</strong> key to make a hero image. <strong>Off by default — image generation costs money</strong> (billed to your own key). One image per composed page.</p>
+        <label class="toggle-row">
+          <input id="hero-toggle" type="checkbox" />
+          <span>Generate an AI <strong>hero image</strong> at the top of composed pages.</span>
+        </label>
+        <small id="hero-note" class="field-note"></small>
+      </section>
+
+      <section class="setting-group" data-sgroup="security">
+        <h3>Passwords <span class="badge-soft">encrypted</span></h3>
+        <p class="group-hint">Save logins for real sites and fill them back in with the 🔑 button. Passwords are encrypted with a <strong>master passphrase</strong> (and your OS keychain) and <strong>never shown to Sprig, never sent anywhere</strong>. Sprig itself never types passwords. The vault <strong>auto-locks</strong> (see below) and asks for your passphrase again before filling. <em>(Windows Hello unlock is planned.)</em></p>
+        <div id="creds-panel" class="creds-panel"></div>
       </section>
 
       <section class="setting-group" data-sgroup="you">

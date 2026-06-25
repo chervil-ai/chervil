@@ -10,7 +10,7 @@
 ; launch (encrypting keys via Electron safeStorage) and deletes the file.
 
 #ifndef MyAppVersion
-  #define MyAppVersion "0.1.5"
+  #define MyAppVersion "0.4.0"
 #endif
 #define MyAppName "Chervil"
 #define MyAppPublisher "Rod Trent"
@@ -55,8 +55,9 @@ Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; AppUserModelID:
 Name: "{userdesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; AppUserModelID: "{#MyAppName}"; Tasks: desktopicon
 
 [Registry]
-; Run at sign-in (per-user) when the startup task is selected.
-Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "{#MyAppName}"; ValueData: """{app}\{#MyAppExeName}"""; Flags: uninsdeletevalue; Tasks: startup
+; Run at sign-in (per-user) when the startup task is selected. "--hidden" starts
+; Chervil minimized to the tray instead of popping the window open at sign-in.
+Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "{#MyAppName}"; ValueData: """{app}\{#MyAppExeName}"" --hidden"; Flags: uninsdeletevalue; Tasks: startup
 
 [Run]
 Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#MyAppName}}"; Flags: nowait postinstall skipifsilent
@@ -184,6 +185,44 @@ begin
   ForceDirectories(Dir);
   Path := Dir + '\firstrun.json';
   SaveStringToFile(Path, Json, False);
+end;
+
+{ Chervil lives in the system tray, so an old copy is usually still running when
+  a user installs an update — that leaves the prior version's files locked and
+  the freshly-installed app not actually replacing the running one. Detect it and
+  offer to close it before we copy files. }
+function ChervilIsRunning: Boolean;
+var
+  ResultCode: Integer;
+begin
+  Result := False;
+  { tasklist filtered to Chervil.exe; `find` exits 0 only when a matching line
+    is printed (no match prints "INFO: No tasks..." which `find` won't match). }
+  if Exec(ExpandConstant('{cmd}'),
+          '/C tasklist /FI "IMAGENAME eq ' + '{#MyAppExeName}' + '" /NH | find /I "' + '{#MyAppExeName}' + '"',
+          '', SW_HIDE, ewWaitUntilTerminated, ResultCode) then
+    Result := (ResultCode = 0);
+end;
+
+function PrepareToInstall(var NeedsRestart: Boolean): String;
+var
+  ResultCode: Integer;
+begin
+  Result := '';
+  if not ChervilIsRunning then
+    Exit;
+  if MsgBox('Chervil is still running (look for it in the system tray, near the clock).'#13#10#13#10
+            'It needs to be closed before the update can be installed. Close it now?',
+            mbConfirmation, MB_YESNO) = IDYES then
+  begin
+    Exec(ExpandConstant('{cmd}'), '/C taskkill /F /IM "' + '{#MyAppExeName}' + '"',
+         '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+    Sleep(1000); { let the process exit and release its file locks }
+    if ChervilIsRunning then
+      Result := 'Chervil could not be closed automatically. Please quit it (right-click the tray icon and choose Quit), then run the installer again.';
+  end
+  else
+    Result := 'Chervil is still running. Please quit it (right-click the tray icon and choose Quit), then run the installer again.';
 end;
 
 procedure CurStepChanged(CurStep: TSetupStep);

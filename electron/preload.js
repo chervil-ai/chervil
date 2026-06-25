@@ -43,6 +43,30 @@ contextBridge.exposeInMainWorld('chervil', {
   /** Applet bridge: a composed page asks Sprig for live data. */
   appletAsk: (payload) => ipcRenderer.invoke('chervil:applet-ask', payload),
 
+  /** Plain chat ("Just a chatbot" mode): a conversational text reply, no page. */
+  chat: (payload) => ipcRenderer.invoke('chervil:chat', payload),
+
+  /** Generate an AI hero image (data: URL) for a composed page — opt-in, BYO key. */
+  generateHero: (payload) => ipcRenderer.invoke('chervil:generate-hero', payload),
+  /** Whether an image-capable key (OpenAI/Gemini) is configured. */
+  imageKeyStatus: () => ipcRenderer.invoke('chervil:image-key-status'),
+
+  /** Credential vault (RFC 0008): passphrase-gated password store. Plaintext
+   *  passwords are only returned by reveal/forOrigin, and only while unlocked. */
+  creds: {
+    status: () => ipcRenderer.invoke('chervil:creds-status'),
+    setup: (passphrase) => ipcRenderer.invoke('chervil:creds-setup', { passphrase }),
+    unlock: (passphrase) => ipcRenderer.invoke('chervil:creds-unlock', { passphrase }),
+    lock: () => ipcRenderer.invoke('chervil:creds-lock'),
+    list: () => ipcRenderer.invoke('chervil:creds-list'),
+    save: (entry) => ipcRenderer.invoke('chervil:creds-save', entry),
+    remove: (id) => ipcRenderer.invoke('chervil:creds-delete', { id }),
+    reveal: (id) => ipcRenderer.invoke('chervil:creds-reveal', { id }),
+    forOrigin: (url) => ipcRenderer.invoke('chervil:creds-for-origin', { url }),
+    countForOrigin: (url) => ipcRenderer.invoke('chervil:creds-count-for-origin', { url }),
+    hasExact: (url, username, password) => ipcRenderer.invoke('chervil:creds-has-exact', { url, username, password }),
+  },
+
   /** Build any registered skill (RFC 0003) → { ok, kind, artifact, html }. */
   buildSkill: (payload) => ipcRenderer.invoke('chervil:build-skill', payload),
 
@@ -60,6 +84,9 @@ contextBridge.exposeInMainWorld('chervil', {
 
   /** Publish any composed page's HTML to a shareable getchervil.com link (Chervil Pro). */
   publishPage: (payload) => ipcRenderer.invoke('chervil:publish-page', payload),
+
+  /** Cloud living pages: register/update/clear a published page's server-side refresh. */
+  setCloudLiving: (payload) => ipcRenderer.invoke('chervil:set-cloud-living', payload),
 
   /** Per-provider key status: { claude, grok, gemini, azure, claudeFromEnv }. */
   getKeyStatus: () => ipcRenderer.invoke('chervil:get-key-status'),
@@ -175,6 +202,9 @@ contextBridge.exposeInMainWorld('chervil', {
   /** Load persisted session state (tabs, prompts, pages). */
   loadState: () => ipcRenderer.invoke('chervil:load-state'),
 
-  /** Persist session state. */
+  /** Persist session state. Resolves to { ok, mtimeMs }. */
   saveState: (state) => ipcRenderer.invoke('chervil:save-state', state),
+
+  /** Active state file info: { synced, mtimeMs } — for sync conflict detection. */
+  stateInfo: () => ipcRenderer.invoke('chervil:state-info'),
 });

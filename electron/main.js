@@ -12,13 +12,23 @@ const { app, BrowserWindow, ipcMain, dialog, safeStorage, Notification, Tray, Me
 require('dotenv').config({ path: path.join(__dirname, '..', '.env'), quiet: true });
 
 const QRCode = require('qrcode');
-const { runAgent, runAppletAsk, runListModels, runAgentStep, runAgentPlan, runExtractSlides, runExtractDoc, runExtractSheets, runSynthesizeAgent } = require('../lib/agent');
+const { runAgent, runChat, runAppletAsk, runListModels, runAgentStep, runAgentPlan, runExtractSlides, runExtractDoc, runExtractSheets, runSynthesizeAgent } = require('../lib/agent');
+const { generateHeroImage } = require('../lib/images');
 const { getSkill } = require('../lib/skills');
+const { createVault } = require('../lib/vault');
+const { registrableDomain } = require('../lib/etld');
 
 let mainWindow = null;
 let tray = null;
 let quickWindow = null;
 let isQuitting = false; // true only when truly quitting (tray → Quit); otherwise window close = hide-to-tray
+
+// Credential vault (RFC 0008) — passphrase-gated, lazily created once app is ready.
+let credVault = null;
+function vault() {
+  if (!credVault) credVault = createVault(path.join(app.getPath('userData'), 'chervil-creds.bin'), safeStorage);
+  return credVault;
+}
 
 // --- Bring-your-own API keys (per provider, encrypted at rest via safeStorage) ---
 function keysFile() {
@@ -302,8 +312,12 @@ function attachDownloadHandler(session) {
   });
 }
 
-function createWindow() {
+function createWindow(opts = {}) {
+  const startHidden = !!opts.startHidden;
   mainWindow = new BrowserWindow({
+    // Launched at sign-in: stay hidden in the tray instead of popping the window
+    // open. The user can summon it from the tray or the global hotkey.
+    show: !startHidden,
     width: 1280,
     height: 860,
     minWidth: 900,
@@ -334,6 +348,11 @@ function createWindow() {
 
   // Native right-click menus for the app UI (and any embedded real sites).
   attachContextMenu(mainWindow.webContents, { isMainUI: true });
+  // Inject the login-capture preload into every guest <webview> (RFC 0008 8.3).
+  // It runs isolated, exposes nothing to the page, and only messages the host.
+  mainWindow.webContents.on('will-attach-webview', (_e, webPreferences) => {
+    webPreferences.preload = path.join(__dirname, 'webview-preload.js');
+  });
   mainWindow.webContents.on('did-attach-webview', (_e, wc) => {
     attachContextMenu(wc, { isMainUI: false });
     attachDownloadHandler(wc.session);
@@ -542,7 +561,8 @@ function createTray() {
       label: 'Launch at login',
       type: 'checkbox',
       checked: app.getLoginItemSettings().openAtLogin,
-      click: (item) => app.setLoginItemSettings({ openAtLogin: item.checked }),
+      // Start hidden in the tray when auto-launched at sign-in (see createWindow).
+      click: (item) => app.setLoginItemSettings({ openAtLogin: item.checked, args: ['--hidden'] }),
     },
     { type: 'separator' },
     { label: 'Quit Chervil', click: () => { isQuitting = true; app.quit(); } },
@@ -656,7 +676,13 @@ app.whenReady().then(() => {
   }
   loadSavedKeys();
   applyFirstRunProvisioning(); // import installer wizard choices on first launch
-  createWindow();
+  // Silent startup: when Windows launches Chervil at sign-in (registry Run key
+  // adds "--hidden"; the tray toggle does the same), start minimized to the tray
+  // rather than surfacing the window. Also honor Electron's own login detection.
+  let openedAtLogin = false;
+  try { openedAtLogin = app.getLoginItemSettings().wasOpenedAtLogin; } catch { /* not supported */ }
+  const launchedHidden = process.argv.includes('--hidden') || process.argv.includes('--startup');
+  createWindow({ startHidden: launchedHidden || openedAtLogin });
   createTray();
   // Cold start via a chervil:// deep link (URL passed in argv on first launch).
   const startUrl = process.argv.find((a) => String(a).startsWith('chervil://'));
@@ -737,6 +763,124 @@ ipcMain.handle('chervil:applet-ask', async (_event, payload) => {
     const { prompt } = payload || {};
     const res = await runAppletAsk({ prompt, config: providerConfigFrom(payload) });
     return { ok: true, text: res.text, sources: res.sources || [] };
+  } catch (err) {
+    return { ok: false, error: String(err && err.message ? err.message : err) };
+  }
+});
+
+// --- AI hero image for composed pages (opt-in; BYO image key) --------------
+ipcMain.handle('chervil:generate-hero', async (_event, payload) => {
+  try {
+    const { title, topic } = payload || {};
+    const dataUrl = await generateHeroImage({
+      title: title || topic || '',
+      topic: topic || '',
+      openaiKey: savedKeys.openai || '',
+      geminiKey: savedKeys.gemini || '',
+      grokKey: savedKeys.grok || '',
+    });
+    if (!dataUrl) return { ok: false, error: 'no-image-key' };
+    return { ok: true, dataUrl };
+  } catch (err) {
+    return { ok: false, error: String(err && err.message ? err.message : err) };
+  }
+});
+
+// Whether an image-capable key (OpenAI, Gemini, or Grok) is configured —
+// Settings uses this to show the hero-image toggle's availability.
+ipcMain.handle('chervil:image-key-status', async () => {
+  return {
+    ok: true,
+    hasKey: !!(savedKeys.openai || savedKeys.gemini || savedKeys.grok),
+    openai: !!savedKeys.openai,
+    gemini: !!savedKeys.gemini,
+    grok: !!savedKeys.grok,
+  };
+});
+
+// --- Credential vault (RFC 0008, Phase 8.1): passphrase-gated password store --
+// Plaintext passwords never leave the main process except creds:reveal /
+// creds:get-for-origin, both of which require the vault to be UNLOCKED (the
+// master passphrase was entered this session — the "gate").
+ipcMain.handle('chervil:creds-status', async () => {
+  try {
+    const v = vault();
+    return {
+      ok: true,
+      configured: v.isConfigured(),
+      unlocked: v.isUnlocked(),
+      encryptionAvailable: !!(safeStorage.isEncryptionAvailable && safeStorage.isEncryptionAvailable()),
+    };
+  } catch (err) { return { ok: false, error: String(err && err.message ? err.message : err) }; }
+});
+ipcMain.handle('chervil:creds-setup', async (_e, payload) => {
+  try { await vault().setup((payload || {}).passphrase); return { ok: true }; }
+  catch (err) { return { ok: false, error: String(err && err.message ? err.message : err) }; }
+});
+ipcMain.handle('chervil:creds-unlock', async (_e, payload) => {
+  try { const ok = await vault().unlock((payload || {}).passphrase); return { ok, error: ok ? undefined : 'Wrong passphrase.' }; }
+  catch (err) { return { ok: false, error: String(err && err.message ? err.message : err) }; }
+});
+ipcMain.handle('chervil:creds-lock', async () => { try { vault().lock(); return { ok: true }; } catch { return { ok: false }; } });
+ipcMain.handle('chervil:creds-list', async () => {
+  try { return { ok: true, items: vault().list() }; }
+  catch (err) { return { ok: false, error: String(err && err.message ? err.message : err) }; }
+});
+ipcMain.handle('chervil:creds-save', async (_e, payload) => {
+  try {
+    const p = payload || {};
+    const origin = registrableDomain(p.origin || '');
+    if (!origin) return { ok: false, error: 'Enter a valid site (e.g. github.com).' };
+    const res = vault().save({ id: p.id, origin, username: p.username, password: p.password, label: p.label });
+    return { ok: true, id: res.id };
+  } catch (err) { return { ok: false, error: String(err && err.message ? err.message : err) }; }
+});
+ipcMain.handle('chervil:creds-delete', async (_e, payload) => {
+  try { vault().remove((payload || {}).id); return { ok: true }; }
+  catch (err) { return { ok: false, error: String(err && err.message ? err.message : err) }; }
+});
+ipcMain.handle('chervil:creds-reveal', async (_e, payload) => {
+  try { return { ok: true, ...vault().reveal((payload || {}).id) }; }
+  catch (err) { return { ok: false, error: String(err && err.message ? err.message : err) }; }
+});
+// Is this exact captured login already saved? (no plaintext echoed) — lets the
+// save-on-submit prompt skip unchanged logins.
+ipcMain.handle('chervil:creds-has-exact', async (_e, payload) => {
+  try {
+    const p = payload || {};
+    const origin = registrableDomain(p.url || p.origin || '');
+    if (!origin) return { ok: true, exists: false };
+    return { ok: true, exists: vault().hasExact(origin, p.username, p.password) };
+  } catch (err) { return { ok: false, error: String(err && err.message ? err.message : err) }; }
+});
+
+// How many saved logins match a site (no plaintext) — for the fill affordance.
+ipcMain.handle('chervil:creds-count-for-origin', async (_e, payload) => {
+  try {
+    const v = vault();
+    const origin = registrableDomain((payload || {}).url || (payload || {}).origin || '');
+    const configured = v.isConfigured();
+    const unlocked = v.isUnlocked();
+    const count = unlocked && origin ? v.countForOrigin(origin) : null;
+    return { ok: true, configured, unlocked, origin, count };
+  } catch (err) { return { ok: false, error: String(err && err.message ? err.message : err) }; }
+});
+
+// Phase 8.2 fill: matching credentials for the current site's domain.
+ipcMain.handle('chervil:creds-for-origin', async (_e, payload) => {
+  try {
+    const origin = registrableDomain((payload || {}).url || (payload || {}).origin || '');
+    if (!origin) return { ok: true, items: [] };
+    return { ok: true, origin, items: vault().getForOrigin(origin) };
+  } catch (err) { return { ok: false, error: String(err && err.message ? err.message : err) }; }
+});
+
+// --- Plain chat ("Just a chatbot" mode): a text reply, no page composed ----
+ipcMain.handle('chervil:chat', async (_event, payload) => {
+  try {
+    const { query, history, profile } = payload || {};
+    const res = await runChat({ query, history: history || [], profile: profile || null, config: providerConfigFrom(payload) });
+    return { ok: true, text: res.text };
   } catch (err) {
     return { ok: false, error: String(err && err.message ? err.message : err) };
   }
@@ -835,7 +979,7 @@ ipcMain.handle('chervil:publish-lesson', async (_event, payload) => {
 // (clock, calculator, converter). Model-dependent applets won't run when hosted.
 ipcMain.handle('chervil:publish-page', async (_event, payload) => {
   try {
-    const { token, baseUrl, title } = payload || {};
+    const { token, baseUrl, title, sourceId } = payload || {};
     const html = payload && payload.html;
     const kind = (payload && payload.kind) === 'blog' ? 'blog' : 'page';
     if (!html) return { ok: false, error: 'Nothing to publish.' };
@@ -844,7 +988,9 @@ ipcMain.handle('chervil:publish-page', async (_event, payload) => {
     const res = await fetch(`${base}/api/pages`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-      body: JSON.stringify({ kind, title: title || 'Chervil page', html }),
+      // sourceId (the app's stable page id) makes re-publishing update in place
+      // and keeps the public id stable — important for cloud living-page schedules.
+      body: JSON.stringify({ kind, title: title || 'Chervil page', html, sourceId: sourceId || undefined }),
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) {
@@ -852,6 +998,33 @@ ipcMain.handle('chervil:publish-page', async (_event, payload) => {
       return { ok: false, error: data.error || `Publish failed (${res.status}).` };
     }
     return { ok: true, url: data.url, id: data.id, updated: data.updated };
+  } catch (err) {
+    return { ok: false, error: String(err && err.message ? err.message : err) };
+  }
+});
+
+// Cloud living pages (RFC 0007 7.3): register/update/clear a server-side refresh
+// schedule for a published page. Authed by the publish token (like publish-page).
+ipcMain.handle('chervil:set-cloud-living', async (_event, payload) => {
+  try {
+    const { pageId, query, intervalMs, enabled, token, baseUrl } = payload || {};
+    if (!token) return { ok: false, error: 'Missing publish token.' };
+    if (!pageId) return { ok: false, error: 'Publish the page first.' };
+    const base = String(baseUrl || 'https://getchervil.com').replace(/\/+$/, '');
+    const body = enabled === false
+      ? { pageId, enabled: false }
+      : { pageId, query: query || '', intervalMs: intervalMs || 0 };
+    const res = await fetch(`${base}/api/pages/living`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify(body),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      if (res.status === 404) return { ok: false, error: 'Cloud living pages aren’t available on this server yet.' };
+      return { ok: false, error: data.error || `Failed (${res.status}).` };
+    }
+    return { ok: true, ...data };
   } catch (err) {
     return { ok: false, error: String(err && err.message ? err.message : err) };
   }
@@ -1677,8 +1850,27 @@ ipcMain.handle('chervil:load-state', async () => {
 
 ipcMain.handle('chervil:save-state', async (_event, state) => {
   try {
-    fs.writeFileSync(stateFile(), JSON.stringify(state), 'utf8');
-    return { ok: true };
+    const p = stateFile();
+    fs.writeFileSync(p, JSON.stringify(state), 'utf8');
+    let mtimeMs = 0;
+    try { mtimeMs = fs.statSync(p).mtimeMs; } catch { /* ignore */ }
+    return { ok: true, mtimeMs };
+  } catch (err) {
+    return { ok: false, error: String(err && err.message ? err.message : err) };
+  }
+});
+
+// Info about the active state file: whether it's the synced location and its
+// last-modified time. The renderer uses this to detect when another computer has
+// updated the shared synced session (RFC 0005, decision 3 — reload-on-focus).
+ipcMain.handle('chervil:state-info', async () => {
+  try {
+    const cfg = readConfig();
+    const active = stateFile();
+    const synced = !!cfg.statePath && active === cfg.statePath;
+    let mtimeMs = 0;
+    try { mtimeMs = fs.statSync(active).mtimeMs; } catch { /* not written yet */ }
+    return { ok: true, synced, mtimeMs };
   } catch (err) {
     return { ok: false, error: String(err && err.message ? err.message : err) };
   }
