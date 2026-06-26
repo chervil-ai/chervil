@@ -1171,6 +1171,8 @@ html, body {
 .field { display: flex; flex-direction: column; gap: 6px; }
 .field-label { font-size: 12px; font-weight: 600; color: var(--text); }
 .field-row { display: flex; gap: 8px; }
+.field input[type="range"] { width: 100%; accent-color: var(--accent); cursor: pointer; margin: 2px 0; }
+#wake-threshold-val { margin-left: 6px; color: var(--accent); font-weight: 600; }
 .field input[type="text"], .field input[type="password"], .field select {
   flex: 1;
   min-width: 0;

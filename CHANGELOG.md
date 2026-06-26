@@ -6,6 +6,14 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- **Wake-word sensitivity control.** Settings → Voice now has a **threshold slider** for
+  "Hey Sprig" — raise it so background noise or a TV in the room stops triggering Chervil
+  on its own. (The cutoff existed internally but wasn't adjustable.) Changes apply live
+  while listening, and the default is a touch stricter (0.6). More noisy-environment
+  hardening — a confirmation gate before acting on a wake, and better voice-activity
+  detection — is still on the list.
+
 ## [0.5.1] — 2026-06-26
 
 A security patch.

@@ -134,6 +134,8 @@ const els = {
   wakeKeyword: document.getElementById('wake-keyword'),
   wakeImport: document.getElementById('wake-import'),
   wakeKeywordNote: document.getElementById('wake-keyword-note'),
+  wakeThreshold: document.getElementById('wake-threshold'),
+  wakeThresholdVal: document.getElementById('wake-threshold-val'),
   // Appearance
   tabLayoutSelect: document.getElementById('tab-layout-select'),
   remixDefaultSelect: document.getElementById('remix-default-select'),
@@ -221,7 +223,7 @@ let settings = {
   wakeEnabled: false,
   wakeKeyword: 'hey_sprig', // built-in: hey_sprig | hey_jarvis | alexa | hey_mycroft, or 'custom' (.onnx in userData)
   wakeKeywordLabel: '',      // display label for a loaded custom model
-  wakeThreshold: 0.5,        // detection score cutoff (0–1; higher = fewer false triggers)
+  wakeThreshold: 0.6,        // detection score cutoff (0–1; higher = fewer false triggers). Tunable in Settings → Voice.
   // Publishing — Chervil Pro: publish a lesson to a shareable getchervil.com link.
   publishToken: '',          // from getchervil.com/me (stored locally)
   publishBase: 'https://getchervil.com',
@@ -4852,6 +4854,11 @@ function applySettingsToUI() {
   if (els.wakeKeyword) els.wakeKeyword.value = settings.wakeKeyword || 'hey_jarvis';
   if (els.wakeKeywordNote) els.wakeKeywordNote.textContent = (settings.wakeKeyword === 'custom' && settings.wakeKeywordLabel)
     ? `Loaded: ${settings.wakeKeywordLabel}` : 'No custom model loaded.';
+  if (els.wakeThreshold) {
+    const thr = typeof settings.wakeThreshold === 'number' ? settings.wakeThreshold : 0.6;
+    els.wakeThreshold.value = String(thr);
+    if (els.wakeThresholdVal) els.wakeThresholdVal.textContent = thr.toFixed(2);
+  }
   if (els.sttKeyInput) els.sttKeyInput.value = '';
   if (els.heroToggle) els.heroToggle.checked = !!settings.heroImages;
   refreshSttKeyStatus();
@@ -6037,6 +6044,17 @@ if (els.wakeKeyword) els.wakeKeyword.addEventListener('change', () => {
   settings.wakeKeyword = els.wakeKeyword.value; scheduleSave();
   if (settings.wakeEnabled) restartWake();
 });
+if (els.wakeThreshold) {
+  let wtTimer = null;
+  els.wakeThreshold.addEventListener('input', () => {
+    const v = parseFloat(els.wakeThreshold.value);
+    settings.wakeThreshold = v;
+    if (els.wakeThresholdVal) els.wakeThresholdVal.textContent = v.toFixed(2);
+    scheduleSave();
+    // Restart the detector (debounced) so the new threshold takes effect while listening.
+    if (settings.wakeEnabled) { clearTimeout(wtTimer); wtTimer = setTimeout(() => restartWake(), 400); }
+  });
+}
 if (els.wakeImport) els.wakeImport.addEventListener('click', async () => {
   try {
     const res = await window.chervil.openWakeKeyword();

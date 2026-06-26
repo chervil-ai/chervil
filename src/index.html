@@ -464,6 +464,11 @@
             </span>
             <small class="field-note">Built-in words work immediately. For the literal “Hey Sprig”, train a free openWakeWord model (a single-command trainer or the openWakeWord Colab) and load the resulting <code>.onnx</code> here.</small>
           </div>
+          <div class="field">
+            <span class="field-label">Wake-word threshold <span id="wake-threshold-val" class="field-note"></span></span>
+            <input id="wake-threshold" type="range" min="0.3" max="0.95" step="0.05" />
+            <small class="field-note">How clear a match Chervil needs before it wakes. <strong>Higher = fewer accidental triggers — raise this if background noise or a TV keeps setting it off.</strong> Lower = easier to trigger.</small>
+          </div>
         </div>
       </section>
 
