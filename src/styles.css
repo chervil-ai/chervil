@@ -10,10 +10,43 @@
   --user-bubble: #1d2435;
   --bot-bubble: #14171f;
   --radius: 14px;
+  /* Coherent radius scale — use these so controls/cards/panels stay consistent. */
+  --radius-sm: 8px;    /* chips, small inputs */
+  --radius-md: 10px;   /* buttons, fields */
+  --radius-lg: 14px;   /* cards */
+  --radius-xl: 20px;   /* modals, large panels */
+  --scrollbar: #2b3147;
   --sidebar-w: 380px;
 }
 
 * { box-sizing: border-box; }
+
+/* ---------- Fluent base: scrollbars, focus, motion ---------- */
+/* Thin, themed scrollbars everywhere (the chunky default undercuts the polish).
+   Specific overrides like #tabstrip (height:0) still win on id specificity. */
+* { scrollbar-width: thin; scrollbar-color: var(--scrollbar) transparent; }
+::-webkit-scrollbar { width: 11px; height: 11px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: var(--scrollbar);
+  border-radius: 8px;
+  border: 3px solid transparent;   /* inset via padding-box → a slim, floating thumb */
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-thumb:hover { background: #3a4264; }
+::-webkit-scrollbar-corner { background: transparent; }
+
+/* Keyboard-only focus ring — visible for a11y, invisible on mouse clicks.
+   Outline follows each element's border-radius in modern Chromium. */
+:where(button, a, input, select, textarea, [role="button"], [tabindex]):focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+:focus:not(:focus-visible) { outline: none; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.001ms !important; transition-duration: 0.001ms !important; }
+}
 
 html, body {
   margin: 0;
@@ -37,14 +70,17 @@ html, body {
   grid-template-columns: var(--sidebar-w) 1fr;
   min-height: 0;
   grid-row: 3;
+  transition: grid-template-columns 0.22s ease;
 }
 
-/* Collapsed chat sidebar — gives the composed page the full width. */
+/* Collapsed chat sidebar — gives the composed page the full width. The column
+   animates to 0 and the panel clips (instead of display:none) so it slides shut. */
 #main.sidebar-collapsed {
   grid-template-columns: 0 1fr;
 }
 #main.sidebar-collapsed #sidebar {
-  display: none;
+  overflow: hidden;
+  pointer-events: none;
 }
 
 /* ---------- Tab strip ---------- */
@@ -101,9 +137,10 @@ html, body {
   border: 1px solid var(--border);
   background: var(--panel);
   color: var(--text);
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   font-size: 18px;
   cursor: pointer;
+  transition: border-color 0.12s, background 0.12s;
 }
 #new-tab:hover { border-color: var(--accent); }
 
@@ -455,6 +492,10 @@ html, body {
   padding: 10px 16px;
   border-bottom: 1px solid var(--border);
   background: var(--panel);
+  /* Query against the omnibar's OWN width so responsiveness accounts for the
+     sidebar (the bar's real space = window − sidebar), not just the viewport. */
+  container-type: inline-size;
+  container-name: omnibar;
 }
 
 /* Right-side action cluster, separated from the page title. */
@@ -474,11 +515,12 @@ html, body {
   border: 1px solid var(--border);
   background: var(--panel-2);
   color: var(--text);
-  border-radius: 9px;
+  border-radius: var(--radius-md);
   cursor: pointer;
   font-size: 15px;
+  transition: border-color 0.12s, background 0.12s;
 }
-.omni-btn:hover:not(:disabled) { border-color: var(--accent); }
+.omni-btn:hover:not(:disabled) { border-color: var(--accent); background: #1b2030; }
 .omni-btn:disabled { opacity: 0.35; cursor: default; }
 
 /* ---------- Scheduled agents ---------- */
@@ -489,8 +531,8 @@ html, body {
   display: none;
   align-items: flex-start;
   justify-content: center;
-  background: rgba(8, 10, 14, 0.92);
-  backdrop-filter: blur(4px);
+  background: rgba(8, 10, 14, 0.82);
+  backdrop-filter: blur(10px) saturate(120%);
   overflow-y: auto;
 }
 .sched-view.open { display: flex; }
@@ -588,8 +630,8 @@ html, body {
   z-index: 60;
   display: none;
   flex-direction: column;
-  background: rgba(8, 10, 14, 0.92);
-  backdrop-filter: blur(4px);
+  background: rgba(8, 10, 14, 0.82);
+  backdrop-filter: blur(10px) saturate(120%);
 }
 .map-view.open { display: flex; }
 
@@ -663,13 +705,40 @@ html, body {
   padding: 0 14px;
   font-size: 13px;
   white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* Narrow window: collapse the secondary action buttons to icon-only so the
+   address bar keeps a usable width instead of being crushed to a sliver. */
+/* Not enough room for full labels → collapse the secondary buttons to icons. */
+@container omnibar (max-width: 1000px) {
+  #omni-actions { gap: 6px; padding-left: 10px; }
+  #omni-actions .omni-btn.text .lbl { display: none; }
+  #omni-actions .omni-btn.text { width: 32px; padding: 0; gap: 0; }
+}
+/* Still tight (e.g. narrow window with the sidebar open) → let the address bar
+   shrink further and tighten the cluster so nothing is pushed offscreen. */
+@container omnibar (max-width: 720px) {
+  #omni-actions { gap: 4px; padding-left: 8px; }
+  #omnibar #page-title { min-width: 120px; }
+  #mode-badge { display: none; }
+}
+/* Minimum window (900px) with the sidebar open leaves the bar very narrow —
+   shrink every control a touch so the full toolbar still fits, never clipped. */
+@container omnibar (max-width: 540px) {
+  #omnibar { gap: 8px; }
+  #omnibar .omni-btn, #omni-actions .omni-btn.text { width: 28px; height: 28px; font-size: 14px; }
+  #omni-actions { gap: 2px; padding-left: 6px; margin-left: 2px; }
+  #omnibar #page-title { min-width: 80px; padding: 7px 9px; }
 }
 
 #mode-badge { margin-left: 2px; }
 
 #page-title {
-  flex: 1;
-  min-width: 0;
+  flex: 1 1 auto;
+  min-width: 240px;
   font-size: 14px;
   color: var(--text);
   white-space: nowrap;
@@ -1018,19 +1087,21 @@ html, body {
   inset: 0;
   display: none;
   place-items: center;
-  background: rgba(4, 6, 10, 0.6);
+  background: rgba(4, 6, 10, 0.5);
+  backdrop-filter: blur(10px) saturate(120%);
   z-index: 50;
 }
-.modal.open { display: grid; }
+.modal.open { display: grid; animation: modal-fade 0.16s ease-out; }
+@keyframes modal-fade { from { opacity: 0; } to { opacity: 1; } }
 
 .modal-card {
   width: min(560px, 92vw);
   max-height: 88vh;
   overflow-y: auto;
   background: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: 16px;
-  box-shadow: 0 18px 60px rgba(0, 0, 0, 0.5);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 20px;
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.55);
 }
 
 .modal-head, .drawer-head {
@@ -1046,28 +1117,36 @@ html, body {
   border: 1px solid var(--border);
   background: var(--panel-2);
   color: var(--muted);
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   cursor: pointer;
   font-size: 13px;
+  transition: color 0.12s, border-color 0.12s, background 0.12s;
 }
 .modal-close:hover { color: var(--text); border-color: var(--accent); }
 
-.setting-group { padding: 18px 20px; border-bottom: 1px solid var(--border); }
+.setting-group { padding: 20px; border-bottom: 1px solid rgba(255, 255, 255, 0.05); }
 .setting-group:last-child { border-bottom: none; }
-.setting-group h3 { margin: 0 0 12px; font-size: 13px; color: var(--muted); font-weight: 600; }
+.setting-group h3 { margin: 0 0 12px; font-size: 12px; letter-spacing: 0.03em; text-transform: uppercase; color: var(--muted); font-weight: 600; }
 
 .opt {
   display: flex;
   align-items: flex-start;
   gap: 12px;
-  padding: 10px 12px;
-  border: 1px solid var(--border);
-  border-radius: 11px;
+  padding: 13px 15px;
+  border: 1px solid transparent;
+  background: var(--panel-2);
+  border-radius: 14px;
   margin-bottom: 8px;
   cursor: pointer;
-  transition: border-color 0.15s, background 0.15s;
+  transition: border-color 0.15s, background 0.15s, box-shadow 0.15s;
 }
-.opt:hover { border-color: var(--accent); }
+.opt:hover { background: #1a1f2b; }
+/* Selected radio card — highlight the whole card, not just the dot. */
+.opt:has(input:checked) {
+  border-color: var(--accent);
+  background: rgba(108, 140, 255, 0.10);
+  box-shadow: 0 0 0 1px rgba(108, 140, 255, 0.35);
+}
 .opt input { margin-top: 3px; accent-color: var(--accent); }
 .opt span { display: flex; flex-direction: column; gap: 3px; }
 .opt strong { font-size: 14px; font-weight: 600; }
@@ -1099,7 +1178,7 @@ html, body {
   background: var(--bg);
   color: var(--text);
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   padding: 9px 11px;
   font-size: 13px;
   font-family: inherit;
@@ -1234,6 +1313,7 @@ html, body {
   display: none;
   justify-content: flex-end;
   background: rgba(4, 6, 10, 0.5);
+  backdrop-filter: blur(10px) saturate(120%);
   z-index: 50;
 }
 .drawer.open { display: flex; }
@@ -1440,7 +1520,7 @@ html, body {
   align-items: center;
   justify-content: center;
   z-index: 1000;
-  backdrop-filter: blur(2px);
+  backdrop-filter: blur(10px) saturate(120%);
 }
 .chervil-sheet {
   width: min(340px, calc(100vw - 48px));

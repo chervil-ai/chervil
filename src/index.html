@@ -90,7 +90,7 @@
     <!-- Live page canvas -->
     <main id="canvas">
       <div id="omnibar">
-        <button id="sidebar-toggle" class="omni-btn" title="Hide chat sidebar (Ctrl+\)" aria-pressed="false">☰</button>
+        <button id="sidebar-toggle" class="omni-btn" title="Hide chat sidebar (Ctrl+\)" aria-pressed="false"><svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 6l-6 6 6 6"/></svg></button>
         <button id="back-btn" class="omni-btn" title="Back" disabled>‹</button>
         <button id="fwd-btn" class="omni-btn" title="Forward" disabled>›</button>
         <input id="page-title" class="omnibox" value="Welcome to Chervil" spellcheck="false"
@@ -98,13 +98,13 @@
                title="Enter a URL, ask Sprig, or type a command (/learn, /quiz) — Ctrl+L to focus"
                placeholder="Search, ask Sprig, or enter a URL…" />
         <div id="omni-actions">
-          <button id="map-btn" class="omni-btn text" title="Thinking canvas — map of this tab's pages">⌗ Map</button>
-          <button id="history-btn" class="omni-btn text" title="History &amp; Trash">History</button>
-          <button id="sched-btn" class="omni-btn text" title="Scheduled agents">⏰ Schedules</button>
-          <button id="agents-btn" class="omni-btn text" title="Agents — personas &amp; tools">👤 Agents</button>
+          <button id="map-btn" class="omni-btn text" title="Thinking canvas — map of this tab's pages">⌗ <span class="lbl">Map</span></button>
+          <button id="history-btn" class="omni-btn text" title="History &amp; Trash">🕘 <span class="lbl">History</span></button>
+          <button id="sched-btn" class="omni-btn text" title="Scheduled agents">⏰ <span class="lbl">Schedules</span></button>
+          <button id="agents-btn" class="omni-btn text" title="Agents — personas &amp; tools">👤 <span class="lbl">Agents</span></button>
           <button id="autofill-pw-btn" class="omni-btn" title="Fill a saved login" hidden>🔑</button>
           <button id="bookmark-btn" class="omni-btn" title="Bookmark this page" disabled>☆</button>
-          <button id="save-btn" class="omni-btn text" title="Save this page to disk" disabled>⤓ Save</button>
+          <button id="save-btn" class="omni-btn text" title="Save this page to disk" disabled>⤓ <span class="lbl">Save</span></button>
           <button id="settings-btn" class="omni-btn" title="Settings">⚙</button>
           <div id="mode-badge" class="badge">ready</div>
         </div>

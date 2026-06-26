@@ -6,12 +6,42 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.5.0] — 2026-06-26
+
+Interactive lessons that actually *do* things — everywhere. Applet cards now compose
+real, interactive widgets in the app, in your saved lessons, **and** in lessons you
+publish to the web — plus a fluent polish pass across the whole UI.
+
 ### Added
-- **Smart attachments for large files** — when an attached file is bigger than fits
-  in one request, Chervil now selects the **rows relevant to your question** instead
-  of just sending the first chunk. Ask "Scottish royalty heritage" of a huge family
-  tree and it pulls every matching row (local, on-device row matching — no server).
-  The first step toward full indexed retrieval (RFC 0004).
+- **Interactive applet widgets** — a lesson's "Try it" card now composes a real,
+  self-contained interactive widget (dropdowns, inputs, live-computed output, a
+  step-by-step simulator) instead of a block of text. In the app it builds on click
+  and is cached, so re-opening a lesson is instant; a **↻ Regenerate** button rebuilds
+  it, and a failed build offers a Retry.
+- **Widgets work on the published web page too** — published and exported lessons bake
+  each widget into a sandboxed `data:` iframe under a hardened, hash-allowlisted CSP, so
+  they stay interactive on getchervil.com — not just in the desktop app.
+- **Lessons auto-upgrade on open** — older lessons re-render with the current renderer
+  when opened, so they pick up new capabilities without being rebuilt.
+- **Smart attachments for large files** — when an attached file is bigger than fits in
+  one request, Chervil selects the **rows relevant to your question** instead of just
+  sending the first chunk (local, on-device row matching — no server). The first step
+  toward full indexed retrieval (RFC 0004).
+- Design docs: **RFC 0009** (published-page metrics) and **RFC 0010** (Chervil on the web).
+
+### Changed
+- **Fluent UI pass.** The Settings panel highlights the selected option as a card (not
+  just a radio dot) over a blurred backdrop; the **address bar stays usable on small
+  windows** — the toolbar collapses to icons via a container query instead of running
+  off-screen; the sidebar toggle is now a **directional chevron** that flips between
+  hide (‹) and show (›). Plus thin themed scrollbars, consistent overlay blur, keyboard
+  focus rings, a smooth sidebar slide, and unified radius tokens.
+- **Re-publishing a lesson updates it in place** — same URL — instead of minting a new
+  link each time (stable source id, matching the page-publish path).
+
+### Fixed
+- **Friendlier error messages** — transcription, wake-word, autofill, and login-fill
+  failures now read as plain language instead of raw exceptions or `[object Object]`.
 
 ## [0.3.1] — 2026-06-24
 

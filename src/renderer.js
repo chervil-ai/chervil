@@ -875,12 +875,17 @@ function toggleTabLayout() {
 }
 
 // ---- Chat sidebar collapse (full-width composed page) ----
+// Directional chevron: ‹ points left to HIDE the (left-hand) sidebar; › points
+// right to SHOW it again — so the icon always reflects what the click will do.
+const SIDEBAR_ICON_HIDE = '<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 6l-6 6 6 6"/></svg>';
+const SIDEBAR_ICON_SHOW = '<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 6l6 6-6 6"/></svg>';
 function applySidebarCollapsed() {
   const on = !!settings.sidebarCollapsed;
   if (els.main) els.main.classList.toggle('sidebar-collapsed', on);
   if (els.sidebarToggle) {
     els.sidebarToggle.setAttribute('aria-pressed', String(on));
     els.sidebarToggle.title = on ? 'Show chat sidebar (Ctrl+\\)' : 'Hide chat sidebar (Ctrl+\\)';
+    els.sidebarToggle.innerHTML = on ? SIDEBAR_ICON_SHOW : SIDEBAR_ICON_HIDE;
   }
 }
 
