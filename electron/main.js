@@ -459,6 +459,9 @@ ipcMain.handle('chervil:os-action', async (_event, payload) => {
   }
 });
 
+// App version for the sandboxed preload (it can't read package.json directly).
+ipcMain.on('chervil:get-version', (event) => { event.returnValue = app.getVersion(); });
+
 // Account status for Settings → You (publish-token auth → { pro, username }).
 ipcMain.handle('chervil:account-status', async (_event, payload) => {
   try {

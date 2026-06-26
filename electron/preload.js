@@ -2,9 +2,11 @@
 
 const { contextBridge, ipcRenderer } = require('electron');
 
-// The app version, read from package.json — shown in Settings ("About").
+// The app version — shown in Settings ("About"). Fetched from the main process
+// (app.getVersion()) over a sync IPC: the preload is sandboxed, so it can't
+// require('../package.json') directly.
 let APP_VERSION = '';
-try { APP_VERSION = require('../package.json').version || ''; } catch { /* ignore */ }
+try { APP_VERSION = ipcRenderer.sendSync('chervil:get-version') || ''; } catch { /* ignore */ }
 
 // Minimal, safe bridge between the renderer UI and the agent in the main process.
 contextBridge.exposeInMainWorld('chervil', {

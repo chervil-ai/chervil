@@ -6,6 +6,12 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+- **Settings showed "Chervil v—" instead of the version number.** The sandboxed
+  preload couldn't read `package.json`, so the version came back blank. It now comes
+  from the main process (`app.getVersion()`) over a small sync IPC — Settings → You
+  shows the real version again.
+
 ## [0.5.2] — 2026-06-26
 
 A small quality release — make "Hey Sprig" behave in a noisy room.
