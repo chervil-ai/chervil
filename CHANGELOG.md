@@ -6,6 +6,17 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.5.1] — 2026-06-26
+
+A security patch.
+
+### Fixed
+- **Bumped the transitive `uuid` dependency to 11.1.1** (GHSA-w5hq-g745-h8pq /
+  CVE-2026-41907 — a missing buffer bounds check in uuid v3/v5/v6 when a `buf`
+  is provided). `uuid` reaches Chervil only through `exceljs` (Excel export),
+  which calls `v4()` with no `buf`, so the vulnerable path was never reachable —
+  this clears the alert. Verified Excel export still works.
+
 ## [0.5.0] — 2026-06-26
 
 Interactive lessons that actually *do* things — everywhere. Applet cards now compose
