@@ -6,6 +6,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.5.2] — 2026-06-26
+
+A small quality release — make "Hey Sprig" behave in a noisy room.
+
 ### Added
 - **Wake-word sensitivity control.** Settings → Voice now has a **threshold slider** for
   "Hey Sprig" — raise it so background noise or a TV in the room stops triggering Chervil
