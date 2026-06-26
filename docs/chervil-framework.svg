@@ -1,0 +1,75 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 712" width="1000" height="712" role="img" font-family="-apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif">
+  <title>The Chervil agentic action framework</title>
+  <desc>A layered diagram. You talk to Sprig, the conversational bridge. Sprig drives the agentic action framework — compose, act, learn, publish — every action gated by a deterministic control layer. The framework is grounded in the live web, your own AI provider, and your machine. It all runs locally in Electron.</desc>
+  <defs>
+    <marker id="ar" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#5b6478"/>
+    </marker>
+  </defs>
+
+  <rect x="0" y="0" width="1000" height="712" rx="18" fill="#0b0d12"/>
+
+  <text x="40" y="48" font-size="28" font-weight="600" fill="#e7eaf2">Chervil — the agentic action framework for the web</text>
+  <text x="40" y="76" font-size="16" fill="#8b93a7">Sprig is the bridge between you and the framework.</text>
+
+  <rect x="430" y="100" width="140" height="44" rx="22" fill="#161a24" stroke="#2a3142"/>
+  <text x="500" y="128" font-size="17" font-weight="500" fill="#e7eaf2" text-anchor="middle">You</text>
+
+  <line x1="500" y1="146" x2="500" y2="176" stroke="#5b6478" stroke-width="1.5" marker-start="url(#ar)" marker-end="url(#ar)"/>
+  <text x="514" y="166" font-size="13" fill="#8b93a7">ask in plain language · get living results</text>
+
+  <rect x="40" y="178" width="920" height="74" rx="14" fill="#10201a" stroke="#7be0a3" stroke-width="1.5"/>
+  <text x="64" y="212" font-size="21" font-weight="600" fill="#7be0a3">Sprig</text>
+  <text x="64" y="236" font-size="14" fill="#b9c4bf">the conversational bridge — turns what you want into governed action, and shows its work</text>
+  <text x="936" y="205" font-size="12" fill="#5f8a73" text-anchor="end">the face of</text>
+  <text x="936" y="221" font-size="12" fill="#5f8a73" text-anchor="end">the framework</text>
+
+  <line x1="500" y1="254" x2="500" y2="284" stroke="#5b6478" stroke-width="1.5" marker-start="url(#ar)" marker-end="url(#ar)"/>
+
+  <rect x="40" y="286" width="920" height="258" rx="16" fill="#0e1119" stroke="#2a3142"/>
+  <text x="64" y="314" font-size="16" font-weight="500" fill="#cdd3e0">the agentic action framework</text>
+
+  <rect x="64" y="328" width="204" height="116" rx="12" fill="#121829" stroke="#6c8cff" stroke-width="1"/>
+  <text x="84" y="360" font-size="17" font-weight="500" fill="#cdd6f5">Compose</text>
+  <text x="84" y="386" font-size="13" fill="#8b93a7">a question becomes a</text>
+  <text x="84" y="404" font-size="13" fill="#8b93a7">single, cited, living page</text>
+
+  <rect x="286" y="328" width="204" height="116" rx="12" fill="#121829" stroke="#6c8cff" stroke-width="1"/>
+  <text x="306" y="360" font-size="17" font-weight="500" fill="#cdd6f5">Act</text>
+  <text x="306" y="386" font-size="13" fill="#8b93a7">plans and operates</text>
+  <text x="306" y="404" font-size="13" fill="#8b93a7">real, live websites</text>
+
+  <rect x="508" y="328" width="204" height="116" rx="12" fill="#121829" stroke="#6c8cff" stroke-width="1"/>
+  <text x="528" y="360" font-size="17" font-weight="500" fill="#cdd6f5">Learn</text>
+  <text x="528" y="386" font-size="13" fill="#8b93a7">interactive lessons</text>
+  <text x="528" y="404" font-size="13" fill="#8b93a7">with live widgets</text>
+
+  <rect x="730" y="328" width="206" height="116" rx="12" fill="#121829" stroke="#6c8cff" stroke-width="1"/>
+  <text x="750" y="360" font-size="17" font-weight="500" fill="#cdd6f5">Publish</text>
+  <text x="750" y="386" font-size="13" fill="#8b93a7">share and host it</text>
+  <text x="750" y="404" font-size="13" fill="#8b93a7">on the open web</text>
+
+  <rect x="64" y="462" width="872" height="62" rx="12" fill="#1f1a0f" stroke="#e0b15a" stroke-width="1.2"/>
+  <text x="84" y="490" font-size="15" font-weight="500" fill="#e0b15a">deterministic control layer</text>
+  <text x="84" y="511" font-size="13" fill="#c9b78a">every action is gated — allow · confirm · deny — and written to an audit trail. payments and logins are always blocked.</text>
+
+  <line x1="500" y1="546" x2="500" y2="576" stroke="#5b6478" stroke-width="1.5" marker-end="url(#ar)"/>
+  <text x="514" y="566" font-size="13" fill="#8b93a7">grounded in your world</text>
+
+  <rect x="40" y="578" width="294" height="92" rx="12" fill="#14171f" stroke="#2a3142"/>
+  <text x="60" y="608" font-size="16" font-weight="500" fill="#e7eaf2">The live web</text>
+  <text x="60" y="632" font-size="13" fill="#8b93a7">search, fetch, and embed</text>
+  <text x="60" y="650" font-size="13" fill="#8b93a7">real sites — with sources</text>
+
+  <rect x="352" y="578" width="294" height="92" rx="12" fill="#14171f" stroke="#2a3142"/>
+  <text x="372" y="608" font-size="16" font-weight="500" fill="#e7eaf2">Your AI</text>
+  <text x="372" y="632" font-size="13" fill="#8b93a7">bring your own — Claude,</text>
+  <text x="372" y="650" font-size="13" fill="#8b93a7">OpenAI, Grok, Gemini, Ollama</text>
+
+  <rect x="664" y="578" width="296" height="92" rx="12" fill="#14171f" stroke="#2a3142"/>
+  <text x="684" y="608" font-size="16" font-weight="500" fill="#e7eaf2">Your machine</text>
+  <text x="684" y="632" font-size="13" fill="#8b93a7">local files, OS actions, and</text>
+  <text x="684" y="650" font-size="13" fill="#8b93a7">an encrypted credential vault</text>
+
+  <text x="40" y="698" font-size="13" fill="#6b7280">Runs on your machine — Electron: a local engine, a guarded bridge (window.chervil), and a sandboxed UI. Free, open source, bring-your-own-AI.</text>
+</svg>
