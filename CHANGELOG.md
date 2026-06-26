@@ -6,6 +6,8 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.5.3] — 2026-06-26
+
 ### Fixed
 - **Settings showed "Chervil v—" instead of the version number.** The sandboxed
   preload couldn't read `package.json`, so the version came back blank. It now comes
