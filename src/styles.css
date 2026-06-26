@@ -1481,6 +1481,18 @@ html, body {
 .chervil-sheet-btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
 .chervil-sheet-btn.primary:hover { filter: brightness(1.08); }
 .chervil-sheet-btn.cancel { color: var(--muted); margin-top: 2px; }
+.chervil-sheet-check {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 12.5px;
+  color: var(--muted);
+  text-align: left;
+  cursor: pointer;
+  padding: 2px;
+  margin-top: -2px;
+}
+.chervil-sheet-check input { margin-top: 2px; flex: 0 0 auto; }
 .chervil-qr {
   width: 240px;
   height: 240px;

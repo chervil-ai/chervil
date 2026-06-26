@@ -43,6 +43,9 @@ contextBridge.exposeInMainWorld('chervil', {
   /** Applet bridge: a composed page asks Sprig for live data. */
   appletAsk: (payload) => ipcRenderer.invoke('chervil:applet-ask', payload),
 
+  /** Applet widget builder: compose a self-contained interactive widget (HTML). */
+  composeApplet: (payload) => ipcRenderer.invoke('chervil:compose-applet', payload),
+
   /** Plain chat ("Just a chatbot" mode): a conversational text reply, no page. */
   chat: (payload) => ipcRenderer.invoke('chervil:chat', payload),
 
@@ -69,6 +72,9 @@ contextBridge.exposeInMainWorld('chervil', {
 
   /** Build any registered skill (RFC 0003) → { ok, kind, artifact, html }. */
   buildSkill: (payload) => ipcRenderer.invoke('chervil:build-skill', payload),
+
+  /** Re-render a stored skill artifact to current HTML (pure, no model call). */
+  renderSkill: (payload) => ipcRenderer.invoke('chervil:render-skill', payload),
 
   /** Render text/URL as a QR data URL for "send to phone". */
   qr: (text) => ipcRenderer.invoke('chervil:qr', text),

@@ -12,7 +12,7 @@ const { app, BrowserWindow, ipcMain, dialog, safeStorage, Notification, Tray, Me
 require('dotenv').config({ path: path.join(__dirname, '..', '.env'), quiet: true });
 
 const QRCode = require('qrcode');
-const { runAgent, runChat, runAppletAsk, runListModels, runAgentStep, runAgentPlan, runExtractSlides, runExtractDoc, runExtractSheets, runSynthesizeAgent } = require('../lib/agent');
+const { runAgent, runChat, runAppletAsk, runComposeApplet, runListModels, runAgentStep, runAgentPlan, runExtractSlides, runExtractDoc, runExtractSheets, runSynthesizeAgent } = require('../lib/agent');
 const { generateHeroImage } = require('../lib/images');
 const { getSkill } = require('../lib/skills');
 const { createVault } = require('../lib/vault');
@@ -768,6 +768,17 @@ ipcMain.handle('chervil:applet-ask', async (_event, payload) => {
   }
 });
 
+// --- Applet widget builder: compose a self-contained interactive widget (HTML)
+ipcMain.handle('chervil:compose-applet', async (_event, payload) => {
+  try {
+    const { prompt } = payload || {};
+    const res = await runComposeApplet({ prompt, config: providerConfigFrom(payload) });
+    return { ok: true, html: res.html };
+  } catch (err) {
+    return { ok: false, error: String(err && err.message ? err.message : err) };
+  }
+});
+
 // --- AI hero image for composed pages (opt-in; BYO image key) --------------
 ipcMain.handle('chervil:generate-hero', async (_event, payload) => {
   try {
@@ -903,15 +914,36 @@ ipcMain.handle('chervil:build-skill', async (_event, payload) => {
   }
 });
 
-// Pre-compute applet answers with the user's LOCAL key so published/exported
-// lessons show baked results — no hosted bridge, no server-side key custody, no
+// Re-render a stored skill artifact (lesson/quiz) to current HTML — a pure render
+// with NO model call. Lets the app refresh items built with an older renderer
+// (e.g. before interactive applets) on open, instead of replaying frozen markup.
+ipcMain.handle('chervil:render-skill', (_event, payload) => {
+  try {
+    const { kind, artifact } = payload || {};
+    const skill = getSkill(kind || 'learn');
+    if (!skill) return { ok: false, error: 'Unknown skill.' };
+    if (!artifact) return { ok: false, error: 'Nothing to render.' };
+    return { ok: true, html: skill.toHtml(artifact) };
+  } catch (err) {
+    return { ok: false, error: String(err && err.message ? err.message : err) };
+  }
+});
+
+// Pre-compute applet results with the user's LOCAL key so published/exported
+// lessons are self-contained — no hosted bridge, no server-side key custody, no
 // token cost (RFC 0002 / the "snapshot at publish" decision). Mutates in place.
+// Bakes the full interactive WIDGET (appletHtml) the reader renders in a sandboxed
+// data: iframe; falls back to a plain text answer if widget compose fails.
 async function snapshotApplets(lesson, config) {
   const cards = [];
   for (const m of (lesson.modules || [])) for (const c of (m.cards || [])) {
-    if (c.kind === 'applet' && c.prompt && !c.answer) cards.push(c);
+    if (c.kind === 'applet' && c.prompt && !c.appletHtml && !c.answer) cards.push(c);
   }
   await Promise.all(cards.map(async (c) => {
+    try {
+      const r = await runComposeApplet({ prompt: c.prompt, config });
+      if (r && r.html) { c.appletHtml = r.html; return; }
+    } catch { /* fall back to a text answer */ }
     try { const r = await runAppletAsk({ prompt: c.prompt, config }); if (r && r.text) c.answer = String(r.text); }
     catch { /* leave unbaked */ }
   }));
@@ -947,7 +979,7 @@ ipcMain.handle('chervil:export-lesson', async (event, payload) => {
 // --- Publish a lesson to getchervil.com (Chervil Pro) --------------------
 ipcMain.handle('chervil:publish-lesson', async (_event, payload) => {
   try {
-    const { token, baseUrl } = payload || {};
+    const { token, baseUrl, sourceId } = payload || {};
     const artifact = (payload && (payload.artifact || payload.lesson)) || null;
     const kind = (payload && (payload.kind || (payload.lesson ? 'learn' : ''))) || 'learn';
     if (!artifact) return { ok: false, error: 'Nothing to publish.' };
@@ -960,14 +992,16 @@ ipcMain.handle('chervil:publish-lesson', async (_event, payload) => {
     const res = await fetch(`${base}/api/lessons`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-      body: JSON.stringify({ artifact, kind, html }),
+      // sourceId (the app's stable lesson id) makes re-publishing update the SAME
+      // hosted lesson in place — same URL — instead of minting a new one each time.
+      body: JSON.stringify({ artifact, kind, html, sourceId: sourceId || undefined }),
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) {
       if (res.status === 404) return { ok: false, error: 'Publishing isn’t available yet — the Chervil hosted service (getchervil.com) is still in development. (404)' };
       return { ok: false, error: data.error || `Publish failed (${res.status}).` };
     }
-    return { ok: true, url: data.url, id: data.id };
+    return { ok: true, url: data.url, id: data.id, updated: data.updated };
   } catch (err) {
     return { ok: false, error: String(err && err.message ? err.message : err) };
   }

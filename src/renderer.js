@@ -116,6 +116,7 @@ const els = {
   sttModel: document.getElementById('stt-model'),
   publishToken: document.getElementById('publish-token'),
   publishBase: document.getElementById('publish-base'),
+  cloudLivePrompt: document.getElementById('cloud-live-prompt'),
   syncFolder: document.getElementById('sync-folder'),
   syncChoose: document.getElementById('sync-choose'),
   syncClear: document.getElementById('sync-clear'),
@@ -224,6 +225,7 @@ let settings = {
   // Publishing — Chervil Pro: publish a lesson to a shareable getchervil.com link.
   publishToken: '',          // from getchervil.com/me (stored locally)
   publishBase: 'https://getchervil.com',
+  cloudLivePrompt: true,     // after publishing a page, offer cloud auto-refresh (RFC 0007). Off → never auto-ask; still enable from Publish ☁.
   // Data folders (RFC 0004 local on-ramp): designated folders to pull files from.
   dataFolders: [],           // [{ id, name, path }] — local or desktop-synced OneDrive/GDrive
   // Autofill identity (non-sensitive only — never passwords/cards). Filled into
@@ -410,6 +412,7 @@ const CHERVIL_RUNTIME = `<script>(function(){
   window.chervil = {
     call: call,
     ask: function(prompt){ return call('ask', { prompt: String(prompt || '') }); },
+    applet: function(prompt, force){ return call('applet', { prompt: String(prompt || ''), force: !!force }); },
     info: function(){ return call('system_info'); },
     details: function(){ return call('system_details'); },
     // Guarded OS actions (RFC 0006 Track B). Each runs only after the user
@@ -1127,6 +1130,27 @@ function renderSite(url) {
   els.webview.setAttribute('src', url);
 }
 
+// Lessons/quizzes store the HTML rendered at build time. When the renderer changes
+// (e.g. interactive applets gained an inline widget), older items would otherwise
+// stay frozen on stale markup. On open, re-render a skill entry from its structured
+// artifact (a pure render — no model call, no token cost) and cache the result.
+// Bump SKILL_HTML_VERSION whenever lib/lessonHtml.js or lib/quizHtml.js output changes.
+const SKILL_HTML_VERSION = 2;
+async function maybeRefreshSkillHtml(tab, entry) {
+  if (!entry || !entry.skill || entry.skillHtmlVersion === SKILL_HTML_VERSION) return;
+  const artifact = entry.artifact || entry.lesson;
+  if (!artifact || !window.chervil || !window.chervil.renderSkill) return;
+  try {
+    const res = await window.chervil.renderSkill({ kind: entry.skill, artifact });
+    if (res && res.ok && res.html) {
+      entry.html = res.html;
+      entry.skillHtmlVersion = SKILL_HTML_VERSION;
+      scheduleSave();
+      if (activeTab() === tab && currentEntry(tab) === entry) renderPageHtml(entry.html);
+    }
+  } catch { /* keep the stored HTML */ }
+}
+
 // Render whatever the active tab is currently pointing at (committed entry).
 function renderCurrentPage() {
   const tab = activeTab();
@@ -1150,6 +1174,7 @@ function renderCurrentPage() {
     setBadge('page', 'composed');
     els.save.disabled = false;
     setRemixVisible(true);
+    maybeRefreshSkillHtml(tab, entry); // upgrade stored lessons/quizzes to the current renderer
   }
   updateNavButtons();
   updatePlaceholder();
@@ -1602,6 +1627,14 @@ function onLiveSelectChange() {
 
 // ---- Toast notifications ----
 let toastTimer = null;
+// Turn a caught error (Error, string, or stray object) into a clean user-facing
+// string — never "[object Object]" or "undefined". Keeps a real message when there is
+// one, else falls back to a friendly default.
+function errText(e, fallback) {
+  var m = e && e.message ? String(e.message) : (typeof e === 'string' ? e : '');
+  return m.trim() || (fallback || 'something went wrong');
+}
+
 function toast(message) {
   if (!els.toast) return;
   els.toast.textContent = message;
@@ -1679,7 +1712,7 @@ async function onVoiceStop() {
     if (resp && resp.ok && resp.text) insertTranscript(resp.text);
     else toast((resp && resp.error) || 'Sprig didn’t catch that — try again.');
   } catch (e) {
-    toast('Transcription failed: ' + (e && e.message ? e.message : e));
+    toast('Couldn’t transcribe that — ' + errText(e, 'please try again') + '.');
   }
   micBusy = false;
   setMicState('idle');
@@ -1755,7 +1788,7 @@ async function startWake() {
       keywordModel: km.model,
       threshold: settings.wakeThreshold || 0.5,
       onDetect: onWakeDetected,
-      onError: (e) => setWakeStatus('Listening error: ' + (e && e.message ? e.message : e), 'warn'),
+      onError: (e) => setWakeStatus('Wake-word listening stopped — ' + errText(e, 'mic unavailable'), 'warn'),
     });
     const label = usingCustom ? (settings.wakeKeywordLabel || 'your model') : prettyWake(settings.wakeKeyword);
     setWakeStatus(`Listening for “${label}”…`, 'ok');
@@ -1947,7 +1980,7 @@ async function autofillCurrentForm() {
     auditAction({ type: 'autofill', target: cur.url || '', decision: 'allow', ok: !!n });
     addMessage(tab, 'bot', n ? `Filled ${n} field${n === 1 ? '' : 's'} from your saved details. (Passwords are never auto-filled.)` : 'No matching fields found to fill here.');
   } catch (e) {
-    addMessage(tab, 'bot', `Couldn’t autofill: ${(e && e.message) || e}`, 'error');
+    addMessage(tab, 'bot', `Couldn’t autofill this page — ${errText(e, 'no fillable form found')}.`, 'error');
   }
 }
 
@@ -2053,7 +2086,7 @@ async function doFillCredential(cred, cur) {
       toast('No login form found on this page.');
     }
   } catch (e) {
-    toast(`Couldn’t fill: ${(e && e.message) || e}`);
+    toast(`Couldn’t fill the login — ${errText(e, 'no login form found')}.`);
   }
 }
 
@@ -3006,7 +3039,7 @@ function renderAgents() {
 async function renderStarterAgents() {
   const list = document.getElementById('starter-agents-list');
   if (!list) return;
-  list.innerHTML = '<div class="sched-empty">Loading…</div>';
+  list.innerHTML = '<div class="sched-empty">Loading starter agents…</div>';
   let files = [];
   try { files = await window.chervil.listStarterAgents(); } catch { files = []; }
   list.innerHTML = '';
@@ -3617,6 +3650,7 @@ async function buildAndRenderSkill(tab, skillId, input, label) {
       query: `/${skillId} ${input}`,
       skill: skillId,
       artifact: a,
+      skillHtmlVersion: SKILL_HTML_VERSION, // freshly rendered with the current renderer
     };
     // Learn keeps `lesson` + `sources` for the (currently lesson-specific)
     // export/publish actions.
@@ -4157,7 +4191,7 @@ function showInputSheet({ title, subtitle, placeholder = '', type = 'text', okLa
   });
 }
 
-function showActionSheet(title, subtitle, actions, onClose) {
+function showActionSheet(title, subtitle, actions, onClose, extra) {
   const overlay = document.createElement('div');
   overlay.className = 'chervil-sheet-overlay';
   let chosen = false;
@@ -4176,6 +4210,21 @@ function showActionSheet(title, subtitle, actions, onClose) {
     s.className = 'chervil-sheet-sub';
     s.textContent = subtitle;
     sheet.appendChild(s);
+  }
+  // Optional checkbox row (e.g. "Don't show this again"). Fires onChange immediately
+  // so the choice persists regardless of how the sheet is then dismissed.
+  if (extra && extra.checkbox) {
+    const lbl = document.createElement('label');
+    lbl.className = 'chervil-sheet-check';
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.checked = !!extra.checkbox.checked;
+    cb.addEventListener('change', () => { Promise.resolve().then(() => extra.checkbox.onChange(cb.checked)); });
+    const sp = document.createElement('span');
+    sp.textContent = extra.checkbox.label;
+    lbl.appendChild(cb);
+    lbl.appendChild(sp);
+    sheet.appendChild(lbl);
   }
   (actions || []).forEach((a) => {
     const b = document.createElement('button');
@@ -4792,6 +4841,7 @@ function applySettingsToUI() {
   if (els.sttModel) els.sttModel.value = settings.sttModel || '';
   if (els.publishToken) els.publishToken.value = settings.publishToken || '';
   if (els.publishBase) els.publishBase.value = settings.publishBase || 'https://getchervil.com';
+  if (els.cloudLivePrompt) els.cloudLivePrompt.checked = settings.cloudLivePrompt !== false;
   if (els.voiceAutosend) els.voiceAutosend.checked = !!settings.voiceAutosend;
   if (els.wakeToggle) els.wakeToggle.checked = !!settings.wakeEnabled;
   if (els.wakeKeyword) els.wakeKeyword.value = settings.wakeKeyword || 'hey_jarvis';
@@ -5613,9 +5663,26 @@ async function publishCurrentPage(kind = 'page') {
       scheduleSave();
       addMessage(tab, 'bot', `${res.updated ? 'Updated' : 'Published'} your ${noun} — it’s live at ${res.url}`);
       try { await navigator.clipboard.writeText(res.url); toast('Published — link copied to clipboard.'); } catch { toast('Published.'); }
-      // Pages (not blog posts) can be kept current in the cloud — offer it once.
-      if (kind === 'page' && entry.query && entry.publishedId && !entry.cloudLiveMs) {
-        showActionSheet('Keep it live in the cloud?', 'Auto-refresh this page on a schedule — runs in the cloud even when Chervil is closed (Pro). Or skip and do it later from Publish.', cloudLiveOptions(entry));
+      // Pages (not blog posts) can be kept current in the cloud. Auto-offer it unless
+      // the user turned the prompt off globally (Settings → Publishing) or already
+      // dismissed it for this page — they can still enable it anytime from Publish ☁.
+      if (kind === 'page' && entry.query && entry.publishedId && !entry.cloudLiveMs
+          && settings.cloudLivePrompt !== false && !entry.cloudPromptSkipped) {
+        showActionSheet(
+          'Keep it live in the cloud?',
+          'Auto-refresh this page on a schedule — runs in the cloud even when Chervil is closed (Pro). You can also turn this on anytime later from the ☁ option in Publish.',
+          cloudLiveOptions(entry),
+          () => { entry.cloudPromptSkipped = true; scheduleSave(); },  // dismissed → don't re-ask for this page on re-publish
+          { checkbox: {
+              label: 'Don’t offer this after publishing (manage in Settings → Publishing).',
+              checked: false,
+              onChange: (off) => {
+                settings.cloudLivePrompt = !off;
+                scheduleSave();
+                if (els.cloudLivePrompt) els.cloudLivePrompt.checked = !off;
+              },
+            } }
+        );
       }
     } else {
       addMessage(tab, 'bot', `Couldn’t publish: ${(res && res.error) || 'unknown error'}`, 'error');
@@ -5638,12 +5705,14 @@ async function publishCurrentLesson() {
     const res = await window.chervil.publishLesson({
       artifact,
       kind: entry.skill || 'learn',
+      sourceId: entry.id,   // stable id → re-publishing updates the same hosted lesson (same URL)
       token: settings.publishToken,
       baseUrl: settings.publishBase || 'https://getchervil.com',
       config: providerConfig(),
     });
     if (res && res.ok && res.url) {
       entry.publishedUrl = res.url;
+      if (res.id) entry.publishedId = res.id;
       scheduleSave();
       addMessage(tab, 'bot', `${res.updated ? 'Updated' : 'Published'} — it’s live at ${res.url}`);
       try { await navigator.clipboard.writeText(res.url); toast('Published — link copied to clipboard.'); } catch { toast('Published.'); }
@@ -5928,6 +5997,7 @@ if (els.sttEndpoint) els.sttEndpoint.addEventListener('input', () => { settings.
 if (els.sttModel) els.sttModel.addEventListener('input', () => { settings.sttModel = els.sttModel.value.trim(); scheduleSave(); });
 if (els.publishToken) els.publishToken.addEventListener('input', () => { settings.publishToken = els.publishToken.value.trim(); scheduleSave(); });
 if (els.publishBase) els.publishBase.addEventListener('input', () => { settings.publishBase = els.publishBase.value.trim(); scheduleSave(); });
+if (els.cloudLivePrompt) els.cloudLivePrompt.addEventListener('change', () => { settings.cloudLivePrompt = els.cloudLivePrompt.checked; scheduleSave(); });
 if (els.publishSave) els.publishSave.addEventListener('click', () => {
   settings.publishToken = els.publishToken.value.trim();
   settings.publishBase = els.publishBase.value.trim() || 'https://getchervil.com';
@@ -6152,6 +6222,10 @@ document.addEventListener('keydown', (e) => {
   win.postMessage({ __chervil: true, type: 'scrollkey', key }, '*');
 });
 
+// Session cache of composed applet widgets, keyed by prompt — avoids recomposing
+// (a model call) when a lesson is re-rendered, reopened, or the widget rebuilt.
+const appletCache = new Map();
+
 // An applet inside a composed page asked Sprig for something. Run it and post the
 // result back to that page's window.
 async function handleAppletTool(source, msg) {
@@ -6167,6 +6241,20 @@ async function handleAppletTool(source, msg) {
       const res = await window.chervil.appletAsk({ prompt, config: providerConfig() });
       if (res && res.ok) reply({ ok: true, result: { text: res.text, sources: res.sources || [] } });
       else reply({ ok: false, error: (res && res.error) || 'Sprig could not answer.' });
+    } else if (msg.name === 'applet') {
+      // Build a self-contained interactive widget (HTML) the card renders inline.
+      // Cache by prompt for the session so re-opening a lesson (or re-rendering it)
+      // shows the widget instantly with no recompose; `force` (the Regenerate button)
+      // bypasses the cache.
+      const prompt = String((msg.args && msg.args.prompt) || '').trim();
+      if (!prompt) return reply({ ok: false, error: 'Empty request.' });
+      const force = !!(msg.args && msg.args.force);
+      if (!force && appletCache.has(prompt)) return reply({ ok: true, result: { html: appletCache.get(prompt) } });
+      const res = window.chervil.composeApplet
+        ? await window.chervil.composeApplet({ prompt, config: providerConfig() })
+        : { ok: false, error: 'Not available in this build.' };
+      if (res && res.ok && res.html) { appletCache.set(prompt, res.html); reply({ ok: true, result: { html: res.html } }); }
+      else reply({ ok: false, error: (res && res.error) || 'Sprig could not build this.' });
     } else if (msg.name === 'system_info') {
       // Read-only machine facts for "check my computer" style pages.
       const res = window.chervil.systemInfo ? await window.chervil.systemInfo() : null;
