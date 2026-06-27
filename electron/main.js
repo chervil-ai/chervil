@@ -12,11 +12,12 @@ const { app, BrowserWindow, ipcMain, dialog, safeStorage, Notification, Tray, Me
 require('dotenv').config({ path: path.join(__dirname, '..', '.env'), quiet: true });
 
 const QRCode = require('qrcode');
-const { runAgent, runChat, runAppletAsk, runComposeApplet, runListModels, runAgentStep, runAgentPlan, runExtractSlides, runExtractDoc, runExtractSheets, runSynthesizeAgent } = require('../lib/agent');
+const { runAgent, runChat, runAgentTurn, runAppletAsk, runComposeApplet, runListModels, runAgentStep, runAgentPlan, runExtractSlides, runExtractDoc, runExtractSheets, runSynthesizeAgent } = require('../lib/agent');
 const { generateHeroImage } = require('../lib/images');
 const { getSkill } = require('../lib/skills');
 const { createVault } = require('../lib/vault');
 const { registrableDomain } = require('../lib/etld');
+const { mergeStates } = require('../lib/stateMerge');
 
 let mainWindow = null;
 let tray = null;
@@ -477,13 +478,50 @@ ipcMain.handle('chervil:account-status', async (_event, payload) => {
   }
 });
 
+// Deliver an imported page doc to the renderer (chervil://import deep link).
+function deliverImportDoc(doc) {
+  if (!mainWindow || mainWindow.isDestroyed()) createWindow();
+  showMain();
+  const wc = mainWindow.webContents;
+  const send = () => { if (!wc.isDestroyed()) wc.send('chervil:import-page', doc); };
+  if (wc.isLoading()) wc.once('did-finish-load', send); else send();
+}
+
+// Pull a shared page into Chervil from a published getchervil.com URL: fetch the
+// page and extract the portable source the publisher embedded (a JSON <script
+// id="chervil-source">). Only http(s) — never file:// or other schemes.
+async function importFromPublishedUrl(pageUrl) {
+  try {
+    const u = new URL(pageUrl);
+    if (u.protocol !== 'http:' && u.protocol !== 'https:') return;
+    const resp = await fetch(pageUrl, { redirect: 'follow' });
+    if (!resp.ok) { deliverPrompt(`I couldn't open that Chervil page to import (HTTP ${resp.status}).`); return; }
+    const html = await resp.text();
+    const m = html.match(/<script[^>]*id=["']chervil-source["'][^>]*>([\s\S]*?)<\/script>/i);
+    if (!m) { deliverPrompt(`That page isn't a shareable Chervil page (no embedded source). You can still ask me about it: ${pageUrl}`); return; }
+    let doc;
+    try { doc = JSON.parse(m[1].replace(/\\u003c/g, '<')); } catch { doc = null; }
+    if (!doc || doc.format !== 'chervil-page') { deliverPrompt(`That page's embedded Chervil source was unreadable: ${pageUrl}`); return; }
+    deliverImportDoc(doc);
+  } catch {
+    deliverPrompt(`I couldn't import that Chervil page: ${pageUrl}`);
+  }
+}
+
 // Handle a chervil:// deep link from the browser extension (or anywhere):
 //   chervil://ask?url=<page>&title=<title>&text=<selection>
+//   chervil://import?u=<published page URL>
 function handleChervilUrl(raw) {
   let prompt = '';
   try {
     const u = new URL(raw);
     if (u.protocol !== 'chervil:') return;
+    // Import a published page into this Chervil instance to remix.
+    if (u.hostname === 'import' || u.pathname === '//import' || u.pathname === 'import') {
+      const src = (u.searchParams.get('u') || u.searchParams.get('url') || '').trim();
+      if (src) importFromPublishedUrl(src);
+      return;
+    }
     const text = (u.searchParams.get('text') || '').trim();
     const url = (u.searchParams.get('url') || '').trim();
     const title = (u.searchParams.get('title') || '').trim();
@@ -1528,6 +1566,17 @@ ipcMain.handle('chervil:synthesize-agent', async (_event, payload) => {
   }
 });
 
+// --- Multi-stage agents: run one specialist's turn in a pipeline --------
+ipcMain.handle('chervil:agent-turn', async (_event, payload) => {
+  const { task, role, persona, prior, profile } = payload || {};
+  try {
+    const r = await runAgentTurn({ task, role, persona, prior, profile, config: providerConfigFrom(payload) });
+    return { ok: true, text: r.text };
+  } catch (err) {
+    return { ok: false, error: String(err && err.message ? err.message : err) };
+  }
+});
+
 // --- Export a single agent as a shareable Markdown file -----------------
 ipcMain.handle('chervil:save-agent-file', async (event, payload) => {
   const { text, suggestedName } = payload || {};
@@ -1544,6 +1593,46 @@ ipcMain.handle('chervil:save-agent-file', async (event, payload) => {
   try {
     fs.writeFileSync(filePath, text, 'utf8');
     return { ok: true, path: filePath };
+  } catch (err) {
+    return { ok: false, error: String(err && err.message ? err.message : err) };
+  }
+});
+
+// --- Share a composed page as a portable .chervil file ------------------
+// A self-contained JSON document of one composed page (html + query + sources)
+// that someone else can import into their own Chervil to view and remix.
+ipcMain.handle('chervil:save-page-file', async (event, payload) => {
+  const { json, suggestedName } = payload || {};
+  if (!json) return { ok: false, error: 'Nothing to share.' };
+  const win = BrowserWindow.fromWebContents(event.sender);
+  const safe = String(suggestedName || 'chervil-page')
+    .replace(/[^a-z0-9\-_ ]+/gi, '').trim().slice(0, 80) || 'chervil-page';
+  const { canceled, filePath } = await dialog.showSaveDialog(win, {
+    title: 'Share page',
+    defaultPath: `${safe}.chervil`,
+    filters: [{ name: 'Chervil page', extensions: ['chervil', 'json'] }],
+  });
+  if (canceled || !filePath) return { ok: false, canceled: true };
+  try {
+    fs.writeFileSync(filePath, json, 'utf8');
+    return { ok: true, path: filePath };
+  } catch (err) {
+    return { ok: false, error: String(err && err.message ? err.message : err) };
+  }
+});
+
+// --- Import a shared .chervil page file ---------------------------------
+ipcMain.handle('chervil:open-page-file', async (event) => {
+  const win = BrowserWindow.fromWebContents(event.sender);
+  const { canceled, filePaths } = await dialog.showOpenDialog(win, {
+    title: 'Import a shared Chervil page',
+    properties: ['openFile'],
+    filters: [{ name: 'Chervil page', extensions: ['chervil', 'json'] }],
+  });
+  if (canceled || !filePaths || !filePaths[0]) return { ok: false, canceled: true };
+  try {
+    const text = fs.readFileSync(filePaths[0], 'utf8');
+    return { ok: true, text };
   } catch (err) {
     return { ok: false, error: String(err && err.message ? err.message : err) };
   }
@@ -1872,6 +1961,68 @@ function legacyStateFile() {
   return legacyDataFile('parslee-state.json') || legacyDataFile('pingchat-state.json');
 }
 
+// --- Conflict-copy reconciliation (RFC 0005) -----------------------------
+// File-sync services (OneDrive/Google Drive/Dropbox) cannot merge JSON: when two
+// machines both write chervil-state.json, the service keeps one and forks the
+// loser into a conflict copy ("chervil-state-<MACHINE>[-N].json", "chervil-state
+// (1).json", "…(conflicted copy …).json"). The app only reads chervil-state.json,
+// so those writes would be lost — the user sees "my bookmarks don't sync." We
+// absorb any sibling conflict copies into the canonical file (union of additive
+// collections via stateMerge) and archive them so they stop accumulating.
+function isConflictCopy(name) {
+  const lower = name.toLowerCase();
+  if (lower === 'chervil-state.json') return false;
+  return lower.startsWith('chervil-state') && lower.endsWith('.json') && !lower.endsWith('.tmp.json');
+}
+
+function readStateWithMtime(p, { newest = false } = {}) {
+  try {
+    const state = JSON.parse(fs.readFileSync(p, 'utf8'));
+    const mtimeMs = newest ? Number.MAX_SAFE_INTEGER : fs.statSync(p).mtimeMs;
+    return { state, mtimeMs };
+  } catch { return null; }
+}
+
+// Absorb any conflict copies next to `canonical` into it. Canonical is treated as
+// newest so its session/scalar fields (tabs, settings) stay authoritative; only
+// additive collections are unioned in. Returns the merged state if a merge
+// happened, else null. Best-effort — never throws.
+function reconcileConflictCopies(canonical) {
+  try {
+    const dir = path.dirname(canonical);
+    let entries;
+    try { entries = fs.readdirSync(dir); } catch { return null; }
+    const orphans = entries.filter(isConflictCopy);
+    if (!orphans.length) return null;
+
+    const sources = [];
+    const base = readStateWithMtime(canonical, { newest: true });
+    if (base) sources.push(base);
+    const absorbed = [];
+    for (const f of orphans) {
+      const s = readStateWithMtime(path.join(dir, f));
+      if (s) { sources.push(s); absorbed.push(f); }
+    }
+    if (!absorbed.length) return null;
+
+    const merged = mergeStates(sources);
+    if (!merged) return null;
+
+    const tmp = canonical + '.tmp';
+    fs.writeFileSync(tmp, JSON.stringify(merged), 'utf8');
+    fs.renameSync(tmp, canonical);
+
+    // Archive the absorbed copies so they don't re-accumulate or re-trigger.
+    const archive = path.join(dir, '_resolved-conflicts');
+    try { fs.mkdirSync(archive, { recursive: true }); } catch { /* ignore */ }
+    for (const f of absorbed) {
+      try { fs.renameSync(path.join(dir, f), path.join(archive, f)); }
+      catch { try { fs.rmSync(path.join(dir, f)); } catch { /* ignore */ } }
+    }
+    return merged;
+  } catch { return null; }
+}
+
 ipcMain.handle('chervil:load-state', async () => {
   try {
     let p = stateFile();
@@ -1879,6 +2030,13 @@ ipcMain.handle('chervil:load-state', async () => {
     if (!fs.existsSync(p) && fs.existsSync(defaultStateFile())) p = defaultStateFile();
     if (!fs.existsSync(p) && fs.existsSync(legacyStateFile())) p = legacyStateFile();
     if (!fs.existsSync(p)) return null;
+    // On a synced location, absorb any conflict copies first so cross-machine
+    // bookmarks/history/spaces survive instead of being stranded in orphan files.
+    const cfg = readConfig();
+    if (cfg.statePath && p === cfg.statePath) {
+      const merged = reconcileConflictCopies(p);
+      if (merged) return merged;
+    }
     return JSON.parse(fs.readFileSync(p, 'utf8'));
   } catch {
     return null;
@@ -1888,10 +2046,42 @@ ipcMain.handle('chervil:load-state', async () => {
 ipcMain.handle('chervil:save-state', async (_event, state) => {
   try {
     const p = stateFile();
-    fs.writeFileSync(p, JSON.stringify(state), 'utf8');
+    let toWrite = state;
+    // Synced: union additive collections from whatever is on disk now (another
+    // machine may have written since we loaded) with our in-memory state as the
+    // newest/base. Deletion tombstones keep our removals from being resurrected.
+    const cfg = readConfig();
+    if (cfg.statePath && p === cfg.statePath) {
+      const onDisk = readStateWithMtime(p);
+      if (onDisk) {
+        const merged = mergeStates([{ state, mtimeMs: Number.MAX_SAFE_INTEGER }, onDisk]);
+        if (merged) toWrite = merged;
+      }
+    }
+    // Atomic write so a sync client never reads a half-written file.
+    const tmp = p + '.tmp';
+    fs.writeFileSync(tmp, JSON.stringify(toWrite), 'utf8');
+    fs.renameSync(tmp, p);
     let mtimeMs = 0;
     try { mtimeMs = fs.statSync(p).mtimeMs; } catch { /* ignore */ }
     return { ok: true, mtimeMs };
+  } catch (err) {
+    return { ok: false, error: String(err && err.message ? err.message : err) };
+  }
+});
+
+// Re-run conflict-copy reconciliation on demand. The renderer calls this on
+// window focus so orphans heal mid-session, not only at launch. Returns whether
+// anything changed (and the merged state so the renderer can adopt new items).
+ipcMain.handle('chervil:reconcile-state', async () => {
+  try {
+    const cfg = readConfig();
+    const active = stateFile();
+    if (!cfg.statePath || active !== cfg.statePath) return { ok: true, changed: false };
+    const merged = reconcileConflictCopies(active);
+    let mtimeMs = 0;
+    try { mtimeMs = fs.statSync(active).mtimeMs; } catch { /* ignore */ }
+    return { ok: true, changed: !!merged, mtimeMs, state: merged || null };
   } catch (err) {
     return { ok: false, error: String(err && err.message ? err.message : err) };
   }

@@ -6,6 +6,63 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.6.0] — 2026-06-27
+
+Agents that work as a team, pages you can hand off and remix, and a couple of
+quietly important fixes — your bookmarks now really sync, and interactive pages
+remember what you did on them.
+
+### Added
+- **Multi-stage agents (agent pipelines).** Chain two or more agents into a team that
+  hands off to each other: each runs in order and builds on the previous one's output,
+  and the last agent composes the final page. Build one in **Agents → 🧩 Agent
+  pipelines** (name it, add agents as ordered stages), then give it a task and **Run** —
+  each stage's work shows in the chat as it goes, before the page is composed. Ideal for
+  research → draft → critique flows. (Reasoning stages need a provider with text
+  completion, e.g. Claude.)
+- **Shareable pages — export and import a composed page.** Any composed page now has
+  a **🔗 Shareable page (.chervil)** option in the Export dropdown that writes a small,
+  self-contained file (the page's HTML, its originating query, and sources — not your
+  chat transcript). Send it to anyone; they open **History → ⤒ Import page** to drop it
+  into their own Chervil as a fresh tab they can view and remix with Sprig. (E.g. share
+  a calculator you built so a colleague can add a component themselves.) **Pages you
+  publish to the web** also carry an unobtrusive **✦ Open in Chervil** button — any
+  Chervil user viewing the published page can click it to pull the page into their own
+  instance and remix it (via a `chervil://import` deep link that reads the page's
+  embedded source). Visitors who don't have Chervil get a graceful **"Not using
+  Chervil? Get it to import this page →"** prompt (shown only when the deep link
+  doesn't launch the app).
+- Design doc: **RFC 0011** (standalone browsing — a prioritized, code-grounded plan to
+  make embedded real sites behave like they do in Chrome/Edge, without competing with
+  browsers).
+
+### Changed
+- **Fluent UI pass — History panel.** The History/Library panel now opens as a
+  **centered card over a blurred scrim**, consistent with the Agents, Schedules, and
+  Settings panels (it was previously the lone right-anchored drawer). Its entries are
+  now proper Fluent cards: resting depth, a reveal accent bar on the leading edge, a
+  lift on hover, and press feedback, with a subtle entrance fade and unified radius
+  tokens. The tabs get smooth state transitions and an active glow. (Honors
+  `prefers-reduced-motion`.)
+
+### Fixed
+- **Interactive pages now remember their state (checkboxes, toggles).** Composed
+  pages render in a security sandbox with no same-origin access, so a page's own
+  `localStorage` silently failed — a checklist would forget every check on reopen,
+  despite saying "saved in browser." Chervil now shims `localStorage`/`sessionStorage`
+  inside composed pages, persisting their data in the app (keyed by a stable per-page
+  id that travels with bookmark and history snapshots). Check a box, close the page,
+  reopen it from a bookmark — your checks are still there. (Also rides folder-sync, so
+  state follows you between computers.)
+- **Bookmarks (and other data) now actually sync between computers.** Chervil's
+  folder-sync rides a single `chervil-state.json` through OneDrive/Drive/Dropbox, and
+  those services can't merge JSON — when two machines wrote it, the loser was forked
+  into a `chervil-state-<MACHINE>.json` conflict copy the app never read, stranding
+  whatever was saved there. Chervil now **reconciles conflict copies** on launch and
+  on window focus (union of bookmarks, history, spaces, agents, schedules), unions the
+  on-disk state into each save, writes atomically, and carries **deletion tombstones**
+  so a removed bookmark stays removed across machines instead of being resurrected.
+
 ## [0.5.3] — 2026-06-26
 
 ### Fixed

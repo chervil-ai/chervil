@@ -523,6 +523,12 @@ html, body {
 .omni-btn:hover:not(:disabled) { border-color: var(--accent); background: #1b2030; }
 .omni-btn:disabled { opacity: 0.35; cursor: default; }
 
+/* Sidebar toggle: accent-tinted panel control, distinct from the neutral
+   back/forward arrows sitting right beside it. */
+#sidebar-toggle { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 50%, var(--border)); }
+#sidebar-toggle:hover:not(:disabled) { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 16%, var(--panel-2)); }
+#sidebar-toggle[aria-pressed="true"] { background: color-mix(in srgb, var(--accent) 20%, var(--panel-2)); }
+
 /* ---------- Scheduled agents ---------- */
 .sched-view {
   position: fixed;
@@ -618,6 +624,16 @@ html, body {
 .sched-empty { color: var(--muted); font-size: 13px; text-align: center; padding: 16px; }
 .agent-starters { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
 .agent-starters .si-btn { font-size: 11px; }
+
+/* Agent pipelines builder */
+.pipeline-draft { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 4px 0 2px; min-height: 28px; }
+.pipeline-draft-empty { color: var(--muted); font-size: 12px; }
+.pipeline-chip { display: inline-flex; align-items: center; gap: 6px; padding: 4px 8px 4px 10px; border: 1px solid var(--border); border-radius: 999px; background: var(--panel-2); font-size: 12px; }
+.pipeline-chip-x { background: transparent; border: 0; color: var(--muted); cursor: pointer; font-size: 12px; line-height: 1; padding: 0; }
+.pipeline-chip-x:hover { color: #ffb4b4; }
+.pipeline-arrow { color: var(--muted); font-size: 13px; }
+.pipeline-task { width: 100%; margin-top: 8px; background: var(--panel-2); border: 1px solid var(--border); color: var(--text); border-radius: var(--radius-md); padding: 7px 10px; font-size: 13px; outline: none; }
+.pipeline-task:focus { border-color: var(--accent); }
 #agent-chip { display: flex; align-items: center; gap: 8px; margin: 0 14px 8px; padding: 6px 10px; background: rgba(123, 224, 163, 0.12); border: 1px solid #2c5a40; border-radius: 10px; font-size: 12px; color: #cfe9d9; }
 #agent-chip[hidden] { display: none; }
 .agent-chip-x { margin-left: auto; background: transparent; border: none; color: var(--muted); cursor: pointer; font-size: 12px; line-height: 1; }
@@ -1309,25 +1325,33 @@ html, body {
 .mcp-field:focus { border-color: var(--accent); }
 
 /* ---------- Library drawer ---------- */
+/* Centered card over a blurred scrim — matches the Agents/Schedules panels
+   (.sched-view) and Settings (.modal) so every panel behaves the same way. */
 .drawer {
   position: fixed;
   inset: 0;
   display: none;
-  justify-content: flex-end;
-  background: rgba(4, 6, 10, 0.5);
+  align-items: flex-start;
+  justify-content: center;
+  background: rgba(8, 10, 14, 0.82);
   backdrop-filter: blur(10px) saturate(120%);
-  z-index: 50;
+  z-index: 60;
+  overflow-y: auto;
 }
-.drawer.open { display: flex; }
+.drawer.open { display: flex; animation: modal-fade 0.16s ease-out; }
 
 .drawer-panel {
-  width: min(440px, 94vw);
-  height: 100%;
+  width: 640px;
+  max-width: calc(100% - 40px);
+  margin: 48px 0;
+  max-height: calc(100vh - 96px);
   background: var(--panel);
-  border-left: 1px solid var(--border);
+  border: 1px solid var(--border);
+  border-radius: 16px;
   display: flex;
   flex-direction: column;
-  box-shadow: -18px 0 60px rgba(0, 0, 0, 0.5);
+  overflow: hidden;            /* keep header/list inside the rounded corners */
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.5);
 }
 
 .drawer-head-right { display: flex; align-items: center; gap: 10px; }
@@ -1340,10 +1364,17 @@ html, body {
   border-radius: 999px;
   font-size: 13px;
   cursor: pointer;
+  transition: color 0.15s ease, background 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
 }
-.drawer-tab.active { color: var(--text); border-color: var(--accent); background: var(--user-bubble); }
+.drawer-tab:hover:not(.active) { color: var(--text); border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); }
+.drawer-tab.active {
+  color: var(--text);
+  border-color: var(--accent);
+  background: var(--user-bubble);
+  box-shadow: 0 2px 12px rgba(108, 140, 255, 0.22);
+}
 
-.drawer-list { flex: 1; overflow-y: auto; padding: 12px; display: flex; flex-direction: column; gap: 8px; }
+.drawer-list { flex: 1; overflow-y: auto; padding: 12px; display: flex; flex-direction: column; gap: 9px; }
 .drawer-list::-webkit-scrollbar { width: 8px; }
 .drawer-list::-webkit-scrollbar-thumb { background: var(--border); border-radius: 8px; }
 
@@ -1425,15 +1456,45 @@ html, body {
 .folder-file .ff-size { flex: none; color: var(--muted); font-size: 11px; }
 .folder-browse-actions { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 10px; }
 
+/* Fluent cards: resting depth, a reveal accent on the leading edge, and a lift
+   on hover. Shared by every drawer tab; the History panel is the primary surface. */
 .lib-row {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 11px 12px;
+  padding: 11px 14px;
   border: 1px solid var(--border);
-  border-radius: 11px;
+  border-radius: var(--radius-lg);
   background: var(--panel-2);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.22);
+  transition: transform 0.16s ease, box-shadow 0.16s ease, border-color 0.16s ease, background 0.16s ease;
+  animation: libRowIn 0.18s ease both;
 }
+/* Leading accent bar — reveals on hover (Fluent reveal). */
+.lib-row::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 9px;
+  bottom: 9px;
+  width: 3px;
+  border-radius: 0 3px 3px 0;
+  background: linear-gradient(180deg, var(--accent), var(--accent-2));
+  opacity: 0;
+  transform: scaleY(0.35);
+  transition: opacity 0.16s ease, transform 0.16s ease;
+}
+.lib-row:hover {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+  background: color-mix(in srgb, var(--accent) 6%, var(--panel-2));
+  transform: translateY(-1px);
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.38);
+}
+.lib-row:hover::before { opacity: 1; transform: scaleY(1); }
+.lib-row:active { transform: translateY(0) scale(0.997); }
+@keyframes libRowIn { from { opacity: 0; } to { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .lib-row { animation: none; } }
 .lib-main { flex: 1; min-width: 0; }
 .lib-title {
   font-size: 14px;
@@ -1449,11 +1510,13 @@ html, body {
   border: 1px solid var(--border);
   background: var(--panel);
   color: var(--text);
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   font-size: 12px;
   cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease, transform 0.1s ease;
 }
-.lib-btn:hover { border-color: var(--accent); }
+.lib-btn:hover { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, var(--panel)); }
+.lib-btn:active { transform: translateY(1px); }
 .lib-btn.danger { color: #ffb4b4; border-color: #5a2a33; }
 .lib-btn.danger:hover { background: #1e1216; }
 .lib-btn.primary {

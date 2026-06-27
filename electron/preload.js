@@ -111,8 +111,15 @@ contextBridge.exposeInMainWorld('chervil', {
   /** Web-agent: draft a short up-front plan for a task. */
   agentPlan: (payload) => ipcRenderer.invoke('chervil:agent-plan', payload),
 
+  /** Run one specialist agent's turn in a multi-stage pipeline. → { ok, text }. */
+  agentTurn: (payload) => ipcRenderer.invoke('chervil:agent-turn', payload),
+
   /** Save a composed page to disk via a native save dialog. */
   savePage: (payload) => ipcRenderer.invoke('chervil:save-page', payload),
+
+  /** Share/import a composed page as a portable .chervil file. */
+  savePageFile: (payload) => ipcRenderer.invoke('chervil:save-page-file', payload),
+  openPageFile: () => ipcRenderer.invoke('chervil:open-page-file'),
 
   /** Data folders (RFC 0004 local on-ramp): pick a folder, list its files, read selected files. */
   pickFolder: () => ipcRenderer.invoke('chervil:pick-folder'),
@@ -204,6 +211,9 @@ contextBridge.exposeInMainWorld('chervil', {
   /** Subscribe to prompts sent from the floating quick-ask bar (global hotkey). */
   onQuickPrompt: (cb) => ipcRenderer.on('chervil:quick-prompt', (_e, prompt) => cb(prompt)),
 
+  /** A shared .chervil page arrived via a chervil://import deep link → import it. */
+  onImportPage: (cb) => ipcRenderer.on('chervil:import-page', (_e, doc) => cb(doc)),
+
   /** Subscribe to "Ask Sprig about <selection>" from the right-click menu. */
   onContextAsk: (cb) => ipcRenderer.on('chervil:context-ask', (_e, text) => cb(text)),
 
@@ -215,4 +225,8 @@ contextBridge.exposeInMainWorld('chervil', {
 
   /** Active state file info: { synced, mtimeMs } — for sync conflict detection. */
   stateInfo: () => ipcRenderer.invoke('chervil:state-info'),
+
+  /** Absorb any sync-service conflict copies into canonical now.
+   *  Resolves to { ok, changed, mtimeMs, state }. */
+  reconcileState: () => ipcRenderer.invoke('chervil:reconcile-state'),
 });

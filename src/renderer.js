@@ -163,6 +163,7 @@ const els = {
   bookmarkBtn: document.getElementById('bookmark-btn'),
   pwFillBtn: document.getElementById('autofill-pw-btn'),
   emptyTrash: document.getElementById('empty-trash'),
+  libImportPage: document.getElementById('lib-import-page'),
   libSelectToggle: document.getElementById('lib-select-toggle'),
   libSelectBar: document.getElementById('lib-select-bar'),
   libSelectCount: document.getElementById('lib-select-count'),
@@ -301,6 +302,10 @@ function providerConfig(agentOverride) {
 //   item = { id, createdAt, title, query, html, sources, conversation, history, spaceId }
 let library = { history: [], trash: [] };
 let bookmarks = []; // [{ id, key, kind:'site'|'page', url?, query?, title, at }]
+// Tombstones for removed bookmarks, so a delete propagates across synced machines
+// and the union-merge (lib/stateMerge.js) doesn't resurrect it. [{ key, at }]
+let bookmarkTombstones = [];
+const MAX_BOOKMARK_TOMBSTONES = 1000;
 let siteHistory = []; // [{ id, url, title, at }] newest-first — real sites visited
 const MAX_SITE_HISTORY = 500;
 let agentAudit = []; // [{ at, type, target, decision, ok }] — agent action audit trail (RFC 0006)
@@ -327,6 +332,15 @@ let schedules = [];
 //   agent = { id, name, description, persona, model, provider, mcp:[names], starters:[] }
 let agents = [];
 let activeAgentId = null;
+// Multi-stage agents: ordered pipelines of agents that pass results to each other.
+// [{ id, name, stageAgentIds:[agentId,…] }]. draftStages backs the inline builder.
+let pipelines = [];
+let draftStages = [];
+// Per-page persisted storage for interactive composed pages (checkboxes, etc.).
+// Composed pages run in a sandbox with no same-origin access, so their own
+// localStorage can't persist; we shim it and keep the data here, keyed by a stable
+// entry.storeKey that travels with bookmark/history snapshots. { storeKey: {k:v} }
+let pageStores = {};
 const LIVE_INTERVALS = [
   ['off', 'Auto-refresh: off'],
   ['300000', 'every 5 min'],
@@ -424,6 +438,9 @@ const CHERVIL_RUNTIME = `<script>(function(){
   // Back-compat: pages composed before the Chervil rename call window.parslee.*
   try { window.parslee = window.chervil; } catch(e){}
 
+  // (localStorage/sessionStorage are shimmed by a separate script injected into
+  //  <head> so they're ready before the page's own scripts — see pageStorageShim.)
+
   // 3. Report scroll position so streaming re-renders can preserve it.
   var _ss;
   window.addEventListener('scroll', function(){
@@ -434,6 +451,37 @@ const CHERVIL_RUNTIME = `<script>(function(){
     }, 100);
   }, { passive: true });
 })();</script>`;
+
+// A synchronous localStorage/sessionStorage shim for composed pages. The sandbox
+// iframe has no same-origin access, so a page's real localStorage throws / never
+// persists. This shadows it with an in-memory store seeded from Chervil's saved
+// data, and posts every change up to the parent (which persists it per page). It
+// must run in <head>, before the page's own scripts, so reads on load see the seed.
+function pageStorageShim(seedJson) {
+  return `<script>(function(){
+  var store=${seedJson}||{};
+  function persist(){try{parent.postMessage({__chervil:true,type:'page-store',data:store},'*');}catch(e){}}
+  var api={
+    getItem:function(k){k=String(k);return Object.prototype.hasOwnProperty.call(store,k)?store[k]:null;},
+    setItem:function(k,v){store[String(k)]=String(v);persist();},
+    removeItem:function(k){delete store[String(k)];persist();},
+    clear:function(){Object.keys(store).forEach(function(k){delete store[k];});persist();},
+    key:function(i){return Object.keys(store)[i]||null;}
+  };
+  try{Object.defineProperty(api,'length',{get:function(){return Object.keys(store).length;}});}catch(e){}
+  try{Object.defineProperty(window,'localStorage',{configurable:true,get:function(){return api;}});}
+  catch(e){try{window.localStorage=api;}catch(_){}}
+  try{Object.defineProperty(window,'sessionStorage',{configurable:true,get:function(){return api;}});}catch(e){}
+})();</script>`;
+}
+
+// Insert a snippet as early as possible (right after <head>, else <html>, else
+// at the very front) so it runs before any of the page's own scripts.
+function injectIntoHead(html, snippet) {
+  if (/<head[^>]*>/i.test(html)) return html.replace(/<head[^>]*>/i, (m) => m + snippet);
+  if (/<html[^>]*>/i.test(html)) return html.replace(/<html[^>]*>/i, (m) => m + snippet);
+  return snippet + html;
+}
 
 // ---- Run-state helpers ----
 function runStateFor(tabId) {
@@ -879,8 +927,11 @@ function toggleTabLayout() {
 // ---- Chat sidebar collapse (full-width composed page) ----
 // Directional chevron: ‹ points left to HIDE the (left-hand) sidebar; › points
 // right to SHOW it again — so the icon always reflects what the click will do.
-const SIDEBAR_ICON_HIDE = '<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 6l-6 6 6 6"/></svg>';
-const SIDEBAR_ICON_SHOW = '<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 6l6 6-6 6"/></svg>';
+// Sidebar toggle uses a panel glyph (a window with a filled-vs-empty left column),
+// not a chevron — so it's not mistaken for the back/forward arrows beside it.
+// HIDE = sidebar currently shown (left column filled); SHOW = collapsed (outline).
+const SIDEBAR_ICON_HIDE = '<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="M9 4 H5.5 A2.5 2.5 0 0 0 3 6.5 V17.5 A2.5 2.5 0 0 0 5.5 20 H9 Z" fill="currentColor" stroke="none"/><path d="M9 4v16"/></svg>';
+const SIDEBAR_ICON_SHOW = '<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="M9 4v16"/></svg>';
 function applySidebarCollapsed() {
   const on = !!settings.sidebarCollapsed;
   if (els.main) els.main.classList.toggle('sidebar-collapsed', on);
@@ -1126,7 +1177,17 @@ function renderPageHtml(html, scrollY = 0) {
   // last lines. (Slide decks handle this themselves by centering content within the
   // viewport — see the Slides remix request.)
   const clearance = '<style>body{padding-bottom:140px !important;}</style>';
-  els.frame.setAttribute('srcdoc', html + clearance + CHERVIL_RUNTIME + restore);
+  // Seed the page's (shimmed) localStorage from saved state so interactive pages —
+  // checklists, toggles — restore their state on reopen. Keyed by a stable storeKey
+  // on the entry that travels with bookmark/history snapshots.
+  let seed = {};
+  const entry = currentEntry(activeTab());
+  if (entry && entry.kind === 'page') {
+    if (!entry.storeKey) entry.storeKey = uid();
+    seed = pageStores[entry.storeKey] || {};
+  }
+  const shim = pageStorageShim(JSON.stringify(seed).replace(/</g, '\\u003c'));
+  els.frame.setAttribute('srcdoc', injectIntoHead(html, shim) + clearance + CHERVIL_RUNTIME + restore);
 }
 
 function renderSite(url) {
@@ -2043,9 +2104,9 @@ setInterval(() => {
 // On becoming visible again, also check for a newer synced session (RFC 0005).
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) { if (settings.credsAutoLock !== 'never') lockVault('hide'); }
-  else checkSyncConflict();
+  else reconcileNow().then(checkSyncConflict);
 });
-window.addEventListener('focus', () => { checkSyncConflict(); });
+window.addEventListener('focus', () => { reconcileNow().then(checkSyncConflict); });
 
 // A labeled auto-lock <select>, built for the (configured) credential panel.
 function credsAutoLockRow() {
@@ -2804,7 +2865,7 @@ function parseAgentFile(text, fallbackName) {
   };
 }
 
-function openAgents() { renderAgents(); renderStarterAgents(); renderAuditLog(); els.agentsView.classList.add('open'); }
+function openAgents() { renderAgents(); renderPipelinesSection(); renderStarterAgents(); renderAuditLog(); els.agentsView.classList.add('open'); }
 
 // Render the agent action audit trail (RFC 0006) — what Sprig did, and what the
 // control layer allowed, confirmed, or denied.
@@ -3040,6 +3101,133 @@ function renderAgents() {
     item.appendChild(del);
     list.appendChild(item);
   }
+}
+
+// ---- Multi-stage agents: pipelines ----------------------------------------
+function renderPipelinesSection() { renderPipelineBuilder(); renderPipelines(); }
+
+// The inline builder: an agent picker that appends to an ordered draft of stages.
+function renderPipelineBuilder() {
+  const sel = document.getElementById('pipeline-stage-select');
+  const draft = document.getElementById('pipeline-draft');
+  if (!sel || !draft) return;
+  sel.innerHTML = '';
+  if (!agents.length) {
+    const o = document.createElement('option'); o.value = ''; o.textContent = 'Import agents first'; sel.appendChild(o);
+  } else {
+    const ph = document.createElement('option'); ph.value = ''; ph.textContent = 'Choose an agent…'; sel.appendChild(ph);
+    for (const a of agents) { const o = document.createElement('option'); o.value = a.id; o.textContent = a.name; sel.appendChild(o); }
+  }
+  draft.innerHTML = '';
+  if (!draftStages.length) {
+    const e = document.createElement('span'); e.className = 'pipeline-draft-empty';
+    e.textContent = 'No stages yet — add agents in the order they should run.';
+    draft.appendChild(e);
+    return;
+  }
+  draftStages.forEach((id, i) => {
+    const a = agents.find((x) => x.id === id);
+    const chip = document.createElement('span'); chip.className = 'pipeline-chip';
+    chip.textContent = `${i + 1}. ${a ? a.name : '(removed)'}`;
+    const x = document.createElement('button'); x.className = 'pipeline-chip-x'; x.title = 'Remove stage'; x.textContent = '✕';
+    x.addEventListener('click', () => { draftStages.splice(i, 1); renderPipelineBuilder(); });
+    chip.appendChild(x);
+    draft.appendChild(chip);
+    if (i < draftStages.length - 1) { const arr = document.createElement('span'); arr.className = 'pipeline-arrow'; arr.textContent = '→'; draft.appendChild(arr); }
+  });
+}
+
+function addPipelineStage() {
+  const sel = document.getElementById('pipeline-stage-select');
+  const id = sel && sel.value;
+  if (!id) return;
+  draftStages.push(id);
+  renderPipelineBuilder();
+}
+
+function savePipeline() {
+  const nameEl = document.getElementById('pipeline-name');
+  const name = ((nameEl && nameEl.value) || '').trim();
+  if (draftStages.length < 2) { toast('A pipeline needs at least two stages.'); return; }
+  const finalName = name || draftStages.map((id) => { const a = agents.find((x) => x.id === id); return a ? a.name : '?'; }).join(' → ');
+  pipelines.push({ id: uid(), name: finalName, stageAgentIds: draftStages.slice() });
+  draftStages = [];
+  if (nameEl) nameEl.value = '';
+  scheduleSave();
+  renderPipelinesSection();
+  toast(`Saved pipeline “${finalName}”.`);
+}
+
+function deletePipeline(id) {
+  pipelines = pipelines.filter((p) => p.id !== id);
+  scheduleSave();
+  renderPipelines();
+}
+
+function renderPipelines() {
+  const list = document.getElementById('pipelines-list');
+  if (!list) return;
+  list.innerHTML = '';
+  if (!pipelines.length) {
+    const e = document.createElement('div'); e.className = 'sched-empty';
+    e.textContent = 'No pipelines yet. Add stages above and Save.';
+    list.appendChild(e);
+    return;
+  }
+  for (const p of pipelines) {
+    const item = document.createElement('div'); item.className = 'sched-item';
+    const main = document.createElement('div'); main.className = 'si-main';
+    const title = document.createElement('div'); title.className = 'si-title'; title.textContent = '🧩 ' + p.name;
+    const when = document.createElement('div'); when.className = 'si-when';
+    when.textContent = p.stageAgentIds.map((id) => { const a = agents.find((x) => x.id === id); return a ? a.name : '(removed)'; }).join(' → ');
+    const taskInput = document.createElement('input');
+    taskInput.type = 'text'; taskInput.className = 'pipeline-task'; taskInput.placeholder = 'Task for this run…';
+    taskInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') runPipeline(p, taskInput.value); });
+    main.appendChild(title); main.appendChild(when); main.appendChild(taskInput);
+    const run = document.createElement('button'); run.className = 'si-btn'; run.textContent = 'Run';
+    run.addEventListener('click', () => runPipeline(p, taskInput.value));
+    const del = document.createElement('button'); del.className = 'si-btn'; del.textContent = 'Delete';
+    del.addEventListener('click', () => deletePipeline(p.id));
+    item.appendChild(main); item.appendChild(run); item.appendChild(del);
+    list.appendChild(item);
+  }
+}
+
+// Run a pipeline: each agent but the last produces a reasoning turn that the next
+// builds on; the final agent composes the page from the whole team's notes.
+async function runPipeline(pipeline, task) {
+  task = (task || '').trim();
+  if (!task) { toast('Enter a task for this pipeline.'); return; }
+  const stages = (pipeline.stageAgentIds || []).map((id) => agents.find((a) => a.id === id)).filter(Boolean);
+  if (stages.length < 2) { toast('This pipeline needs at least two existing agents.'); return; }
+  closeAgents();
+  newTab(true);
+  const tab = activeTab();
+  tab.title = (pipeline.name || 'Pipeline').slice(0, 40);
+  addMessage(tab, 'user', `🧩 ${pipeline.name}: ${task}`);
+  renderTabs();
+  let prior = '';
+  for (let i = 0; i < stages.length - 1; i++) {
+    const a = stages[i];
+    if (tab.id === activeId) setStatus(`🧩 ${a.name} is working… (stage ${i + 1} of ${stages.length})`);
+    let res;
+    try {
+      res = await window.chervil.agentTurn({ task, role: a.name, persona: a.persona || '', prior, profile: settings.profile || null, config: providerConfig(a) });
+    } catch (e) { res = { ok: false, error: String((e && e.message) || e) }; }
+    if (!res || !res.ok) {
+      if (tab.id === activeId) clearStatus();
+      addMessage(tab, 'bot', `Stage “${a.name}” couldn’t run: ${(res && res.error) || 'unknown error'}`, 'error');
+      scheduleSave();
+      return;
+    }
+    addMessage(tab, 'bot', `🧩 ${a.name}\n\n${res.text}`);
+    prior += `\n\n## ${a.name}\n${res.text}`;
+  }
+  if (tab.id === activeId) clearStatus();
+  const finalAgent = stages[stages.length - 1];
+  const composeQuery = `${task}\n\n--- Notes from your agent team (use these to build the page) ---${prior}`;
+  await submitQuery(composeQuery, { tab, agentId: finalAgent.id, displayText: `🧩 ${finalAgent.name} composes the result`, skipFollowup: true });
+  scheduleSave();
 }
 
 // Show the bundled /agents starter files with one-click "Add".
@@ -4464,6 +4652,7 @@ function openLibraryItem(item) {
         title: item.title,
         sources: item.sources || [],
         query: item.query,
+        storeKey: item.storeKey,   // carry interactive-state key if the item has one
       },
     ],
     currentId: rootId,
@@ -4603,8 +4792,9 @@ function toggleBookmark() {
   const key = entryBookmarkKey(entry);
   if (!key) return;
   const idx = bookmarks.findIndex((b) => b.key === key);
-  if (idx >= 0) { bookmarks.splice(idx, 1); toast('Bookmark removed.'); }
+  if (idx >= 0) { bookmarks.splice(idx, 1); addBookmarkTombstone(key); toast('Bookmark removed.'); }
   else {
+    clearBookmarkTombstone(key); // re-adding overrides any prior delete
     const bm = entry.kind === 'navigate'
       ? { id: uid(), key, kind: 'site', url: entry.url, title: tab.title || hostOf(entry.url) || entry.url, at: Date.now() }
       : {
@@ -4669,10 +4859,25 @@ function openBookmark(b) {
   toast('This bookmark can’t be opened.');
 }
 function removeBookmark(id) {
+  const gone = bookmarks.find((b) => b.id === id);
   bookmarks = bookmarks.filter((b) => b.id !== id);
+  if (gone && gone.key) addBookmarkTombstone(gone.key);
   updateBookmarkStar();
   renderDrawer();
   scheduleSave();
+}
+
+// Record/clear a deletion tombstone so removes survive the cross-machine
+// union-merge (and a later re-add cancels the tombstone).
+function addBookmarkTombstone(key) {
+  if (!key) return;
+  bookmarkTombstones = bookmarkTombstones.filter((t) => t.key !== key);
+  bookmarkTombstones.unshift({ key, at: Date.now() });
+  if (bookmarkTombstones.length > MAX_BOOKMARK_TOMBSTONES) bookmarkTombstones.length = MAX_BOOKMARK_TOMBSTONES;
+}
+function clearBookmarkTombstone(key) {
+  if (!key) return;
+  bookmarkTombstones = bookmarkTombstones.filter((t) => t.key !== key);
 }
 
 function removeSite(id) {
@@ -5356,7 +5561,7 @@ function scheduleSave() {
   if (saveTimer) clearTimeout(saveTimer);
   saveTimer = setTimeout(() => {
     saveTimer = null;
-    window.chervil.saveState({ tabs, activeId, settings, library, bookmarks, siteHistory, agentAudit, spaces, activeSpaceId, living, schedules, agents, activeAgentId })
+    window.chervil.saveState({ tabs, activeId, settings, library, bookmarks, bookmarkTombstones, siteHistory, agentAudit, spaces, activeSpaceId, living, schedules, agents, activeAgentId, pipelines, pageStores })
       .then((r) => { if (r && r.mtimeMs) lastStateMtimeMs = r.mtimeMs; }) // our own write — keep baseline current
       .catch(() => {});
   }, 500);
@@ -5364,6 +5569,33 @@ function scheduleSave() {
 
 async function refreshStateMtime() {
   try { const r = await window.chervil.stateInfo(); if (r && r.ok) lastStateMtimeMs = r.mtimeMs || 0; } catch { /* ignore */ }
+}
+
+// Absorb any sync-service conflict copies (OneDrive/Drive/Dropbox forks), then
+// adopt the merged-in additive collections — bookmarks, history, spaces, agents —
+// into memory WITHOUT touching the current tab/session. This is what makes a
+// bookmark added on another computer appear here without a reload.
+async function reconcileNow() {
+  if (!window.chervil.reconcileState || saveTimer) return;  // don't fight a pending save
+  let r;
+  try { r = await window.chervil.reconcileState(); } catch { return; }
+  if (!r || !r.ok || !r.changed || !r.state) return;
+  const m = r.state;
+  if (Array.isArray(m.bookmarks)) bookmarks = m.bookmarks;
+  if (Array.isArray(m.bookmarkTombstones)) bookmarkTombstones = m.bookmarkTombstones;
+  if (Array.isArray(m.siteHistory)) siteHistory = m.siteHistory;
+  if (m.library && Array.isArray(m.library.history)) {
+    library = { history: m.library.history, trash: Array.isArray(m.library.trash) ? m.library.trash : [] };
+  }
+  if (Array.isArray(m.spaces) && m.spaces.length) {
+    spaces = m.spaces;
+    if (!spaces.find((s) => s.id === activeSpaceId)) activeSpaceId = spaces[0].id;
+  }
+  if (Array.isArray(m.agents)) agents = m.agents;
+  if (r.mtimeMs) lastStateMtimeMs = r.mtimeMs;               // we just absorbed it — don't also prompt to reload
+  updateBookmarkStar();
+  if (els.libraryDrawer.classList.contains('open')) renderDrawer();
+  toast('Synced new items from another computer.');
 }
 
 // On focus/visibility, if the synced state file is newer than our baseline (and we
@@ -5448,6 +5680,7 @@ async function init() {
     };
   }
   if (restored && Array.isArray(restored.bookmarks)) bookmarks = restored.bookmarks;
+  if (restored && Array.isArray(restored.bookmarkTombstones)) bookmarkTombstones = restored.bookmarkTombstones;
   if (restored && Array.isArray(restored.siteHistory)) siteHistory = restored.siteHistory;
   if (restored && Array.isArray(restored.agentAudit)) agentAudit = restored.agentAudit;
 
@@ -5479,6 +5712,14 @@ async function init() {
   if (restored && Array.isArray(restored.agents)) {
     agents = restored.agents.filter((a) => a && a.persona);
     activeAgentId = restored.activeAgentId && agents.find((a) => a.id === restored.activeAgentId) ? restored.activeAgentId : null;
+  }
+  if (restored && restored.pageStores && typeof restored.pageStores === 'object') pageStores = restored.pageStores;
+  if (restored && Array.isArray(restored.pipelines)) {
+    // Keep only valid pipelines whose stages still reference existing agents.
+    pipelines = restored.pipelines
+      .filter((p) => p && p.id && Array.isArray(p.stageAgentIds))
+      .map((p) => ({ ...p, stageAgentIds: p.stageAgentIds.filter((id) => agents.find((a) => a.id === id)) }))
+      .filter((p) => p.stageAgentIds.length >= 2);
   }
   updateAgentChip();
   startScheduler();
@@ -5576,11 +5817,103 @@ async function exportCurrentGif() {
   else if (res && !res.canceled) addMessage(tab, 'bot', `Couldn't export GIF: ${res.error || 'unknown error'}`, 'error');
 }
 
+// Share the current composed page as a portable .chervil file — its html, the
+// originating query, and sources — so anyone can import it into their own Chervil
+// to view and remix (RFC: shareable pages). Privacy: only the page itself travels,
+// not the tab's chat transcript.
+// The portable .chervil document for a composed page entry (shared by file export
+// and the "Open in Chervil" affordance baked into published pages).
+function chervilPageDoc(entry, tab) {
+  return {
+    format: 'chervil-page',
+    version: 1,
+    exportedAt: Date.now(),
+    app: 'Chervil',
+    page: {
+      title: entry.title || (tab && tab.title) || 'Chervil page',
+      query: entry.query || '',
+      html: entry.html,
+      sources: Array.isArray(entry.sources) ? entry.sources : [],
+    },
+  };
+}
+
+// Bake the page's portable source + an unobtrusive "Open in Chervil" button into
+// published HTML, so another Chervil user can pull it into their own instance and
+// remix it. The button deep-links chervil://import?u=<this page's URL>; Chervil
+// fetches the page and reads the embedded <script id="chervil-source">.
+function withChervilEditButton(html, doc) {
+  const json = JSON.stringify(doc).replace(/</g, '\\u003c');
+  const inject =
+    `\n<script id="chervil-source" type="application/json">${json}</script>\n` +
+    `<div id="chervil-cta" style="position:fixed;right:16px;bottom:16px;z-index:2147483647;` +
+    `display:flex;flex-direction:column;align-items:flex-end;gap:8px;font:13px system-ui,Segoe UI,sans-serif">` +
+    `<span id="chervil-getit" style="display:none;background:#11141c;color:#e7eaf2;border:1px solid #232838;` +
+    `border-radius:10px;padding:8px 12px;box-shadow:0 6px 20px rgba(0,0,0,.35);max-width:240px">` +
+    `Not using Chervil? <a href="https://getchervil.com" target="_blank" rel="noopener" ` +
+    `style="color:#6c8cff;font-weight:600;text-decoration:none">Get it to import this page →</a></span>` +
+    `<a id="chervil-open" href="#" title="Open this page in Chervil to remix it" ` +
+    `style="display:inline-flex;align-items:center;gap:7px;padding:9px 14px;border-radius:999px;` +
+    `background:#6c8cff;color:#fff;font-weight:600;text-decoration:none;box-shadow:0 6px 20px rgba(0,0,0,.35)">` +
+    `✦ Open in Chervil</a></div>\n` +
+    // Try the chervil:// deep link; if the app doesn't take focus within ~1.5s it
+    // isn't installed, so reveal the "Get Chervil" prompt.
+    `<script>(function(){var b=document.getElementById('chervil-open'),n=document.getElementById('chervil-getit');if(!b)return;` +
+    `b.addEventListener('click',function(e){e.preventDefault();var left=false;` +
+    `function go(){left=true;}` +
+    `window.addEventListener('blur',go);document.addEventListener('visibilitychange',go);window.addEventListener('pagehide',go);` +
+    `try{window.location.href='chervil://import?u='+encodeURIComponent(window.location.href);}catch(_){}` +
+    `setTimeout(function(){window.removeEventListener('blur',go);document.removeEventListener('visibilitychange',go);window.removeEventListener('pagehide',go);` +
+    `if(!left&&n)n.style.display='block';},1500);});})();</script>\n`;
+  return /<\/body>/i.test(html) ? html.replace(/<\/body>/i, inject + '</body>') : html + inject;
+}
+
+async function exportCurrentSharePage() {
+  const tab = activeTab();
+  const entry = currentEntry(tab);
+  if (!entry || entry.kind !== 'page' || !entry.html) { toast('Open a composed page first, then share it.'); return; }
+  if (!window.chervil.savePageFile) { toast('Sharing isn’t available in this build.'); return; }
+  const doc = chervilPageDoc(entry, tab);
+  const safe = (doc.page.title || 'chervil-page').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'chervil-page';
+  const res = await window.chervil.savePageFile({ json: JSON.stringify(doc, null, 2), suggestedName: safe });
+  if (res && res.ok) addMessage(tab, 'bot', `Shared this page to ${res.path} — send the .chervil file to anyone; they can import it into Chervil to view and remix.`);
+  else if (res && !res.canceled) addMessage(tab, 'bot', `Couldn't share page: ${res.error || 'unknown error'}`, 'error');
+}
+
+// Open a portable page doc into a fresh tab the recipient can view and remix.
+// Shared by file import and the chervil://import deep link from a published page.
+function importPageDoc(doc) {
+  const page = doc && doc.page;
+  if (!doc || doc.format !== 'chervil-page' || !page || !page.html) { toast('That isn’t a shareable Chervil page.'); return false; }
+  const pid = uid();
+  closeDrawer();
+  restoreTabSnapshot({
+    title: page.title || 'Shared page',
+    conversation: [{ role: 'bot', text: `Imported a shared page: “${page.title || 'Untitled'}”. Ask Sprig to change or extend it, or use the Remix bar.`, cls: '' }],
+    history: [],
+    pages: [{ id: pid, parentId: null, kind: 'page', html: page.html, title: page.title || 'Shared page', sources: Array.isArray(page.sources) ? page.sources : [], query: page.query || '' }],
+    currentId: pid,
+  });
+  toast(`Imported “${page.title || 'shared page'}”.`);
+  return true;
+}
+
+// Import a shared .chervil file the user picks from disk.
+async function importPageFile() {
+  if (!window.chervil.openPageFile) { toast('Import isn’t available in this build.'); return; }
+  const res = await window.chervil.openPageFile();
+  if (!res || !res.ok) { if (res && res.error) toast(`Import failed: ${res.error}`); return; }
+  let doc;
+  try { doc = JSON.parse(res.text); } catch { toast('That file isn’t a valid Chervil page.'); return; }
+  importPageDoc(doc);
+}
+
 // The remix-bar "⤓ Export…" dropdown routes to the chosen format, then resets.
 function onExportSelect(e) {
   const v = e.target.value;
   e.target.value = '';
-  if (v === 'pdf') exportCurrentPdf();
+  if (v === 'share') exportCurrentSharePage();
+  else if (v === 'pdf') exportCurrentPdf();
   else if (v === 'png') exportCurrentImage('png');
   else if (v === 'jpg') exportCurrentImage('jpg');
   else if (v === 'gif') exportCurrentGif();
@@ -5662,7 +5995,9 @@ async function publishCurrentPage(kind = 'page') {
   toast(`Publishing ${noun}…`);
   try {
     const res = await window.chervil.publishPage({
-      html: entry.html,
+      // Bake in an "Open in Chervil" affordance so other Chervil users can pull the
+      // page into their own instance and remix it.
+      html: withChervilEditButton(entry.html, chervilPageDoc(entry, tab)),
       title: entry.title || 'Chervil page',
       kind,
       sourceId: entry.id,   // stable id → re-publish updates in place + stable cloud-live target
@@ -5934,6 +6269,10 @@ document.getElementById('agent-add').addEventListener('click', addAgentFromPaste
 {
   const fromSession = document.getElementById('agent-from-session');
   if (fromSession) fromSession.addEventListener('click', createAgentFromSession);
+  const addStage = document.getElementById('pipeline-add-stage');
+  if (addStage) addStage.addEventListener('click', addPipelineStage);
+  const savePipe = document.getElementById('pipeline-save');
+  if (savePipe) savePipe.addEventListener('click', savePipeline);
 }
 els.mapClose.addEventListener('click', closeMap);
 els.mapView.addEventListener('click', (e) => { if (e.target === els.mapView) closeMap(); });
@@ -6153,6 +6492,7 @@ if (els.clearSites) els.clearSites.addEventListener('click', clearSiteHistory);
 if (els.bookmarkBtn) els.bookmarkBtn.addEventListener('click', toggleBookmark);
 if (els.pwFillBtn) els.pwFillBtn.addEventListener('click', fillPasswordOnSite);
 els.emptyTrash.addEventListener('click', emptyTrash);
+if (els.libImportPage) els.libImportPage.addEventListener('click', importPageFile);
 if (els.libSelectToggle) els.libSelectToggle.addEventListener('click', enterLibrarySelect);
 if (els.libSelectAll) els.libSelectAll.addEventListener('click', selectAllLibrary);
 if (els.libSelectDelete) els.libSelectDelete.addEventListener('click', deleteSelectedLibrary);
@@ -6219,6 +6559,17 @@ window.addEventListener('message', (e) => {
   if (d.type === 'link' && d.href) { handleLinkClick(d.href, d.text || ''); return; }
   if (d.type === 'tool') { handleAppletTool(e.source, d); return; }
   if (d.type === 'scroll' && typeof d.y === 'number') { previewScrollY = d.y; return; }
+  // An interactive page saved its state (shimmed localStorage) — persist it under
+  // the active page's stable storeKey so it survives reopen/bookmark.
+  if (d.type === 'page-store' && d.data && typeof d.data === 'object') {
+    const entry = currentEntry(activeTab());
+    if (entry && entry.kind === 'page') {
+      if (!entry.storeKey) entry.storeKey = uid();
+      pageStores[entry.storeKey] = d.data;
+      scheduleSave();
+    }
+    return;
+  }
 });
 
 // Keyboard scrolling for composed pages. A sandboxed iframe only scrolls via the
@@ -6354,6 +6705,11 @@ if (window.chervil.onNotificationClick) {
     else { renderCurrentPage(); renderTabs(); }
     scheduleSave();
   });
+}
+
+// A published page asked to be remixed (chervil://import deep link) → open it.
+if (window.chervil.onImportPage) {
+  window.chervil.onImportPage((doc) => { try { importPageDoc(doc); } catch { /* ignore */ } });
 }
 
 // Prompts fired from the floating quick-ask bar (global hotkey) open a fresh tab.
