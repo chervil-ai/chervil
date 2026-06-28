@@ -93,6 +93,12 @@ contextBridge.exposeInMainWorld('chervil', {
   /** Publish any composed page's HTML to a shareable getchervil.com link (Chervil Pro). */
   publishPage: (payload) => ipcRenderer.invoke('chervil:publish-page', payload),
 
+  /** Publish an agent to the web — owner profile + importable + store-submittable. */
+  publishAgent: (payload) => ipcRenderer.invoke('chervil:publish-agent', payload),
+
+  /** An agent arrived via a chervil://import-agent deep link → add it to Agents. */
+  onImportAgent: (cb) => ipcRenderer.on('chervil:import-agent', (_e, doc) => cb(doc)),
+
   /** Cloud living pages: register/update/clear a published page's server-side refresh. */
   setCloudLiving: (payload) => ipcRenderer.invoke('chervil:set-cloud-living', payload),
 

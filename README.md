@@ -38,6 +38,7 @@ right at home.)*
 - **Agentic web actions** — Sprig can operate real sites for you, with hard safety gates (see [SECURITY.md](SECURITY.md)).
 - **Multi-stage agents** — chain agents into a pipeline where each builds on the last one's work (research → draft → critique), and the final agent composes the page.
 - **Shareable pages** — export any composed page to a portable `.chervil` file, or publish it with a built-in **Open in Chervil** button, so anyone can import it into their own Chervil and remix it.
+- **Publish agents + the Agent store** — publish an agent to your profile (importable by anyone in one click), and submit your best agents and pages to the community **Agent store** and **Share gallery** at [getchervil.com](https://getchervil.com), browsable by category (vetted + approved).
 - **Quick-ask** — a global hotkey opens a floating ask bar; Chervil lives in the tray, always a keystroke away.
 - **"Hey Sprig" listening** — opt-in hands-free wake word that pops the quick-ask bar and captures your spoken request. Detection is fully on-device and free ([openWakeWord](https://github.com/dscripka/openWakeWord) on onnxruntime-web, no account or key) — audio never leaves your machine until you speak a command. Built-in words (Hey Jarvis / Alexa / Hey Mycroft) work out of the box; the literal "Hey Sprig" uses a free, self-trained openWakeWord model.
 - **Scheduled agents** — run prompts on a daily/weekly/interval schedule in the background, optionally "as" a chosen agent.

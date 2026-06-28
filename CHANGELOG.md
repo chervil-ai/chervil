@@ -6,6 +6,21 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.7.0] — 2026-06-28
+
+Share what you build with everyone: publish your agents, and submit your best
+agents and pages to a community Agent store and Share gallery.
+
+### Added
+- **Publish agents — and a community Agent store.** Agents are now a publishable
+  type, like pages and lessons. From **👤 Agents → Publish**, share an agent to your
+  getchervil.com profile (public or unlisted); other Chervil users open it on the web
+  and **import it in one click** ("Open in Chervil", with a get-the-app fallback).
+  Beyond your profile, you can **submit** your best agents and pages to the community
+  **Agent store** and **Share gallery** (getchervil.com/store and /share) — browsable
+  by category. Submissions are LLM pre-vetted and human-approved before they appear.
+  (Design: RFC 0012.)
+
 ## [0.6.0] — 2026-06-27
 
 Agents that work as a team, pages you can hand off and remix, and a couple of

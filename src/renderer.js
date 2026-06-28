@@ -2983,6 +2983,61 @@ async function exportAgent(a) {
   else if (res && res.error) toast(`Export failed: ${res.error}`);
 }
 
+// Publish an agent to getchervil.com (RFC 0012) — your profile + importable by
+// others, and (if public) submittable to the Agent store from getchervil.com/me.
+function publishAgentToWeb(a) {
+  if (!settings.publishToken) { toast('Add a publish token in Settings → Publishing (from getchervil.com/me).'); return; }
+  if (!window.chervil.publishAgent) { toast('Publishing isn’t available in this build.'); return; }
+  showActionSheet('Publish agent', `Publish “${a.name}” so other Chervil users can import it?`, [
+    { label: '🌐 Public — on your profile, importable', primary: true, onClick: () => doPublishAgent(a, 'public') },
+    { label: '🔗 Unlisted — only people with the link', onClick: () => doPublishAgent(a, 'unlisted') },
+  ]);
+}
+
+async function doPublishAgent(a, visibility) {
+  toast('Publishing agent…');
+  const res = await window.chervil.publishAgent({
+    agent: {
+      id: a.id, name: a.name, description: a.description || '', persona: a.persona || '',
+      model: a.model || '', provider: a.provider || '', mcp: a.mcp || [], starters: a.starters || [],
+    },
+    visibility,
+    sourceId: a.id, // stable id → re-publish updates in place
+    token: settings.publishToken,
+    baseUrl: settings.publishBase || 'https://getchervil.com',
+  });
+  if (res && res.ok && res.url) {
+    a.publishedUrl = res.url;
+    scheduleSave();
+    renderAgents();
+    try { await navigator.clipboard.writeText(res.url); toast(res.updated ? 'Agent updated — link copied.' : 'Agent published — link copied.'); }
+    catch { toast(res.updated ? 'Agent updated.' : 'Agent published.'); }
+  } else {
+    const e = (res && res.error) || '';
+    toast(/pro|cap|free plan/i.test(e) ? 'Past the free limit — publishing more agents is a Chervil Pro feature.' : (e || 'Couldn’t publish agent.'));
+  }
+}
+
+// Import an agent that arrived via a chervil://import-agent deep link from the web.
+function importAgentDoc(doc) {
+  const a = doc && doc.agent;
+  if (!a || !a.persona) { toast('That isn’t an importable Chervil agent.'); return; }
+  const agent = {
+    id: uid(),
+    name: String(a.name || 'Imported agent').slice(0, 80),
+    description: String(a.description || '').slice(0, 300),
+    persona: String(a.persona),
+    model: a.model ? String(a.model) : '',
+    provider: a.provider ? String(a.provider) : '',
+    mcp: Array.isArray(a.mcp) ? a.mcp.map((s) => String(s)) : [],
+    starters: Array.isArray(a.starters) ? a.starters.map((s) => String(s)) : [],
+  };
+  agents.push(agent);
+  scheduleSave();
+  openAgents();
+  toast(`Imported agent “${agent.name}”.`);
+}
+
 // Flatten a tab's conversation into a transcript the model can distill into an agent.
 function sessionTranscript(tab) {
   const lines = [];
@@ -3086,6 +3141,11 @@ function renderAgents() {
     exp.textContent = 'Export';
     exp.title = 'Save as a shareable agent file';
     exp.addEventListener('click', () => exportAgent(a));
+    const pub = document.createElement('button');
+    pub.className = 'si-btn';
+    pub.textContent = a.publishedUrl ? 'Published ✓' : 'Publish';
+    pub.title = 'Publish to the web — your profile + the Agent store';
+    pub.addEventListener('click', () => publishAgentToWeb(a));
     const del = document.createElement('button');
     del.className = 'si-btn';
     del.textContent = 'Delete';
@@ -3098,6 +3158,7 @@ function renderAgents() {
     item.appendChild(main);
     item.appendChild(act);
     item.appendChild(exp);
+    item.appendChild(pub);
     item.appendChild(del);
     list.appendChild(item);
   }
@@ -6710,6 +6771,11 @@ if (window.chervil.onNotificationClick) {
 // A published page asked to be remixed (chervil://import deep link) → open it.
 if (window.chervil.onImportPage) {
   window.chervil.onImportPage((doc) => { try { importPageDoc(doc); } catch { /* ignore */ } });
+}
+
+// An agent arrived via a chervil://import-agent deep link → add it to Agents.
+if (window.chervil.onImportAgent) {
+  window.chervil.onImportAgent((doc) => { try { importAgentDoc(doc); } catch { /* ignore */ } });
 }
 
 // Prompts fired from the floating quick-ask bar (global hotkey) open a fresh tab.

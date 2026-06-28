@@ -508,9 +508,38 @@ async function importFromPublishedUrl(pageUrl) {
   }
 }
 
+// Deliver an imported agent doc to the renderer (chervil://import-agent).
+function deliverImportAgent(doc) {
+  if (!mainWindow || mainWindow.isDestroyed()) createWindow();
+  showMain();
+  const wc = mainWindow.webContents;
+  const send = () => { if (!wc.isDestroyed()) wc.send('chervil:import-agent', doc); };
+  if (wc.isLoading()) wc.once('did-finish-load', send); else send();
+}
+
+// Import an agent into Chervil from a getchervil.com agent URL (RFC 0012). The URL
+// returns the importable agent doc as JSON. http(s) only.
+async function importAgentFromUrl(agentUrl) {
+  try {
+    const u = new URL(agentUrl);
+    if (u.protocol !== 'http:' && u.protocol !== 'https:') return;
+    const resp = await fetch(agentUrl, { headers: { Accept: 'application/json' }, redirect: 'follow' });
+    if (!resp.ok) { deliverPrompt(`I couldn't import that agent (HTTP ${resp.status}).`); return; }
+    const doc = await resp.json().catch(() => null);
+    if (!doc || doc.format !== 'chervil-agent' || !doc.agent || !doc.agent.persona) {
+      deliverPrompt(`That link isn't an importable Chervil agent: ${agentUrl}`);
+      return;
+    }
+    deliverImportAgent(doc);
+  } catch {
+    deliverPrompt(`I couldn't import that Chervil agent: ${agentUrl}`);
+  }
+}
+
 // Handle a chervil:// deep link from the browser extension (or anywhere):
 //   chervil://ask?url=<page>&title=<title>&text=<selection>
 //   chervil://import?u=<published page URL>
+//   chervil://import-agent?u=<agent JSON URL>
 function handleChervilUrl(raw) {
   let prompt = '';
   try {
@@ -520,6 +549,12 @@ function handleChervilUrl(raw) {
     if (u.hostname === 'import' || u.pathname === '//import' || u.pathname === 'import') {
       const src = (u.searchParams.get('u') || u.searchParams.get('url') || '').trim();
       if (src) importFromPublishedUrl(src);
+      return;
+    }
+    // Import a published agent (RFC 0012).
+    if (u.hostname === 'import-agent' || u.pathname === '//import-agent' || u.pathname === 'import-agent') {
+      const src = (u.searchParams.get('u') || u.searchParams.get('url') || '').trim();
+      if (src) importAgentFromUrl(src);
       return;
     }
     const text = (u.searchParams.get('text') || '').trim();
@@ -1070,6 +1105,30 @@ ipcMain.handle('chervil:publish-page', async (_event, payload) => {
     const data = await res.json().catch(() => ({}));
     if (!res.ok) {
       if (res.status === 404) return { ok: false, error: 'Publishing isn’t available yet — the Chervil hosted service (getchervil.com) is still in development. (404)' };
+      return { ok: false, error: data.error || `Publish failed (${res.status}).` };
+    }
+    return { ok: true, url: data.url, id: data.id, updated: data.updated };
+  } catch (err) {
+    return { ok: false, error: String(err && err.message ? err.message : err) };
+  }
+});
+
+// Publish an agent to getchervil.com (RFC 0012) — appears on the user's profile,
+// importable by other Chervil users, and submittable to the Agent store.
+ipcMain.handle('chervil:publish-agent', async (_event, payload) => {
+  try {
+    const { token, baseUrl, agent, visibility, sourceId } = payload || {};
+    if (!agent || !agent.persona) return { ok: false, error: 'Nothing to publish.' };
+    if (!token) return { ok: false, error: 'Missing publish token.' };
+    const base = String(baseUrl || 'https://getchervil.com').replace(/\/+$/, '');
+    const res = await fetch(`${base}/api/agents`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ agent, visibility: visibility || 'public', sourceId: sourceId || undefined }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      if (res.status === 404) return { ok: false, error: 'Publishing isn’t available yet — the Chervil hosted service is still in development. (404)' };
       return { ok: false, error: data.error || `Publish failed (${res.status}).` };
     }
     return { ok: true, url: data.url, id: data.id, updated: data.updated };
