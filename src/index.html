@@ -251,6 +251,27 @@
         </label>
       </section>
 
+      <section class="setting-group" data-sgroup="general">
+        <h3>Composed pages</h3>
+        <label class="opt-row">
+          <span>Page style</span>
+          <select id="page-style-select">
+            <option value="balanced">Balanced (default)</option>
+            <option value="rich">Rich — visual, dense, charts</option>
+            <option value="minimal">Minimal — lean and fast</option>
+          </select>
+        </label>
+        <label class="opt-row">
+          <span>Pinned Space files</span>
+          <select id="space-files-select">
+            <option value="synthesize">Use only when I Synthesize a Space</option>
+            <option value="always">Use in every page I compose in that Space</option>
+            <option value="off">Don't use pinned files</option>
+          </select>
+        </label>
+        <small class="field-note">Pin files to a Space from the 📁 Folders panel — they become permanent sources for that Space.</small>
+      </section>
+
       <section class="setting-group" data-sgroup="ai">
         <h3>Provider &amp; model — bring your own API</h3>
         <p class="group-hint">Switch providers to save money, work offline, or use a model you prefer. Each has trade-offs — pick what fits the task. Claude, Grok, Gemini, and OpenAI do live web grounding (real, cited sources); Azure and Ollama compose from the model's own knowledge. Claude also offers the full two-phase Deep Dive.</p>
@@ -556,8 +577,10 @@
         </header>
         <input id="folder-filter" type="text" placeholder="Filter files…" />
         <div id="folder-files" class="folder-files"></div>
+        <div id="space-pinned" class="space-pinned" hidden></div>
         <div class="folder-browse-actions">
           <span id="folder-pick-count" class="lib-meta">0 selected</span>
+          <button id="folder-pin" class="lib-btn" title="Keep these files as permanent sources for the current Space">📌 Pin to Space</button>
           <button id="folder-attach" class="lib-btn primary" disabled>Attach selected</button>
         </div>
       </section>

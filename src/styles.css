@@ -636,6 +636,18 @@ html, body {
 .pipeline-task:focus { border-color: var(--accent); }
 .pipeline-orch-label { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); cursor: pointer; }
 .pipeline-orch-label input { accent-color: var(--accent); }
+
+/* Settings: label + select rows (Composed pages) */
+.opt-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 0; font-size: 14px; }
+.opt-row select { background: var(--panel-2); border: 1px solid var(--border); color: var(--text); border-radius: var(--radius-md); padding: 7px 10px; font-size: 13px; outline: none; min-width: 220px; }
+.opt-row select:focus { border-color: var(--accent); }
+
+/* Pinned-to-Space files (folders modal) */
+.space-pinned { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 8px 0; }
+.pinned-label { font-size: 12px; color: var(--muted); }
+.pinned-chip { display: inline-flex; align-items: center; gap: 6px; padding: 3px 6px 3px 9px; border: 1px solid var(--border); border-radius: 999px; background: var(--panel-2); font-size: 12px; }
+.pinned-x { background: transparent; border: 0; color: var(--muted); cursor: pointer; font-size: 11px; line-height: 1; padding: 0; }
+.pinned-x:hover { color: #ffb4b4; }
 #agent-chip { display: flex; align-items: center; gap: 8px; margin: 0 14px 8px; padding: 6px 10px; background: rgba(123, 224, 163, 0.12); border: 1px solid #2c5a40; border-radius: 10px; font-size: 12px; color: #cfe9d9; }
 #agent-chip[hidden] { display: none; }
 .agent-chip-x { margin-left: auto; background: transparent; border: none; color: var(--muted); cursor: pointer; font-size: 12px; line-height: 1; }

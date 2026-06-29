@@ -237,6 +237,8 @@ let settings = {
   sidebarCollapsed: false,   // hide the left chat sidebar for a full-width page (Ctrl+\)
   chatMode: false,           // "Just a chatbot" — plain conversational replies, no page composed
   heroImages: false,         // generate an AI hero image for composed pages (opt-in; BYO image key, costs money)
+  pageStyle: 'balanced',     // composed-page richness: 'balanced' | 'rich' | 'minimal'
+  spaceFilesMode: 'synthesize', // pinned Space files feed the model: 'synthesize' | 'always' | 'off'
   credsAutoLock: 'hide',     // password vault auto-lock: 'hide' | '5' | '15' | '30' (min idle) | 'never'
 };
 
@@ -3624,6 +3626,7 @@ function openFoldersModal() {
   folderSelected.clear();
   els.folderBrowse.hidden = true;
   renderFolders();
+  renderPinnedFiles();
   els.foldersModal.classList.add('open');
 }
 function closeFoldersModal() { els.foldersModal.classList.remove('open'); }
@@ -3770,6 +3773,67 @@ async function attachSelectedFolderFiles() {
   const skipped = (res.skipped || []).length;
   closeFoldersModal();
   toast(`Attached ${added} file${added === 1 ? '' : 's'}${skipped ? ` (${skipped} skipped — too large)` : ''}.`);
+}
+
+// ---- Pinned Space files: permanent per-Space sources (Spaces-as-sources) ----
+// Pin selected folder files to the active Space; they auto-feed Synthesize (and,
+// if the user opts in via Settings, every compose while that Space is active).
+function pinSelectedFilesToSpace() {
+  const sp = activeSpace();
+  if (!sp) { toast('Create or pick a Space first.'); return; }
+  if (!folderSelected.size) { toast('Select files to pin first.'); return; }
+  if (!Array.isArray(sp.pinnedFiles)) sp.pinnedFiles = [];
+  let added = 0;
+  for (const path of folderSelected) {
+    if (sp.pinnedFiles.length >= 20) break;
+    if (sp.pinnedFiles.some((f) => f.path === path)) continue;
+    sp.pinnedFiles.push({ path, name: String(path).split(/[\\/]/).pop() || path });
+    added++;
+  }
+  scheduleSave();
+  renderPinnedFiles();
+  toast(`Pinned ${added} file${added === 1 ? '' : 's'} to “${sp.name}”.`);
+}
+
+function unpinSpaceFile(path) {
+  const sp = activeSpace();
+  if (!sp || !Array.isArray(sp.pinnedFiles)) return;
+  sp.pinnedFiles = sp.pinnedFiles.filter((f) => f.path !== path);
+  scheduleSave();
+  renderPinnedFiles();
+}
+
+function renderPinnedFiles() {
+  const box = document.getElementById('space-pinned');
+  if (!box) return;
+  const sp = activeSpace();
+  const files = (sp && Array.isArray(sp.pinnedFiles)) ? sp.pinnedFiles : [];
+  box.innerHTML = '';
+  if (!files.length) { box.hidden = true; return; }
+  box.hidden = false;
+  const label = document.createElement('span'); label.className = 'pinned-label';
+  label.textContent = `📌 Pinned to ${sp.name}:`;
+  box.appendChild(label);
+  for (const f of files) {
+    const chip = document.createElement('span'); chip.className = 'pinned-chip'; chip.textContent = f.name;
+    const x = document.createElement('button'); x.className = 'pinned-x'; x.title = 'Unpin'; x.textContent = '✕';
+    x.addEventListener('click', () => unpinSpaceFile(f.path));
+    chip.appendChild(x); box.appendChild(chip);
+  }
+}
+
+// Load the active Space's pinned files as attachment objects (capped), for use as
+// model context. Missing/deleted files are simply skipped.
+async function loadSpacePinnedAttachments() {
+  const sp = activeSpace();
+  if (!sp || !Array.isArray(sp.pinnedFiles) || !sp.pinnedFiles.length) return [];
+  if (!window.chervil.readSourceFiles) return [];
+  const paths = sp.pinnedFiles.slice(0, 10).map((f) => f.path).filter(Boolean);
+  if (!paths.length) return [];
+  let res;
+  try { res = await window.chervil.readSourceFiles({ paths }); } catch { return []; }
+  if (!res || !res.ok || !Array.isArray(res.files)) return [];
+  return res.files.map((f) => ({ id: uid(), ...f }));
 }
 
 // Strip a leading wake phrase ("Hey Sprig, …") so the command runs clean and the
@@ -4363,6 +4427,16 @@ async function submitQuery(text, opts = {}) {
     setRemixVisible(false);
   }
 
+  // Permanent Space files (Spaces-as-sources): when the user opts into "every
+  // compose", auto-attach the active Space's pinned files as context.
+  let composeAttachments = opts.attachments || [];
+  if (settings.spaceFilesMode === 'always' && !verify) {
+    try {
+      const extra = await loadSpacePinnedAttachments();
+      if (extra.length) composeAttachments = composeAttachments.concat(extra);
+    } catch { /* ignore */ }
+  }
+
   try {
     const resp = await window.chervil.ask({
       query,
@@ -4375,7 +4449,8 @@ async function submitQuery(text, opts = {}) {
       deep,
       verify,
       profile: settings.profile || null,
-      attachments: opts.attachments || [],
+      pageStyle: settings.pageStyle || 'balanced',
+      attachments: composeAttachments,
       mcpServers: enabledMcpServers(runAgentObj),
       agent: runAgentObj ? runAgentObj.persona : null,
       config: providerConfig(runAgentObj),
@@ -4741,7 +4816,7 @@ function buildSpaceContext(items) {
 }
 
 // Synthesize a new page grounded in everything collected in the active Space.
-function synthesizeSpace(query) {
+async function synthesizeSpace(query) {
   const items = spaceItems();
   const sp = activeSpace();
   if (!items.length) {
@@ -4751,11 +4826,15 @@ function synthesizeSpace(query) {
     return;
   }
   const spaceContext = buildSpaceContext(items);
+  // Pinned Space files feed Synthesize unless the user turned the feature off.
+  let attachments = [];
+  if (settings.spaceFilesMode !== 'off') { try { attachments = await loadSpacePinnedAttachments(); } catch { attachments = []; } }
   const q = (query || '').trim() ||
     `Synthesize everything I've collected in my "${sp ? sp.name : 'research'}" Space into one clear overview — compare the pages, connect the themes, and tell me the key takeaways.`;
   closeDrawer();
   submitQuery(q, {
     spaceContext,
+    attachments,
     skipFollowup: true,
     allowNavigate: false,
     displayText: (query || '').trim() || `Synthesize "${sp ? sp.name : 'my Space'}" (${items.length} pages)`,
@@ -5265,6 +5344,8 @@ function applySettingsToUI() {
   }
   if (els.sttKeyInput) els.sttKeyInput.value = '';
   if (els.heroToggle) els.heroToggle.checked = !!settings.heroImages;
+  { const ps = document.getElementById('page-style-select'); if (ps) ps.value = settings.pageStyle || 'balanced'; }
+  { const sf = document.getElementById('space-files-select'); if (sf) sf.value = settings.spaceFilesMode || 'synthesize'; }
   refreshSttKeyStatus();
   refreshImageKeyStatus();
   renderCredsPanel();
@@ -6380,6 +6461,7 @@ if (els.foldersAdd) els.foldersAdd.addEventListener('click', addDataFolder);
 if (els.folderBrowseBack) els.folderBrowseBack.addEventListener('click', () => { folderBrowseId = null; els.folderBrowse.hidden = true; });
 if (els.folderFilter) els.folderFilter.addEventListener('input', renderFolderFiles);
 if (els.folderAttach) els.folderAttach.addEventListener('click', attachSelectedFolderFiles);
+{ const fp = document.getElementById('folder-pin'); if (fp) fp.addEventListener('click', pinSelectedFilesToSpace); }
 let dragDepth = 0;
 window.addEventListener('dragenter', (e) => { if (e.dataTransfer && [...e.dataTransfer.types].includes('Files')) { e.preventDefault(); dragDepth++; els.dropOverlay.hidden = false; } });
 window.addEventListener('dragover', (e) => { if (e.dataTransfer && [...e.dataTransfer.types].includes('Files')) e.preventDefault(); });
@@ -6661,6 +6743,12 @@ if (els.heroToggle) els.heroToggle.addEventListener('change', () => {
   if (settings.heroImages) refreshImageKeyStatus(); // remind the user if no key is set
   scheduleSave();
 });
+{
+  const ps = document.getElementById('page-style-select');
+  if (ps) ps.addEventListener('change', () => { settings.pageStyle = ps.value; scheduleSave(); });
+  const sf = document.getElementById('space-files-select');
+  if (sf) sf.addEventListener('change', () => { settings.spaceFilesMode = sf.value; scheduleSave(); });
+}
 
 // MCP servers: add button + Enter-to-add in the URL field.
 if (els.mcpAddBtn) els.mcpAddBtn.addEventListener('click', addMcpServer);

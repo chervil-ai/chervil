@@ -7,6 +7,13 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- **Pin files to a Space (permanent sources).** In the 📁 Folders panel, **📌 Pin to
+  Space** keeps files as permanent context for the active Space. By default they feed
+  the Space's **Synthesize**; a new **Settings → Composed pages → Pinned Space files**
+  option lets you use them in *every* page you compose in that Space, or turn them off.
+- **Page style.** **Settings → Composed pages → Page style** picks **Balanced**
+  (default), **Rich** (visual, dense, charts/diagrams), or **Minimal** (lean and fast)
+  for the pages Sprig composes.
 - **Orchestrated agent pipelines.** A pipeline can now be **🧠 Orchestrated** — instead
   of running its agents in a fixed order, a coordinator looks at the work so far and
   decides who should act next (and when the team is done), so the team adapts to results
