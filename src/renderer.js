@@ -2865,7 +2865,7 @@ function parseAgentFile(text, fallbackName) {
   };
 }
 
-function openAgents() { renderAgents(); renderPipelinesSection(); renderStarterAgents(); renderAuditLog(); els.agentsView.classList.add('open'); }
+function openAgents() { renderAgents(); renderStoreSection(); renderPipelinesSection(); renderStarterAgents(); renderAuditLog(); els.agentsView.classList.add('open'); }
 
 // Render the agent action audit trail (RFC 0006) — what Sprig did, and what the
 // control layer allowed, confirmed, or denied.
@@ -3292,6 +3292,80 @@ async function runPipeline(pipeline, task) {
 }
 
 // Show the bundled /agents starter files with one-click "Add".
+// ---- Agent store browse (RFC 0012) ----
+const STORE_CATEGORIES = [
+  'Productivity', 'Coding & Dev', 'Security', 'Research', 'Writing', 'Education',
+  'Business & Finance', 'Marketing', 'Data & Analytics', 'Creative', 'Lifestyle', 'Other',
+];
+let storeAgentsCache = null;   // null = not loaded yet
+let storeAgentsLoading = false;
+
+function storeBase() { return settings.publishBase || 'https://getchervil.com'; }
+
+function renderStoreCatSelect() {
+  const sel = document.getElementById('store-cat-select');
+  if (!sel || sel.options.length) return; // populate once
+  const all = document.createElement('option'); all.value = ''; all.textContent = 'All categories'; sel.appendChild(all);
+  for (const c of STORE_CATEGORIES) { const o = document.createElement('option'); o.value = c; o.textContent = c; sel.appendChild(o); }
+}
+
+function renderStoreSection() {
+  renderStoreCatSelect();
+  const list = document.getElementById('store-agents-list');
+  if (!list) return;
+  if (storeAgentsCache === null) {
+    list.innerHTML = '<div class="sched-empty">Click “Browse store” to load community agents.</div>';
+  } else {
+    renderStoreAgents();
+  }
+}
+
+async function loadStoreAgents() {
+  if (storeAgentsLoading || !window.chervil.listStoreAgents) return;
+  const sel = document.getElementById('store-cat-select');
+  const cat = sel ? sel.value : '';
+  const list = document.getElementById('store-agents-list');
+  storeAgentsLoading = true;
+  if (list) list.innerHTML = '<div class="sched-empty">Loading the store…</div>';
+  let res;
+  try { res = await window.chervil.listStoreAgents({ category: cat || undefined, baseUrl: storeBase() }); }
+  catch (e) { res = { ok: false, error: String((e && e.message) || e) }; }
+  storeAgentsLoading = false;
+  if (!res || !res.ok) { if (list) list.innerHTML = `<div class="sched-empty">Couldn’t load the store: ${(res && res.error) || 'offline?'}</div>`; return; }
+  storeAgentsCache = res.agents || [];
+  renderStoreAgents();
+}
+
+function renderStoreAgents() {
+  const list = document.getElementById('store-agents-list');
+  if (!list) return;
+  list.innerHTML = '';
+  const items = storeAgentsCache || [];
+  if (!items.length) {
+    const e = document.createElement('div'); e.className = 'sched-empty'; e.textContent = 'No agents found here yet.';
+    list.appendChild(e); return;
+  }
+  for (const a of items) {
+    const item = document.createElement('div'); item.className = 'sched-item';
+    const main = document.createElement('div'); main.className = 'si-main';
+    const title = document.createElement('div'); title.className = 'si-title'; title.textContent = '👤 ' + a.name;
+    const when = document.createElement('div'); when.className = 'si-when';
+    when.textContent = [a.category, a.description, a.username ? 'by @' + a.username : ''].filter(Boolean).join(' · ');
+    main.appendChild(title); main.appendChild(when);
+    const add = document.createElement('button'); add.className = 'si-btn'; add.textContent = 'Add'; add.title = 'Import this agent';
+    add.addEventListener('click', async () => {
+      add.disabled = true; add.textContent = 'Adding…';
+      let r;
+      try { r = await window.chervil.importStoreAgent({ id: a.id, baseUrl: storeBase() }); }
+      catch (e) { r = { ok: false, error: String((e && e.message) || e) }; }
+      if (!r || !r.ok) { add.disabled = false; add.textContent = 'Add'; toast(`Couldn’t import: ${(r && r.error) || 'error'}`); }
+      else { add.textContent = 'Added ✓'; }
+    });
+    item.appendChild(main); item.appendChild(add);
+    list.appendChild(item);
+  }
+}
+
 async function renderStarterAgents() {
   const list = document.getElementById('starter-agents-list');
   if (!list) return;
@@ -6341,6 +6415,10 @@ document.getElementById('agent-add').addEventListener('click', addAgentFromPaste
   if (addStage) addStage.addEventListener('click', addPipelineStage);
   const savePipe = document.getElementById('pipeline-save');
   if (savePipe) savePipe.addEventListener('click', savePipeline);
+  const storeRefresh = document.getElementById('store-refresh');
+  if (storeRefresh) storeRefresh.addEventListener('click', loadStoreAgents);
+  const storeCat = document.getElementById('store-cat-select');
+  if (storeCat) storeCat.addEventListener('change', () => { if (storeAgentsCache !== null) loadStoreAgents(); });
 }
 els.mapClose.addEventListener('click', closeMap);
 els.mapView.addEventListener('click', (e) => { if (e.target === els.mapView) closeMap(); });

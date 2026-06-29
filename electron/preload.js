@@ -96,6 +96,10 @@ contextBridge.exposeInMainWorld('chervil', {
   /** Publish an agent to the web — owner profile + importable + store-submittable. */
   publishAgent: (payload) => ipcRenderer.invoke('chervil:publish-agent', payload),
 
+  /** Browse the community Agent store (JSON listing) and import one by id. */
+  listStoreAgents: (payload) => ipcRenderer.invoke('chervil:list-store-agents', payload),
+  importStoreAgent: (payload) => ipcRenderer.invoke('chervil:import-store-agent', payload),
+
   /** An agent arrived via a chervil://import-agent deep link → add it to Agents. */
   onImportAgent: (cb) => ipcRenderer.on('chervil:import-agent', (_e, doc) => cb(doc)),
 

@@ -6,6 +6,12 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- **Browse the Agent store inside the app.** The **👤 Agents** panel now has an
+  **🏪 Agent store** section — filter by category, hit **Browse store**, and **Add**
+  any community agent straight into your Agents without leaving Chervil. (Previously
+  you could only browse the store on getchervil.com.)
+
 ### Fixed
 - **Logins that use a popup now work in embedded sites (RFC 0011).** Real sites
   opened in Chervil couldn't open popups or `target="_blank"` links — so

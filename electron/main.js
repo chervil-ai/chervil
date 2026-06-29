@@ -1169,6 +1169,36 @@ ipcMain.handle('chervil:publish-agent', async (_event, payload) => {
   }
 });
 
+// Browse the community Agent store from inside the app (RFC 0012). Public JSON
+// listing; the main process fetches it (no CORS limits).
+ipcMain.handle('chervil:list-store-agents', async (_event, payload) => {
+  try {
+    const base = String((payload && payload.baseUrl) || 'https://getchervil.com').replace(/\/+$/, '');
+    const params = new URLSearchParams();
+    if (payload && payload.category) params.set('category', String(payload.category));
+    const resp = await fetch(`${base}/api/store/agents?${params.toString()}`, { headers: { Accept: 'application/json' } });
+    if (!resp.ok) return { ok: false, error: `Couldn’t reach the store (HTTP ${resp.status}).` };
+    const data = await resp.json().catch(() => ({}));
+    return { ok: true, agents: Array.isArray(data.agents) ? data.agents : [] };
+  } catch (err) {
+    return { ok: false, error: String(err && err.message ? err.message : err) };
+  }
+});
+
+// Import one store agent by id — reuses the chervil://import-agent fetch path
+// (importAgentFromUrl → renderer onImportAgent → adds it to Agents).
+ipcMain.handle('chervil:import-store-agent', async (_event, payload) => {
+  try {
+    const base = String((payload && payload.baseUrl) || 'https://getchervil.com').replace(/\/+$/, '');
+    const id = String((payload && payload.id) || '');
+    if (!id) return { ok: false, error: 'Missing agent id.' };
+    await importAgentFromUrl(`${base}/api/agents/${id}`);
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: String(err && err.message ? err.message : err) };
+  }
+});
+
 // Cloud living pages (RFC 0007 7.3): register/update/clear a server-side refresh
 // schedule for a published page. Authed by the publish token (like publish-page).
 ipcMain.handle('chervil:set-cloud-living', async (_event, payload) => {
