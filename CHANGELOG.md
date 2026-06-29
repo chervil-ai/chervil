@@ -7,6 +7,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- **Customize the top-bar buttons.** Choose which buttons show on the toolbar (Map,
+  History, Schedules, Agents, Bookmark, Save) — in **Settings → General → Toolbar
+  buttons**, or just **right-click the top bar** for a quick show/hide menu. (The
+  ⚙ Settings button and core navigation always stay.)
 - **Pin files to a Space (permanent sources).** In the 📁 Folders panel, **📌 Pin to
   Space** keeps files as permanent context for the active Space. By default they feed
   the Space's **Synthesize**; a new **Settings → Composed pages → Pinned Space files**

@@ -239,6 +239,7 @@ let settings = {
   heroImages: false,         // generate an AI hero image for composed pages (opt-in; BYO image key, costs money)
   pageStyle: 'balanced',     // composed-page richness: 'balanced' | 'rich' | 'minimal'
   spaceFilesMode: 'synthesize', // pinned Space files feed the model: 'synthesize' | 'always' | 'off'
+  toolbar: {},               // which top-bar buttons to show — { key: false } hides one (missing = shown)
   credsAutoLock: 'hide',     // password vault auto-lock: 'hide' | '5' | '15' | '30' (min idle) | 'never'
 };
 
@@ -5705,8 +5706,88 @@ function setSettingsTab(group) {
   });
 }
 
+// ---- Customizable top-bar buttons ----
+// The optional omnibar action buttons. Settings (⚙) and core nav (sidebar, back,
+// forward, omnibox) are always shown. A button is hidden when settings.toolbar[key]
+// === false (missing = shown).
+const TOOLBAR_BUTTONS = [
+  { key: 'map', id: 'map-btn', label: 'Map' },
+  { key: 'history', id: 'history-btn', label: 'History' },
+  { key: 'schedules', id: 'sched-btn', label: 'Schedules' },
+  { key: 'agents', id: 'agents-btn', label: 'Agents' },
+  { key: 'bookmark', id: 'bookmark-btn', label: 'Bookmark (★)' },
+  { key: 'save', id: 'save-btn', label: 'Save' },
+];
+
+function toolbarVisible(key) { return !settings.toolbar || settings.toolbar[key] !== false; }
+
+function applyToolbar() {
+  for (const b of TOOLBAR_BUTTONS) {
+    const el = document.getElementById(b.id);
+    if (el) el.classList.toggle('btn-off', !toolbarVisible(b.key));
+  }
+}
+
+function setToolbarVisible(key, visible) {
+  if (!settings.toolbar) settings.toolbar = {};
+  if (visible) delete settings.toolbar[key];
+  else settings.toolbar[key] = false;
+  applyToolbar();
+  scheduleSave();
+}
+
+// Settings panel: a checkbox per optional button.
+function renderToolbarPrefs() {
+  const box = document.getElementById('toolbar-prefs');
+  if (!box) return;
+  box.innerHTML = '';
+  for (const b of TOOLBAR_BUTTONS) {
+    const label = document.createElement('label'); label.className = 'toggle-row';
+    const cb = document.createElement('input'); cb.type = 'checkbox'; cb.checked = toolbarVisible(b.key);
+    cb.addEventListener('change', () => setToolbarVisible(b.key, cb.checked));
+    const span = document.createElement('span'); span.textContent = b.label;
+    label.appendChild(cb); label.appendChild(span);
+    box.appendChild(label);
+  }
+}
+
+// Right-click the top bar → a quick show/hide menu for the same buttons.
+let toolbarMenuEl = null;
+function closeToolbarMenu() {
+  if (!toolbarMenuEl) return;
+  toolbarMenuEl.remove();
+  toolbarMenuEl = null;
+  document.removeEventListener('mousedown', onToolbarMenuOutside, true);
+  document.removeEventListener('keydown', onToolbarMenuEsc, true);
+}
+function onToolbarMenuOutside(e) { if (toolbarMenuEl && !toolbarMenuEl.contains(e.target)) closeToolbarMenu(); }
+function onToolbarMenuEsc(e) { if (e.key === 'Escape') closeToolbarMenu(); }
+function showToolbarMenu(x, y) {
+  closeToolbarMenu();
+  const menu = document.createElement('div'); menu.className = 'toolbar-menu';
+  const head = document.createElement('div'); head.className = 'toolbar-menu-head'; head.textContent = 'Show on toolbar';
+  menu.appendChild(head);
+  for (const b of TOOLBAR_BUTTONS) {
+    const on = toolbarVisible(b.key);
+    const row = document.createElement('button'); row.className = 'toolbar-menu-row';
+    const check = document.createElement('span'); check.className = 'tm-check'; check.textContent = on ? '✓' : '';
+    const lbl = document.createElement('span'); lbl.textContent = b.label;
+    row.appendChild(check); row.appendChild(lbl);
+    row.addEventListener('click', () => { setToolbarVisible(b.key, !on); renderToolbarPrefs(); closeToolbarMenu(); });
+    menu.appendChild(row);
+  }
+  document.body.appendChild(menu);
+  menu.style.left = Math.min(x, window.innerWidth - menu.offsetWidth - 8) + 'px';
+  menu.style.top = Math.min(y, window.innerHeight - menu.offsetHeight - 8) + 'px';
+  setTimeout(() => {
+    document.addEventListener('mousedown', onToolbarMenuOutside, true);
+    document.addEventListener('keydown', onToolbarMenuEsc, true);
+  }, 0);
+}
+
 function openSettings() {
   applySettingsToUI();
+  renderToolbarPrefs();
   renderSyncFolder();
   renderAccountBox();
   setSettingsTab('general');
@@ -6006,6 +6087,7 @@ async function init() {
 
   applyTabLayout();
   applySidebarCollapsed();
+  applyToolbar(); // honor the user's chosen top-bar buttons
   setChatMode(settings.chatMode); // reflect the persisted "Just a chatbot" toggle
   renderTabs();
   renderConversation();
@@ -6462,6 +6544,17 @@ if (els.folderBrowseBack) els.folderBrowseBack.addEventListener('click', () => {
 if (els.folderFilter) els.folderFilter.addEventListener('input', renderFolderFiles);
 if (els.folderAttach) els.folderAttach.addEventListener('click', attachSelectedFolderFiles);
 { const fp = document.getElementById('folder-pin'); if (fp) fp.addEventListener('click', pinSelectedFilesToSpace); }
+
+// Right-click the top bar (not the text field) → quick show/hide toolbar buttons.
+{
+  const omnibar = document.getElementById('omnibar');
+  if (omnibar) omnibar.addEventListener('contextmenu', (e) => {
+    const t = e.target;
+    if (t && t.closest && t.closest('input, textarea, select')) return; // leave text fields' native menu
+    e.preventDefault();
+    showToolbarMenu(e.clientX, e.clientY);
+  });
+}
 let dragDepth = 0;
 window.addEventListener('dragenter', (e) => { if (e.dataTransfer && [...e.dataTransfer.types].includes('Files')) { e.preventDefault(); dragDepth++; els.dropOverlay.hidden = false; } });
 window.addEventListener('dragover', (e) => { if (e.dataTransfer && [...e.dataTransfer.types].includes('Files')) e.preventDefault(); });
