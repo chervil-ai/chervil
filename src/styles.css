@@ -634,6 +634,8 @@ html, body {
 .pipeline-arrow { color: var(--muted); font-size: 13px; }
 .pipeline-task { width: 100%; margin-top: 8px; background: var(--panel-2); border: 1px solid var(--border); color: var(--text); border-radius: var(--radius-md); padding: 7px 10px; font-size: 13px; outline: none; }
 .pipeline-task:focus { border-color: var(--accent); }
+.pipeline-orch-label { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); cursor: pointer; }
+.pipeline-orch-label input { accent-color: var(--accent); }
 #agent-chip { display: flex; align-items: center; gap: 8px; margin: 0 14px 8px; padding: 6px 10px; background: rgba(123, 224, 163, 0.12); border: 1px solid #2c5a40; border-radius: 10px; font-size: 12px; color: #cfe9d9; }
 #agent-chip[hidden] { display: none; }
 .agent-chip-x { margin-left: auto; background: transparent; border: none; color: var(--muted); cursor: pointer; font-size: 12px; line-height: 1; }

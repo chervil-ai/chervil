@@ -7,6 +7,11 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- **Orchestrated agent pipelines.** A pipeline can now be **🧠 Orchestrated** — instead
+  of running its agents in a fixed order, a coordinator looks at the work so far and
+  decides who should act next (and when the team is done), so the team adapts to results
+  instead of marching in a line. Bounded by a step cap so it always finishes. Toggle it
+  when you save a pipeline in **👤 Agents → 🧩 Agent pipelines**.
 - **Browse the Agent store inside the app.** The **👤 Agents** panel now has an
   **🏪 Agent store** section — filter by category, hit **Browse store**, and **Add**
   any community agent straight into your Agents without leaving Chervil. (Previously

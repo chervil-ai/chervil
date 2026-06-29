@@ -3211,9 +3211,12 @@ function savePipeline() {
   const name = ((nameEl && nameEl.value) || '').trim();
   if (draftStages.length < 2) { toast('A pipeline needs at least two stages.'); return; }
   const finalName = name || draftStages.map((id) => { const a = agents.find((x) => x.id === id); return a ? a.name : '?'; }).join(' → ');
-  pipelines.push({ id: uid(), name: finalName, stageAgentIds: draftStages.slice() });
+  const orchEl = document.getElementById('pipeline-orchestrated');
+  const orchestrated = !!(orchEl && orchEl.checked);
+  pipelines.push({ id: uid(), name: finalName, stageAgentIds: draftStages.slice(), orchestrated });
   draftStages = [];
   if (nameEl) nameEl.value = '';
+  if (orchEl) orchEl.checked = false;
   scheduleSave();
   renderPipelinesSection();
   toast(`Saved pipeline “${finalName}”.`);
@@ -3238,9 +3241,11 @@ function renderPipelines() {
   for (const p of pipelines) {
     const item = document.createElement('div'); item.className = 'sched-item';
     const main = document.createElement('div'); main.className = 'si-main';
-    const title = document.createElement('div'); title.className = 'si-title'; title.textContent = '🧩 ' + p.name;
+    const title = document.createElement('div'); title.className = 'si-title';
+    title.textContent = (p.orchestrated ? '🧠 ' : '🧩 ') + p.name;
     const when = document.createElement('div'); when.className = 'si-when';
-    when.textContent = p.stageAgentIds.map((id) => { const a = agents.find((x) => x.id === id); return a ? a.name : '(removed)'; }).join(' → ');
+    const names = p.stageAgentIds.map((id) => { const a = agents.find((x) => x.id === id); return a ? a.name : '(removed)'; });
+    when.textContent = (p.orchestrated ? 'orchestrated · ' : '') + names.join(p.orchestrated ? ', ' : ' → ');
     const taskInput = document.createElement('input');
     taskInput.type = 'text'; taskInput.className = 'pipeline-task'; taskInput.placeholder = 'Task for this run…';
     taskInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') runPipeline(p, taskInput.value); });
@@ -3259,6 +3264,7 @@ function renderPipelines() {
 async function runPipeline(pipeline, task) {
   task = (task || '').trim();
   if (!task) { toast('Enter a task for this pipeline.'); return; }
+  if (pipeline.orchestrated) return runOrchestratedPipeline(pipeline, task);
   const stages = (pipeline.stageAgentIds || []).map((id) => agents.find((a) => a.id === id)).filter(Boolean);
   if (stages.length < 2) { toast('This pipeline needs at least two existing agents.'); return; }
   closeAgents();
@@ -3288,6 +3294,57 @@ async function runPipeline(pipeline, task) {
   const finalAgent = stages[stages.length - 1];
   const composeQuery = `${task}\n\n--- Notes from your agent team (use these to build the page) ---${prior}`;
   await submitQuery(composeQuery, { tab, agentId: finalAgent.id, displayText: `🧩 ${finalAgent.name} composes the result`, skipFollowup: true });
+  scheduleSave();
+}
+
+// Orchestrated run: a coordinator looks at the work so far and picks who acts next
+// (or "finish"), instead of a fixed order. Bounded by a step cap so it can't loop
+// forever. The last agent in the roster composes the final page.
+async function runOrchestratedPipeline(pipeline, task) {
+  const stages = (pipeline.stageAgentIds || []).map((id) => agents.find((a) => a.id === id)).filter(Boolean);
+  if (stages.length < 2) { toast('This pipeline needs at least two existing agents.'); return; }
+  if (!window.chervil.agentOrchestrate) { toast('Orchestration isn’t available in this build.'); return; }
+  closeAgents();
+  newTab(true);
+  const tab = activeTab();
+  tab.title = (pipeline.name || 'Pipeline').slice(0, 40);
+  addMessage(tab, 'user', `🧠 ${pipeline.name} (orchestrated): ${task}`);
+  renderTabs();
+  const roster = stages.map((a) => ({ name: a.name, description: a.description || '' }));
+  const composer = stages[stages.length - 1];
+  const coordCfg = providerConfig();           // coordinator uses the default provider/model
+  const MAX_STEPS = Math.min(10, Math.max(3, stages.length * 2));
+  let prior = '';
+  for (let step = 0; step < MAX_STEPS; step++) {
+    if (tab.id === activeId) setStatus(`🧭 Coordinator is deciding the next move… (step ${step + 1}/${MAX_STEPS})`);
+    let dec;
+    try { dec = await window.chervil.agentOrchestrate({ task, roster, transcript: prior, config: coordCfg }); }
+    catch (e) { dec = { ok: false, error: String((e && e.message) || e) }; }
+    if (!dec || !dec.ok) {
+      if (tab.id === activeId) clearStatus();
+      addMessage(tab, 'bot', `Coordinator couldn’t run: ${(dec && dec.error) || 'unknown error'}`, 'error');
+      scheduleSave();
+      return;
+    }
+    if (!dec.next || /^finish$/i.test(dec.next)) break;
+    const a = stages.find((x) => x.name.toLowerCase() === String(dec.next).toLowerCase());
+    if (!a) break; // coordinator named someone not on the team — stop rather than loop
+    if (tab.id === activeId) setStatus(`🧩 ${a.name} is working…`);
+    let res;
+    try { res = await window.chervil.agentTurn({ task, role: a.name, persona: a.persona || '', prior, profile: settings.profile || null, config: providerConfig(a) }); }
+    catch (e) { res = { ok: false, error: String((e && e.message) || e) }; }
+    if (!res || !res.ok) {
+      if (tab.id === activeId) clearStatus();
+      addMessage(tab, 'bot', `Stage “${a.name}” couldn’t run: ${(res && res.error) || 'unknown error'}`, 'error');
+      scheduleSave();
+      return;
+    }
+    addMessage(tab, 'bot', `🧩 ${a.name}${dec.reason ? ` — ${dec.reason}` : ''}\n\n${res.text}`);
+    prior += `\n\n## ${a.name}\n${res.text}`;
+  }
+  if (tab.id === activeId) clearStatus();
+  const composeQuery = `${task}\n\n--- Notes from your agent team (use these to build the page) ---${prior}`;
+  await submitQuery(composeQuery, { tab, agentId: composer.id, displayText: `🧩 ${composer.name} composes the result`, skipFollowup: true });
   scheduleSave();
 }
 

@@ -12,7 +12,7 @@ const { app, BrowserWindow, ipcMain, dialog, safeStorage, Notification, Tray, Me
 require('dotenv').config({ path: path.join(__dirname, '..', '.env'), quiet: true });
 
 const QRCode = require('qrcode');
-const { runAgent, runChat, runAgentTurn, runAppletAsk, runComposeApplet, runListModels, runAgentStep, runAgentPlan, runExtractSlides, runExtractDoc, runExtractSheets, runSynthesizeAgent } = require('../lib/agent');
+const { runAgent, runChat, runAgentTurn, runOrchestrator, runAppletAsk, runComposeApplet, runListModels, runAgentStep, runAgentPlan, runExtractSlides, runExtractDoc, runExtractSheets, runSynthesizeAgent } = require('../lib/agent');
 const { generateHeroImage } = require('../lib/images');
 const { getSkill } = require('../lib/skills');
 const { createVault } = require('../lib/vault');
@@ -1693,6 +1693,17 @@ ipcMain.handle('chervil:agent-turn', async (_event, payload) => {
   try {
     const r = await runAgentTurn({ task, role, persona, prior, profile, config: providerConfigFrom(payload) });
     return { ok: true, text: r.text };
+  } catch (err) {
+    return { ok: false, error: String(err && err.message ? err.message : err) };
+  }
+});
+
+// Orchestrated pipelines: the coordinator picks the next agent (or 'finish').
+ipcMain.handle('chervil:agent-orchestrate', async (_event, payload) => {
+  const { task, roster, transcript } = payload || {};
+  try {
+    const r = await runOrchestrator({ task, roster, transcript, config: providerConfigFrom(payload) });
+    return { ok: true, next: r.next, reason: r.reason };
   } catch (err) {
     return { ok: false, error: String(err && err.message ? err.message : err) };
   }

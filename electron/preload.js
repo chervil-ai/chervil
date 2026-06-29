@@ -127,6 +127,9 @@ contextBridge.exposeInMainWorld('chervil', {
   /** Run one specialist agent's turn in a multi-stage pipeline. → { ok, text }. */
   agentTurn: (payload) => ipcRenderer.invoke('chervil:agent-turn', payload),
 
+  /** Orchestrated pipelines: coordinator picks the next agent. → { ok, next, reason }. */
+  agentOrchestrate: (payload) => ipcRenderer.invoke('chervil:agent-orchestrate', payload),
+
   /** Save a composed page to disk via a native save dialog. */
   savePage: (payload) => ipcRenderer.invoke('chervil:save-page', payload),
 
