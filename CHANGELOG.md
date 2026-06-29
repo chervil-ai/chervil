@@ -6,6 +6,13 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.8.0] — 2026-06-29
+
+You're at the controls. This release is about making Chervil a more capable everyday
+browser and putting power features in your hands: a toolbar you arrange yourself,
+embedded-site logins that finally work, agent teams that adapt, Spaces that hold your
+files, and a way to dial in how pages look — plus the Agent store, now inside the app.
+
 ### Added
 - **Customize the top-bar buttons.** Choose which buttons show on the toolbar (Map,
   History, Schedules, Agents, Bookmark, Save) — in **Settings → General → Toolbar

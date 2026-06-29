@@ -33,12 +33,13 @@ right at home.)*
 - **Living, interactive pages** — composed pages can call back to Sprig at runtime to fetch fresh data (mini-apps, not printouts).
 - **Deep Dive** — a two-phase research pipeline that produces a long, cited report with disinformation vetting.
 - **Trust layer** — every page can show its sources and one-click **Verify** its own claims against live sources.
-- **Spaces** — persistent topic workspaces that synthesize across everything you've gathered.
+- **Spaces** — persistent topic workspaces that synthesize across everything you've gathered; **pin files** to a Space as permanent sources.
 - **Living pages** — schedule a page to re-ground itself and notify you when it changes.
 - **Agentic web actions** — Sprig can operate real sites for you, with hard safety gates (see [SECURITY.md](SECURITY.md)).
-- **Multi-stage agents** — chain agents into a pipeline where each builds on the last one's work (research → draft → critique), and the final agent composes the page.
+- **Multi-stage agents** — chain agents into a pipeline where each builds on the last one's work (research → draft → critique), and the final agent composes the page. Or make it **orchestrated**, where a coordinator picks who acts next based on the results so far.
 - **Shareable pages** — export any composed page to a portable `.chervil` file, or publish it with a built-in **Open in Chervil** button, so anyone can import it into their own Chervil and remix it.
-- **Publish agents + the Agent store** — publish an agent to your profile (importable by anyone in one click), and submit your best agents and pages to the community **Agent store** and **Share gallery** at [getchervil.com](https://getchervil.com), browsable by category (vetted + approved).
+- **Publish agents + the Agent store** — publish an agent to your profile (importable by anyone in one click), and submit your best agents and pages to the community **Agent store** and **Share gallery** at [getchervil.com](https://getchervil.com), browsable by category (vetted + approved). Browse and import from the store **right inside the app**, too.
+- **Make it your own** — choose which buttons show on the top bar (Settings, or right-click the bar), and pick a **page style** (Balanced / Rich / Minimal) for composed pages. Embedded real sites behave like a normal browser — popup/OAuth logins, downloads, find-in-page.
 - **Quick-ask** — a global hotkey opens a floating ask bar; Chervil lives in the tray, always a keystroke away.
 - **"Hey Sprig" listening** — opt-in hands-free wake word that pops the quick-ask bar and captures your spoken request. Detection is fully on-device and free ([openWakeWord](https://github.com/dscripka/openWakeWord) on onnxruntime-web, no account or key) — audio never leaves your machine until you speak a command. Built-in words (Hey Jarvis / Alexa / Hey Mycroft) work out of the box; the literal "Hey Sprig" uses a free, self-trained openWakeWord model.
 - **Scheduled agents** — run prompts on a daily/weekly/interval schedule in the background, optionally "as" a chosen agent.
