@@ -3786,6 +3786,13 @@ function openUrlInTab(url) {
   renderCurrentPage();
   scheduleSave();
 }
+
+// Open a URL in a fresh tab — used when an embedded site follows a "new tab"
+// link (target="_blank"), so it doesn't replace what the current tab is showing.
+function openUrlInNewTab(url) {
+  newTab(true);
+  openUrlInTab(url);
+}
 // Route an omnibox submission: a URL navigates; anything else goes to Sprig
 // (handleComposerSubmit already handles /commands, skills, deep mode, the web
 // agent on live sites, and composing).
@@ -6776,6 +6783,11 @@ if (window.chervil.onImportPage) {
 // An agent arrived via a chervil://import-agent deep link → add it to Agents.
 if (window.chervil.onImportAgent) {
   window.chervil.onImportAgent((doc) => { try { importAgentDoc(doc); } catch { /* ignore */ } });
+}
+
+// An embedded site followed a "new tab" link → open it in a fresh Chervil tab.
+if (window.chervil.onOpenTabUrl) {
+  window.chervil.onOpenTabUrl((url) => { try { openUrlInNewTab(url); } catch { /* ignore */ } });
 }
 
 // Prompts fired from the floating quick-ask bar (global hotkey) open a fresh tab.

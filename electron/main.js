@@ -357,6 +357,38 @@ function createWindow(opts = {}) {
   mainWindow.webContents.on('did-attach-webview', (_e, wc) => {
     attachContextMenu(wc, { isMainUI: false });
     attachDownloadHandler(wc.session);
+    // Popups / new windows from embedded real sites (RFC 0011 A1). Without this,
+    // window.open() and target="_blank" silently do nothing — which breaks
+    // Google/Microsoft OAuth sign-in. Two cases:
+    //   • "open in new tab" links (foreground/background-tab) → a new Chervil tab.
+    //   • window.open(...) popups (OAuth/login) → a real child window, so the
+    //     opener relationship (postMessage + window.close) survives and the flow
+    //     completes. It shares the webview's session, so cookies/login carry over.
+    wc.setWindowOpenHandler(({ url, disposition }) => {
+      if (!/^https?:\/\//i.test(url)) return { action: 'deny' };
+      if (disposition === 'foreground-tab' || disposition === 'background-tab') {
+        if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('chervil:open-tab-url', url);
+        return { action: 'deny' };
+      }
+      return {
+        action: 'allow',
+        overrideBrowserWindowOptions: {
+          width: 600,
+          height: 720,
+          autoHideMenuBar: true,
+          webPreferences: { contextIsolation: true, nodeIntegration: false },
+        },
+      };
+    });
+    // The allowed popup is a real child window; give it the same chrome (no menu,
+    // native context menu, downloads-to-folder) as embedded sites.
+    wc.on('did-create-window', (win) => {
+      try {
+        win.setMenuBarVisibility(false);
+        attachContextMenu(win.webContents, { isMainUI: false });
+        attachDownloadHandler(win.webContents.session);
+      } catch { /* best effort */ }
+    });
   });
 
   // Allow microphone access for voice input, but ONLY for Chervil's own UI

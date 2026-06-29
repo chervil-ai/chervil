@@ -6,6 +6,14 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+- **Logins that use a popup now work in embedded sites (RFC 0011).** Real sites
+  opened in Chervil couldn't open popups or `target="_blank"` links — so
+  Google/Microsoft "Sign in" buttons (which open an OAuth popup) silently did
+  nothing. Chervil now handles them: "open in new tab" links open a new Chervil
+  tab, and `window.open` popups (OAuth/login) open a real child window that shares
+  your session, so the sign-in flow completes and closes itself.
+
 ## [0.7.0] — 2026-06-28
 
 Share what you build with everyone: publish your agents, and submit your best

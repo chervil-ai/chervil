@@ -99,6 +99,9 @@ contextBridge.exposeInMainWorld('chervil', {
   /** An agent arrived via a chervil://import-agent deep link → add it to Agents. */
   onImportAgent: (cb) => ipcRenderer.on('chervil:import-agent', (_e, doc) => cb(doc)),
 
+  /** An embedded site opened a "new tab" link → open the URL in a new Chervil tab. */
+  onOpenTabUrl: (cb) => ipcRenderer.on('chervil:open-tab-url', (_e, url) => cb(url)),
+
   /** Cloud living pages: register/update/clear a published page's server-side refresh. */
   setCloudLiving: (payload) => ipcRenderer.invoke('chervil:set-cloud-living', payload),
 
