@@ -1403,6 +1403,11 @@ html, body {
 .lib-empty { color: var(--muted); font-size: 14px; text-align: center; padding: 40px 0; }
 
 .settings-version { text-align: center; color: var(--muted); font-size: 12px; margin: 18px 0 4px; }
+.link-btn { background: none; border: 0; padding: 0; font: inherit; color: var(--accent, #2e7d5b); cursor: pointer; text-decoration: underline; }
+.link-btn:hover { opacity: 0.85; }
+.link-btn:disabled { color: var(--muted); cursor: default; text-decoration: none; opacity: 0.7; }
+.update-status { margin-left: 6px; color: var(--muted); }
+.update-status .update-link { color: var(--accent, #2e7d5b); cursor: pointer; text-decoration: underline; }
 
 /* Autofill identity fields */
 .autofill-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }

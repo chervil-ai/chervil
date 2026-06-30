@@ -478,6 +478,71 @@ function pageStorageShim(seedJson) {
 })();</script>`;
 }
 
+// A snapshot of the OS voices for seeding a composed page's TTS shim, so pages
+// that enumerate speechSynthesis.getVoices() still see a list.
+function frameVoicesJson() {
+  try {
+    const vs = (cachedVoices && cachedVoices.length)
+      ? cachedVoices
+      : (window.speechSynthesis ? (window.speechSynthesis.getVoices() || []) : []);
+    return JSON.stringify(vs.map((v) => ({
+      name: v.name, lang: v.lang, voiceURI: v.voiceURI,
+      default: !!v.default, localService: !!v.localService,
+    }))).replace(/</g, '\\u003c');
+  } catch { return '[]'; }
+}
+
+// A TTS bridge for composed pages. The sandbox iframe's real speechSynthesis is
+// inert (opaque origin → getVoices() is empty and speak() is silent), so a page's
+// "Listen / pronounce" buttons do nothing — the cause of the "no audio" reports.
+// This shadows window.speechSynthesis and SpeechSynthesisUtterance with versions
+// that forward speak/cancel/pause/resume up to the parent renderer (where speech
+// works) and relay start/end/error events back to the originating utterance so a
+// page's button state stays in sync. Mirrors pageStorageShim's approach and must
+// run in <head>, before the page's own scripts. Seeded with the parent's voices.
+function pageTtsShim(voicesJson) {
+  return `<script>(function(){
+  var voices=${voicesJson}||[];
+  var utts={}, seq=0;
+  function send(action,u){
+    try{ parent.postMessage({__chervil:true,type:'tts',action:action,
+      id:u?u.__id:null, text:u?String(u.text||''):'', lang:u?String(u.lang||''):'',
+      rate:(u&&u.rate)?Number(u.rate):null, pitch:(u&&u.pitch)?Number(u.pitch):null,
+      voiceURI:(u&&u.voice)?String(u.voice.voiceURI||u.voice.name||''):''},'*'); }catch(e){}
+  }
+  function Utt(text){ this.text=(text==null?'':String(text)); this.lang=''; this.rate=1; this.pitch=1;
+    this.volume=1; this.voice=null; this.onstart=null; this.onend=null; this.onerror=null;
+    this.onpause=null; this.onresume=null; this.onboundary=null; this.onmark=null; this._l={}; }
+  Utt.prototype.addEventListener=function(t,fn){ (this._l[t]=this._l[t]||[]).push(fn); };
+  Utt.prototype.removeEventListener=function(t,fn){ var a=this._l[t]; if(a){var i=a.indexOf(fn); if(i>=0)a.splice(i,1);} };
+  Utt.prototype.dispatchEvent=function(){ return true; };
+  function fire(u,type){ var h=u['on'+type]; if(typeof h==='function'){try{h.call(u,{type:type,charIndex:0,elapsedTime:0});}catch(e){}}
+    var a=u._l[type]; if(a)for(var i=0;i<a.length;i++){try{a[i].call(u,{type:type});}catch(e){}} }
+  var synth={
+    speak:function(u){ if(!u)return; if(!(u instanceof Utt)){ var n=new Utt(u&&u.text);
+        if(u){n.lang=u.lang||'';n.rate=u.rate||1;n.pitch=u.pitch||1;n.voice=u.voice||null;} u=n; }
+      u.__id='u'+(++seq); utts[u.__id]=u; synth.speaking=true; send('speak',u); },
+    cancel:function(){ utts={}; synth.speaking=false; synth.paused=false; send('cancel'); },
+    pause:function(){ synth.paused=true; send('pause'); },
+    resume:function(){ synth.paused=false; send('resume'); },
+    getVoices:function(){ return voices.slice(); },
+    speaking:false, pending:false, paused:false, onvoiceschanged:null,
+    addEventListener:function(){}, removeEventListener:function(){}, dispatchEvent:function(){return true;}
+  };
+  window.addEventListener('message',function(e){
+    var d=e.data; if(!d||d.__chervil!==true||d.type!=='tts-event')return;
+    var u=utts[d.id]; if(!u)return;
+    if(d.event==='start') fire(u,'start');
+    else if(d.event==='end'){ fire(u,'end'); delete utts[d.id]; if(!Object.keys(utts).length)synth.speaking=false; }
+    else if(d.event==='error'){ fire(u,'error'); delete utts[d.id]; if(!Object.keys(utts).length)synth.speaking=false; }
+  });
+  try{Object.defineProperty(window,'speechSynthesis',{configurable:true,get:function(){return synth;}});}
+  catch(e){ try{window.speechSynthesis=synth;}catch(_){} }
+  try{ window.SpeechSynthesisUtterance=Utt; }catch(e){}
+  if(voices.length){ setTimeout(function(){ if(typeof synth.onvoiceschanged==='function'){try{synth.onvoiceschanged();}catch(e){}} },0); }
+})();</script>`;
+}
+
 // Insert a snippet as early as possible (right after <head>, else <html>, else
 // at the very front) so it runs before any of the page's own scripts.
 function injectIntoHead(html, snippet) {
@@ -1157,18 +1222,29 @@ function renderSuggestions() {
   }
 }
 
+// Park the shared <webview> on about:blank so a previously loaded site stops
+// running. Merely hiding the element or clearing the src attribute leaves the
+// prior page alive in its webContents, so a playing video (e.g. YouTube) keeps
+// decoding audio until the app quits. Navigating to about:blank tears it down.
+// Idempotent: setting the same src again is a no-op (no re-navigation).
+function parkWebview() {
+  if (!els.webview) return;
+  if ((els.webview.getAttribute('src') || '') !== 'about:blank') {
+    els.webview.setAttribute('src', 'about:blank');
+  }
+  els.webview.hidden = true;
+}
+
 function showOverlay() {
   els.frame.hidden = false;
   els.frame.removeAttribute('srcdoc');
-  els.webview.hidden = true;
-  els.webview.removeAttribute('src');
+  parkWebview();
   els.overlay.hidden = false;
   renderSuggestions();
 }
 
 function renderPageHtml(html, scrollY = 0) {
-  els.webview.hidden = true;
-  els.webview.removeAttribute('src');
+  parkWebview();
   els.frame.hidden = false;
   els.overlay.hidden = true;
   // Append the Chervil runtime (link routing + applet bridge), plus an optional
@@ -1190,7 +1266,8 @@ function renderPageHtml(html, scrollY = 0) {
     seed = pageStores[entry.storeKey] || {};
   }
   const shim = pageStorageShim(JSON.stringify(seed).replace(/</g, '\\u003c'));
-  els.frame.setAttribute('srcdoc', injectIntoHead(html, shim) + clearance + CHERVIL_RUNTIME + restore);
+  const ttsShim = pageTtsShim(frameVoicesJson());
+  els.frame.setAttribute('srcdoc', injectIntoHead(html, shim + ttsShim) + clearance + CHERVIL_RUNTIME + restore);
 }
 
 function renderSite(url) {
@@ -1491,6 +1568,73 @@ function toggleAudio() {
     window.speechSynthesis.pause();
     els.audioToggle.textContent = 'Play';
   }
+}
+
+// --- Pronunciation / page TTS bridge -------------------------------------
+// Composed pages run in a sandboxed iframe where speechSynthesis is inert, so
+// their "Listen / pronounce" buttons forward here (see pageTtsShim) and we speak
+// from the top-level renderer, where TTS works, posting events back to the page.
+
+// Best-effort language guess from the script of the text, so a Chinese phrase
+// gets a Chinese voice even when the page didn't set utterance.lang.
+function guessTtsLang(text) {
+  const s = String(text || '');
+  if (/[぀-ヿ]/.test(s)) return 'ja-JP';   // hiragana/katakana
+  if (/[가-힯]/.test(s)) return 'ko-KR';   // hangul
+  if (/[一-鿿]/.test(s)) return 'zh-CN';   // CJK ideographs
+  if (/[؀-ۿ]/.test(s)) return 'ar-SA';   // arabic
+  if (/[Ѐ-ӿ]/.test(s)) return 'ru-RU';   // cyrillic
+  return '';
+}
+
+// Pick a voice for a requested lang (falling back to an explicit voiceURI, then
+// the user's narration voice). A language match matters most for pronunciation.
+function voiceForTts(lang, voiceURI) {
+  const vs = cachedVoices.length ? cachedVoices : (window.speechSynthesis ? window.speechSynthesis.getVoices() : []);
+  if (voiceURI) {
+    const exact = vs.find((v) => v.voiceURI === voiceURI || v.name === voiceURI);
+    if (exact) return exact;
+  }
+  if (lang) {
+    const pre = lang.slice(0, 2).toLowerCase();
+    const langVoices = vs.filter((v) => (v.lang || '').toLowerCase().startsWith(pre));
+    if (langVoices.length) {
+      return langVoices.find((v) => /natural|online|google|microsoft/i.test(v.name)) || langVoices[0];
+    }
+  }
+  return pickVoice();
+}
+
+function handleFrameTts(source, msg) {
+  if (!window.speechSynthesis) return;
+  const send = (event) => {
+    try { if (source) source.postMessage({ __chervil: true, type: 'tts-event', id: msg.id, event }, '*'); }
+    catch { /* ignore */ }
+  };
+  const action = msg.action;
+  if (action === 'cancel') { try { window.speechSynthesis.cancel(); } catch { /* ignore */ } return; }
+  if (action === 'pause') { try { window.speechSynthesis.pause(); } catch { /* ignore */ } return; }
+  if (action === 'resume') { try { window.speechSynthesis.resume(); } catch { /* ignore */ } return; }
+  if (action !== 'speak') return;
+  const text = String(msg.text || '').trim();
+  if (!text) return;
+  // A pronunciation tap replaces any in-flight speech (including a page narration)
+  // so words don't overlap.
+  if (audioPlaying) stopAudio();
+  try { window.speechSynthesis.cancel(); } catch { /* ignore */ }
+  const u = new SpeechSynthesisUtterance(text);
+  const lang = msg.lang || guessTtsLang(text);
+  if (lang) u.lang = lang;
+  const rate = Number(msg.rate);
+  if (rate >= 0.1 && rate <= 10) u.rate = rate;
+  const pitch = Number(msg.pitch);
+  if (pitch >= 0 && pitch <= 2) u.pitch = pitch;
+  const v = voiceForTts(lang, msg.voiceURI);
+  if (v) u.voice = v;
+  u.onstart = () => send('start');
+  u.onend = () => send('end');
+  u.onerror = () => send('error');
+  try { window.speechSynthesis.speak(u); } catch { send('error'); }
 }
 
 function playPageAudio() {
@@ -4329,11 +4473,17 @@ async function chatSubmit(tab, text) {
   const isActive = () => tab.id === activeId;
   if (isActive()) { setStatus(rs.statusText); setBadge('working', 'working'); setSendBusy(true); }
 
+  // If a Chervil-composed page is showing in this tab, send it as context so chat
+  // mode can answer questions about the page the user is looking at.
+  const composed = currentEntry(tab);
+  const pageContext = (composed && composed.kind === 'page') ? composed.html : null;
+
   try {
     const resp = await window.chervil.chat({
       query,
       history: sentHistory,
       profile: settings.profile || null,
+      pageContext,
       config: providerConfig(),
     });
     rs.genId = null; rs.statusText = '';
@@ -6942,6 +7092,7 @@ window.addEventListener('message', (e) => {
   if (!d || d.__chervil !== true) return;
   if (d.type === 'link' && d.href) { handleLinkClick(d.href, d.text || ''); return; }
   if (d.type === 'tool') { handleAppletTool(e.source, d); return; }
+  if (d.type === 'tts') { handleFrameTts(e.source, d); return; }
   if (d.type === 'scroll' && typeof d.y === 'number') { previewScrollY = d.y; return; }
   // An interactive page saved its state (shimmed localStorage) — persist it under
   // the active page's stable storeKey so it survives reopen/bookmark.
@@ -7133,10 +7284,45 @@ if (window.chervil.onDownloadDone) {
   });
 }
 
-// Show the running app version in Settings (from the preload bridge).
+// Show the running app version in Settings (from the preload bridge), and wire
+// the "Check for updates" link to the GitHub-releases check.
 {
   const av = document.getElementById('app-version');
   if (av && window.chervil && window.chervil.version) av.textContent = window.chervil.version;
+
+  const btn = document.getElementById('check-updates-btn');
+  const status = document.getElementById('update-status');
+  if (btn && status && window.chervil && window.chervil.checkForUpdates) {
+    btn.addEventListener('click', async () => {
+      btn.disabled = true;
+      status.textContent = ' · Checking…';
+      let res;
+      try { res = await window.chervil.checkForUpdates(); }
+      catch (e) { res = { ok: false, error: String((e && e.message) || e) }; }
+      btn.disabled = false;
+      status.textContent = '';
+      if (!res || !res.ok) {
+        status.textContent = ` · ${(res && res.error) || 'Update check failed.'}`;
+        return;
+      }
+      if (res.hasUpdate) {
+        status.appendChild(document.createTextNode(` · v${res.latest} available — `));
+        const link = document.createElement('a');
+        link.className = 'update-link';
+        link.textContent = 'Download';
+        link.href = '#';
+        link.addEventListener('click', (ev) => {
+          ev.preventDefault();
+          if (window.chervil.openExternal) window.chervil.openExternal(res.url);
+        });
+        status.appendChild(link);
+      } else {
+        status.textContent = ` · You’re on the latest (v${res.current}).`;
+      }
+    });
+  } else if (btn) {
+    btn.style.display = 'none'; // older preload without the bridge
+  }
 }
 
 init();

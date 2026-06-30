@@ -495,6 +495,50 @@ ipcMain.handle('chervil:os-action', async (_event, payload) => {
 // App version for the sandboxed preload (it can't read package.json directly).
 ipcMain.on('chervil:get-version', (event) => { event.returnValue = app.getVersion(); });
 
+// --- Check for updates -----------------------------------------------------
+// Chervil ships as a GitHub Release (an Inno Setup installer); there's no silent
+// auto-updater yet (that wants signed builds). This checks the latest release tag
+// against the running version and tells the renderer where to download a newer
+// one — the user opens the installer in their browser. Failures are returned,
+// never thrown.
+const RELEASES_API = 'https://api.github.com/repos/chervil-ai/chervil/releases/latest';
+const RELEASES_PAGE = 'https://github.com/chervil-ai/chervil/releases/latest';
+
+function parseSemver(v) {
+  const m = String(v || '').trim().replace(/^v/i, '').match(/^(\d+)\.(\d+)\.(\d+)/);
+  return m ? [Number(m[1]), Number(m[2]), Number(m[3])] : null;
+}
+// 1 if a>b, -1 if a<b, 0 if equal or either is unparseable.
+function compareSemver(a, b) {
+  const pa = parseSemver(a), pb = parseSemver(b);
+  if (!pa || !pb) return 0;
+  for (let i = 0; i < 3; i++) { if (pa[i] !== pb[i]) return pa[i] > pb[i] ? 1 : -1; }
+  return 0;
+}
+
+ipcMain.handle('chervil:check-for-updates', async () => {
+  const current = app.getVersion();
+  try {
+    const res = await fetch(RELEASES_API, {
+      headers: { Accept: 'application/vnd.github+json', 'User-Agent': `Chervil/${current}` },
+    });
+    if (!res.ok) return { ok: false, error: `Update check failed (${res.status}).`, current };
+    const data = await res.json().catch(() => ({}));
+    const latest = String(data.tag_name || data.name || '').replace(/^v/i, '');
+    if (!latest) return { ok: false, error: 'Could not read the latest version.', current };
+    const hasUpdate = compareSemver(latest, current) > 0;
+    // Prefer the Windows installer asset; fall back to the release page.
+    let url = data.html_url || RELEASES_PAGE;
+    const asset = Array.isArray(data.assets)
+      ? data.assets.find((a) => /Setup.*\.exe$/i.test((a && a.name) || ''))
+      : null;
+    if (asset && asset.browser_download_url) url = asset.browser_download_url;
+    return { ok: true, current, latest, hasUpdate, url };
+  } catch (err) {
+    return { ok: false, error: String(err && err.message ? err.message : err), current };
+  }
+});
+
 // Account status for Settings → You (publish-token auth → { pro, username }).
 ipcMain.handle('chervil:account-status', async (_event, payload) => {
   try {
@@ -998,8 +1042,8 @@ ipcMain.handle('chervil:creds-for-origin', async (_e, payload) => {
 // --- Plain chat ("Just a chatbot" mode): a text reply, no page composed ----
 ipcMain.handle('chervil:chat', async (_event, payload) => {
   try {
-    const { query, history, profile } = payload || {};
-    const res = await runChat({ query, history: history || [], profile: profile || null, config: providerConfigFrom(payload) });
+    const { query, history, profile, pageContext } = payload || {};
+    const res = await runChat({ query, history: history || [], profile: profile || null, pageContext: pageContext || null, config: providerConfigFrom(payload) });
     return { ok: true, text: res.text };
   } catch (err) {
     return { ok: false, error: String(err && err.message ? err.message : err) };

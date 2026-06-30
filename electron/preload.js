@@ -12,6 +12,9 @@ try { APP_VERSION = ipcRenderer.sendSync('chervil:get-version') || ''; } catch {
 contextBridge.exposeInMainWorld('chervil', {
   /** Running app version (e.g. "0.2.0"). */
   version: APP_VERSION,
+
+  /** Check GitHub Releases for a newer version → { ok, current, latest, hasUpdate, url }. */
+  checkForUpdates: () => ipcRenderer.invoke('chervil:check-for-updates'),
   /**
    * Ask Chervil something.
    * @param {{query: string, history: Array}} payload

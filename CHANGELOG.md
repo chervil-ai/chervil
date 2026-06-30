@@ -6,6 +6,34 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.9.0] — 2026-06-30
+
+Sharing season. This release is about getting what you make in front of people — and
+fixing a couple of things that should have just worked. Chat can now talk about the
+page you're looking at, and an in-app update check tells you when there's a newer
+Chervil to grab. Two fixes land too: closing a tab finally stops its audio, and the
+“Listen / pronounce” buttons on composed pages actually make sound. (On the web side,
+getchervil.com gains community ratings, hero images in link previews, and share
+buttons — more in the blog.)
+
+### Added
+- **Check for updates.** In **Settings → You**, next to the version, a “Check for
+  updates” link tells you whether a newer Chervil has been released and links
+  straight to the download.
+- **Chat about the page you composed.** Switch a tab with a composed page into chat
+  mode (💬) and Sprig can now answer questions about that page — summarize it, explain
+  a section, quiz you on it — using the page's own content. Toggle 💬 off to go back to
+  composing; the page stays in view the whole time.
+
+### Fixed
+- **Closing a tab now stops its audio.** Playing a video (e.g. on YouTube) and then
+  closing the tab no longer left the sound playing in the background until you quit
+  Chervil — the page is now fully unloaded when you navigate away from it.
+- **"Listen / pronounce" buttons on composed pages now make sound.** Pages built by
+  Chervil (like language lessons) run in a sandbox where the browser's speech engine
+  was silent; their pronunciation buttons now play through Chervil's voice, picking a
+  matching voice for the language (Chinese, Japanese, Korean, and more).
+
 ## [0.8.0] — 2026-06-29
 
 You're at the controls. This release is about making Chervil a more capable everyday
