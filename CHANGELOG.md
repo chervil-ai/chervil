@@ -6,6 +6,26 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.10.0] — 2026-07-01
+
+Chat gets smart, and Chervil gets docs. Chat mode used to be a knowledgeable but
+offline chatbot — now it searches the live web on its own when a question needs
+current answers, and shows its sources right under the reply. And there's finally a
+proper home for how-to: a full documentation site at
+[getchervil.com/docs](https://getchervil.com/docs), linked from inside the app.
+
+### Added
+- **Chat mode can search the web.** Flip on chat mode (💬) and Sprig now reaches the
+  live web on its own whenever a question needs current information — news, prices,
+  scores, weather, "who currently holds…". The sources it used are listed right under
+  the answer, and it still answers evergreen questions directly (and instantly) without
+  searching. Works on Claude, Grok, Gemini, and OpenAI; on providers without web search
+  (Azure, Ollama) chat stays knowledge-only and says so.
+- **Documentation.** A full docs site is live at **getchervil.com/docs** — install,
+  providers & keys, compose vs. chat, Deep Dive & Verify, real-world actions, Spaces,
+  agents, Hey Sprig, and publishing. Reach it from the **welcome screen** ("Read the
+  docs →") or **Settings → You → Documentation**.
+
 ## [0.9.0] — 2026-06-30
 
 Sharing season. This release is about getting what you make in front of people — and

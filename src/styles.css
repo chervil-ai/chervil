@@ -293,6 +293,23 @@ html, body {
   color: #ffb4b4;
 }
 
+/* Live web sources under a chat reply (chat mode can search the web). */
+.chat-sources {
+  margin-top: 8px;
+  padding-top: 6px;
+  border-top: 1px solid var(--border);
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+.chat-sources-label { color: var(--muted); }
+.chat-source-link {
+  color: var(--accent);
+  text-decoration: none;
+  cursor: pointer;
+}
+.chat-source-link:hover { text-decoration: underline; }
+
 .dot-pulse {
   width: 8px; height: 8px; border-radius: 50%;
   background: var(--accent);
@@ -1069,6 +1086,8 @@ html, body {
 .overlay-card h1 { font-size: 32px; margin: 0 0 8px; }
 .overlay-sub { color: var(--text); font-size: 16px; margin: 0 0 6px; }
 .overlay-hint { color: var(--muted); font-size: 14px; line-height: 1.6; margin: 0 0 24px; }
+
+.overlay-docs { color: var(--muted); font-size: 13px; margin: 22px 0 0; }
 
 .suggestions { display: flex; flex-wrap: wrap; gap: 10px; justify-content: center; }
 .suggestions button {

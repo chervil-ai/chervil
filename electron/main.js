@@ -1044,7 +1044,7 @@ ipcMain.handle('chervil:chat', async (_event, payload) => {
   try {
     const { query, history, profile, pageContext } = payload || {};
     const res = await runChat({ query, history: history || [], profile: profile || null, pageContext: pageContext || null, config: providerConfigFrom(payload) });
-    return { ok: true, text: res.text };
+    return { ok: true, text: res.text, sources: res.sources || [] };
   } catch (err) {
     return { ok: false, error: String(err && err.message ? err.message : err) };
   }

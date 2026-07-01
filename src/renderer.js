@@ -1065,7 +1065,7 @@ function renderConversation() {
   activeStatusEl = null;
   const tab = activeTab();
   if (!tab) return;
-  for (const m of tab.conversation) appendMessageEl(m.role, m.text, m.cls);
+  for (const m of tab.conversation) appendMessageEl(m.role, m.text, m.cls, m.sources);
   const rs = runState.get(tab.id);
   if (rs && rs.genId) setStatus(rs.statusText || 'Thinking…');
   els.conversation.scrollTop = els.conversation.scrollHeight;
@@ -1079,7 +1079,7 @@ function sprigAvatar() {
   return av;
 }
 
-function appendMessageEl(role, text, cls) {
+function appendMessageEl(role, text, cls, sources) {
   // Bot messages come from Sprig, so pair them with his avatar.
   if (role === 'bot') {
     const row = document.createElement('div');
@@ -1087,6 +1087,28 @@ function appendMessageEl(role, text, cls) {
     const bubble = document.createElement('div');
     bubble.className = `msg bot${cls ? ' ' + cls : ''}`;
     bubble.textContent = text;
+    // Chat mode can search the web — when it did, list the live sources it used
+    // as clickable links under the reply (they open like any other Chervil link).
+    if (Array.isArray(sources) && sources.length) {
+      const foot = document.createElement('div');
+      foot.className = 'chat-sources';
+      const label = document.createElement('span');
+      label.className = 'chat-sources-label';
+      label.textContent = 'Sources: ';
+      foot.appendChild(label);
+      sources.forEach((s, i) => {
+        if (!s || !s.url) return;
+        const a = document.createElement('a');
+        a.href = '#';
+        a.className = 'chat-source-link';
+        a.textContent = s.title || s.url;
+        a.title = s.url;
+        a.addEventListener('click', (e) => { e.preventDefault(); handleLinkClick(s.url, s.title || ''); });
+        foot.appendChild(a);
+        if (i < sources.length - 1) foot.appendChild(document.createTextNode(', '));
+      });
+      bubble.appendChild(foot);
+    }
     row.appendChild(sprigAvatar());
     row.appendChild(bubble);
     els.conversation.appendChild(row);
@@ -1100,10 +1122,10 @@ function appendMessageEl(role, text, cls) {
 }
 
 // Adds a persisted message to a specific tab; renders if that tab is active.
-function addMessage(tab, role, text, cls = '') {
-  tab.conversation.push({ role, text, cls });
+function addMessage(tab, role, text, cls = '', sources = null) {
+  tab.conversation.push({ role, text, cls, ...(sources && sources.length ? { sources } : {}) });
   if (tab.id === activeId) {
-    appendMessageEl(role, text, cls);
+    appendMessageEl(role, text, cls, sources);
     els.conversation.scrollTop = els.conversation.scrollHeight;
   }
   scheduleSave();
@@ -4492,7 +4514,7 @@ async function chatSubmit(tab, text) {
       addMessage(tab, 'bot', (resp && resp.error) || 'Something went wrong.', 'error');
     } else {
       const reply = resp.text || '…';
-      addMessage(tab, 'bot', reply);
+      addMessage(tab, 'bot', reply, '', resp.sources || []);
       tab.history.push({ role: 'assistant', content: reply });
     }
   } catch (e) {
@@ -6734,6 +6756,17 @@ els.suggestions.addEventListener('click', (e) => {
   if (btn) handleComposerSubmit(btn.getAttribute('data-q'));
 });
 
+// Welcome overlay → docs site (opens in the user's browser).
+const overlayDocsLink = document.getElementById('overlay-docs-link');
+if (overlayDocsLink && window.chervil && window.chervil.openExternal) {
+  overlayDocsLink.addEventListener('click', () => {
+    const base = (settings.publishBase || 'https://getchervil.com').replace(/\/+$/, '');
+    window.chervil.openExternal(`${base}/docs`);
+  });
+} else if (overlayDocsLink) {
+  overlayDocsLink.style.display = 'none'; // older preload without the bridge
+}
+
 els.newTab.addEventListener('click', () => newTab(true));
 els.tabActions.addEventListener('click', (e) => {
   e.stopPropagation();
@@ -7322,6 +7355,17 @@ if (window.chervil.onDownloadDone) {
     });
   } else if (btn) {
     btn.style.display = 'none'; // older preload without the bridge
+  }
+
+  // Documentation link — opens the docs site in the user's browser.
+  const docsBtn = document.getElementById('docs-link-btn');
+  if (docsBtn) {
+    if (window.chervil && window.chervil.openExternal) {
+      const base = (settings.publishBase || 'https://getchervil.com').replace(/\/+$/, '');
+      docsBtn.addEventListener('click', () => window.chervil.openExternal(`${base}/docs`));
+    } else {
+      docsBtn.style.display = 'none'; // older preload without the bridge
+    }
   }
 }
 
