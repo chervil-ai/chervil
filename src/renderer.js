@@ -107,6 +107,8 @@ const els = {
   modelCustom: document.getElementById('model-custom'),
   ollamaExtra: document.getElementById('ollama-extra'),
   ollamaUrl: document.getElementById('ollama-url'),
+  ollamaUrlStatus: document.getElementById('ollama-url-status'),
+  ollamaKeyHint: document.getElementById('ollama-key-hint'),
   azureExtra: document.getElementById('azure-extra'),
   azureEndpoint: document.getElementById('azure-endpoint'),
   azureDeployment: document.getElementById('azure-deployment'),
@@ -158,8 +160,27 @@ const els = {
   libTabHistory: document.getElementById('lib-tab-history'),
   libTabBookmarks: document.getElementById('lib-tab-bookmarks'),
   libTabSites: document.getElementById('lib-tab-sites'),
+  libTabDownloads: document.getElementById('lib-tab-downloads'),
   libTabTrash: document.getElementById('lib-tab-trash'),
   clearSites: document.getElementById('clear-sites'),
+  clearDownloads: document.getElementById('clear-downloads'),
+  libSearch: document.getElementById('lib-search'),
+  libNewFolder: document.getElementById('lib-new-folder'),
+  bookmarksBar: document.getElementById('bookmarks-bar'),
+  bookmarksBarToggle: document.getElementById('bookmarks-bar-toggle'),
+  makeDefaultBtn: document.getElementById('make-default-btn'),
+  defaultBrowserStatus: document.getElementById('default-browser-status'),
+  adblockToggle: document.getElementById('adblock-toggle'),
+  adblockStat: document.getElementById('adblock-stat'),
+  clearDataBtn: document.getElementById('clear-data-btn'),
+  menuBarToggle: document.getElementById('menu-bar-toggle'),
+  zoomControls: document.getElementById('zoom-controls'),
+  zoomIndicator: document.getElementById('zoom-indicator'),
+  zoomIn: document.getElementById('zoom-in'),
+  zoomOut: document.getElementById('zoom-out'),
+  printBtn: document.getElementById('print-btn'),
+  readerBtn: document.getElementById('reader-btn'),
+  pipBtn: document.getElementById('pip-btn'),
   bookmarkBtn: document.getElementById('bookmark-btn'),
   pwFillBtn: document.getElementById('autofill-pw-btn'),
   emptyTrash: document.getElementById('empty-trash'),
@@ -241,6 +262,11 @@ let settings = {
   spaceFilesMode: 'synthesize', // pinned Space files feed the model: 'synthesize' | 'always' | 'off'
   toolbar: {},               // which top-bar buttons to show — { key: false } hides one (missing = shown)
   credsAutoLock: 'hide',     // password vault auto-lock: 'hide' | '5' | '15' | '30' (min idle) | 'never'
+  pageZoom: 1,               // viewport zoom for the page/site (Ctrl +/−/0), applied to the frame + webview
+  searchEngine: 'google',    // engine used by omnibox search escapes (g!/ddg!/b!/s!) — 'google' | 'duckduckgo' | 'bing'
+  bookmarksBar: false,       // show the bookmarks strip under the omnibar (Ctrl+Shift+B)
+  adblock: false,            // block common ad/tracker hosts in embedded sites (main-process filter)
+  showMenuBar: false,        // always show the native menu bar (File/Edit/View); else Alt reveals it
 };
 
 // Per-provider metadata for the Settings UI.
@@ -304,16 +330,20 @@ function providerConfig(agentOverride) {
 // Auto-collected library of composed pages, plus a trash bin.
 //   item = { id, createdAt, title, query, html, sources, conversation, history, spaceId }
 let library = { history: [], trash: [] };
-let bookmarks = []; // [{ id, key, kind:'site'|'page', url?, query?, title, at }]
+let bookmarks = []; // [{ id, key, kind:'site'|'page', url?, query?, title, at, folder? }]
+let bookmarkFolders = []; // ordered folder names; also holds empty folders (bookmarks carry `folder`)
 // Tombstones for removed bookmarks, so a delete propagates across synced machines
 // and the union-merge (lib/stateMerge.js) doesn't resurrect it. [{ key, at }]
 let bookmarkTombstones = [];
 const MAX_BOOKMARK_TOMBSTONES = 1000;
 let siteHistory = []; // [{ id, url, title, at }] newest-first — real sites visited
 const MAX_SITE_HISTORY = 500;
+let downloads = []; // [{ id, filename, path, at, ok, state }] newest-first — files saved from embedded sites
+const MAX_DOWNLOADS = 200;
 let agentAudit = []; // [{ at, type, target, decision, ok }] — agent action audit trail (RFC 0006)
 const MAX_AGENT_AUDIT = 500;
 let drawerTab = 'history';
+let librarySearch = ''; // filter text for the Library drawer list (all tabs)
 // History multi-select (bulk delete) state.
 let librarySelectMode = false;
 let selectedLibraryIds = new Set();
@@ -418,6 +448,15 @@ const CHERVIL_RUNTIME = `<script>(function(){
       if(!d.text){ var s = window.getSelection && window.getSelection(); if(s) s.removeAllRanges(); return; }
       window.find(d.text, false, !!d.back, true, false, false, false);
     } catch(_){}
+  });
+  // Page zoom + print: the sandboxed frame is a separate origin, so the parent
+  // can't touch it directly — it posts these in. Zoom scales the document root;
+  // print must originate inside the frame (parent can't call our print()).
+  window.addEventListener('message', function(e){
+    var d = e.data;
+    if(!d || d.__chervil !== true) return;
+    if(d.type === 'zoom'){ try { document.documentElement.style.zoom = d.factor || 1; } catch(_){} }
+    else if(d.type === 'print'){ try { window.print(); } catch(_){} }
   });
   function call(name, args){
     return new Promise(function(resolve, reject){
@@ -593,15 +632,16 @@ function ancestorIds(tab, id) {
   return set;
 }
 
-function newTab(activate = true) {
+function newTab(activate = true, opts = {}) {
   const tab = {
     id: uid(),
-    title: 'New Tab',
+    title: opts.private ? 'Private Tab' : 'New Tab',
     conversation: [],
     history: [],
     pages: [],
     currentId: null,
     pinned: false,
+    private: !!opts.private, // ephemeral: not saved to history/library/session-restore
   };
   tabs.push(tab);
   if (activate) activeId = tab.id;
@@ -848,6 +888,8 @@ function onTabMenuClick(act) {
   closeTabMenu();
   if (!id) return;
   if (act === 'new') newTab(true);
+  else if (act === 'new-private') newTab(true, { private: true });
+  else if (act === 'new-window') { if (window.chervil.newWindow) window.chervil.newWindow(); }
   else if (act === 'pin') toggleTabPin(id);
   else if (act === 'close') closeTab(id);
   else if (act === 'others') closeOtherTabs(id);
@@ -910,6 +952,7 @@ function renderTabs() {
     el.className = 'tab'
       + (tab.id === activeId ? ' active' : '')
       + (tab.pinned ? ' pinned' : '')
+      + (tab.private ? ' private' : '')
       + (tabSelectMode ? ' selecting' : '')
       + (selectedTabIds.has(tab.id) ? ' sel' : '');
     el.title = tabLabel(tab);
@@ -930,10 +973,38 @@ function renderTabs() {
       el.appendChild(pin);
     }
 
+    if (tab.private) {
+      const mask = document.createElement('span');
+      mask.className = 'tab-private';
+      mask.textContent = '🕶';
+      mask.title = 'Private tab — not saved to your history or library';
+      el.appendChild(mask);
+    }
+
+    // Audio badge: on the active live-site tab when it's audible or muted. Click to
+    // mute/unmute. (Background tabs are parked, so only the active site plays.)
+    if (!tabSelectMode && tab.id === activeId && (webviewAudible || tab.muted)) {
+      const spk = document.createElement('span');
+      spk.className = 'tab-audio' + (tab.muted ? ' muted' : '');
+      spk.textContent = tab.muted ? '🔇' : '🔊';
+      spk.title = tab.muted ? 'Unmute this tab' : 'Mute this tab';
+      spk.addEventListener('click', (e) => { e.stopPropagation(); toggleTabMute(tab.id); });
+      el.appendChild(spk);
+    }
+
     if (isTabBusy(tab.id)) {
       const spin = document.createElement('span');
       spin.className = 'tab-spin';
       el.appendChild(spin);
+    }
+
+    // Favicon for tabs currently showing a real site (composed pages have none).
+    if (!tabSelectMode) {
+      const ce = currentEntry(tab);
+      if (ce && ce.kind === 'navigate' && ce.url) {
+        const fav = faviconImg(ce.url, 'tab-favicon');
+        if (fav) el.appendChild(fav);
+      }
     }
 
     const title = document.createElement('span');
@@ -1278,6 +1349,10 @@ function renderPageHtml(html, scrollY = 0) {
   // last lines. (Slide decks handle this themselves by centering content within the
   // viewport — see the Slides remix request.)
   const clearance = '<style>body{padding-bottom:140px !important;}</style>';
+  // Open at the current zoom level so composed pages match the toolbar/webview zoom.
+  const zoomStyle = (settings.pageZoom && settings.pageZoom !== 1)
+    ? `<style>html{zoom:${settings.pageZoom};}</style>`
+    : '';
   // Seed the page's (shimmed) localStorage from saved state so interactive pages —
   // checklists, toggles — restore their state on reopen. Keyed by a stable storeKey
   // on the entry that travels with bookmark/history snapshots.
@@ -1289,7 +1364,7 @@ function renderPageHtml(html, scrollY = 0) {
   }
   const shim = pageStorageShim(JSON.stringify(seed).replace(/</g, '\\u003c'));
   const ttsShim = pageTtsShim(frameVoicesJson());
-  els.frame.setAttribute('srcdoc', injectIntoHead(html, shim + ttsShim) + clearance + CHERVIL_RUNTIME + restore);
+  els.frame.setAttribute('srcdoc', injectIntoHead(html, shim + ttsShim) + clearance + zoomStyle + CHERVIL_RUNTIME + restore);
 }
 
 function renderSite(url) {
@@ -1350,6 +1425,166 @@ function renderCurrentPage() {
   updatePlaceholder();
   updateBookmarkStar();
   updatePwFillButton();
+  applyZoom();
+  const onLiveSite = !!(entry && entry.kind === 'navigate');
+  if (els.readerBtn) els.readerBtn.disabled = !onLiveSite; // reader = live sites only
+  if (els.pipBtn) els.pipBtn.disabled = !onLiveSite;       // PiP = live-site video only
+  if (onLiveSite) applyTabMute();
+  else webviewAudible = false;
+}
+
+// ---- Page zoom (Ctrl +/−/0) ----
+// One zoom level for whatever's showing — a composed page (iframe) or an embedded
+// site (webview). Discrete steps like a real browser. Persisted in settings.
+const ZOOM_STEPS = [0.5, 0.67, 0.75, 0.8, 0.9, 1, 1.1, 1.25, 1.5, 1.75, 2, 2.5, 3];
+
+// Push the current zoom to whichever view is visible and refresh the indicator.
+function applyZoom() {
+  const z = settings.pageZoom || 1;
+  try { if (els.webview && !els.webview.hidden) els.webview.setZoomFactor(z); } catch { /* webview not ready */ }
+  try {
+    if (els.frame && !els.frame.hidden && els.frame.contentWindow) {
+      els.frame.contentWindow.postMessage({ __chervil: true, type: 'zoom', factor: z }, '*');
+    }
+  } catch { /* frame not ready — the injected zoomStyle covers first paint */ }
+  // Always reflect the level — the whole cluster is shown/hidden via the toolbar
+  // toggle (settings.toolbar.zoom), not by whether we're at 100%.
+  if (els.zoomIndicator) els.zoomIndicator.textContent = `${Math.round(z * 100)}%`;
+}
+
+function setZoom(z) {
+  settings.pageZoom = Math.min(3, Math.max(0.5, Math.round(z * 100) / 100));
+  applyZoom();
+  scheduleSave();
+  // No toast — it lands bottom-right on top of the minimized remix handle. The
+  // always-visible zoom control shows the current level instead.
+}
+
+// Step to the next/previous zoom level relative to the closest current step.
+function nudgeZoom(dir) {
+  const cur = settings.pageZoom || 1;
+  let nearest = 0;
+  for (let i = 1; i < ZOOM_STEPS.length; i++) {
+    if (Math.abs(ZOOM_STEPS[i] - cur) < Math.abs(ZOOM_STEPS[nearest] - cur)) nearest = i;
+  }
+  const idx = Math.min(ZOOM_STEPS.length - 1, Math.max(0, nearest + (dir > 0 ? 1 : -1)));
+  setZoom(ZOOM_STEPS[idx]);
+}
+
+// ---- Print (Ctrl+P) ----
+// Print the visible view: the webview prints itself; the sandboxed frame can't be
+// driven from here, so we ask it to print itself via the runtime bridge.
+function printCurrentView() {
+  try {
+    if (els.webview && !els.webview.hidden) { els.webview.print(); return; }
+    if (els.frame && !els.frame.hidden && els.frame.contentWindow) {
+      els.frame.contentWindow.postMessage({ __chervil: true, type: 'print' }, '*');
+      return;
+    }
+    toast('Open a page or site first, then print.');
+  } catch { toast('Couldn’t open the print dialog.'); }
+}
+
+// ---- Reader mode (declutter a live site) ----
+// A Readability-lite extractor injected into the embedded site: it picks the main
+// content root, strips chrome/ads/scripts, absolutizes links + images, and returns
+// clean HTML. Runs client-side (no model cost). The result becomes a normal Chervil
+// page (so Back returns to the live site, and Audio/Export work on it).
+const READER_EXTRACT_JS = `(function(){
+  try {
+    function tlen(el){ return ((el&&el.innerText)||'').replace(/\\s+/g,' ').trim().length; }
+    var root = document.querySelector('article') || document.querySelector('[role=main]') || document.querySelector('main');
+    if(!root){
+      var best=null,bestScore=0,cands=document.querySelectorAll('div,section');
+      for(var i=0;i<cands.length;i++){
+        var ps=cands[i].querySelectorAll(':scope > p'); if(ps.length<2) continue;
+        var s=0; for(var j=0;j<ps.length;j++) s+=(ps[j].innerText||'').length;
+        if(s>bestScore){bestScore=s;best=cands[i];}
+      }
+      root=best;
+    }
+    if(!root) return {ok:false};
+    var clone=root.cloneNode(true);
+    var kill=clone.querySelectorAll('script,style,noscript,nav,aside,header,footer,form,iframe,button,svg,video,audio,[role=navigation],[aria-hidden=true],.ad,.ads,.advert,.share,.social,.newsletter,.promo,.subscribe,.comments,.related,.sidebar');
+    for(var k=0;k<kill.length;k++){ if(kill[k]&&kill[k].parentNode) kill[k].parentNode.removeChild(kill[k]); }
+    var imgs=clone.querySelectorAll('img[src]'); for(var a=0;a<imgs.length;a++){ try{ imgs[a].setAttribute('src', new URL(imgs[a].getAttribute('src'), location.href).href); imgs[a].removeAttribute('srcset'); imgs[a].removeAttribute('loading'); }catch(e){} }
+    var links=clone.querySelectorAll('a[href]'); for(var b=0;b<links.length;b++){ try{ links[b].setAttribute('href', new URL(links[b].getAttribute('href'), location.href).href); }catch(e){} }
+    var all=clone.querySelectorAll('*'); for(var m=0;m<all.length;m++){ var el=all[m]; for(var x=el.attributes.length-1;x>=0;x--){ var an=el.attributes[x].name; if(an.indexOf('on')===0||an==='style'||an==='class'||an==='id') el.removeAttribute(an); } }
+    if(tlen(clone)<200) return {ok:false};
+    var h1=document.querySelector('h1');
+    var title=(h1&&h1.innerText)||document.title||'';
+    var by=''; var mby=document.querySelector('meta[name="author"], meta[property="article:author"]'); if(mby) by=mby.getAttribute('content')||'';
+    return {ok:true, title:title.trim(), byline:(by||'').trim(), host:location.host, url:location.href, html:clone.innerHTML};
+  } catch(e){ return {ok:false, error:String((e&&e.message)||e)}; }
+})()`;
+
+function buildReaderHtml(r) {
+  const esc = (s) => String(s || '').replace(/[<>&]/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;' }[c]));
+  const title = esc(r.title || 'Article');
+  const by = r.byline ? `<p class="byline">${esc(r.byline)}</p>` : '';
+  const src = r.url ? `<p class="src"><a href="${esc(r.url)}">${esc(r.host || r.url)}</a></p>` : '';
+  return `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${title}</title>
+<style>
+:root{color-scheme:light}
+body{font-family:Georgia,'Times New Roman',serif;max-width:720px;margin:0 auto;padding:56px 24px 96px;line-height:1.7;font-size:19px;color:#1a1a1a;background:#faf9f7;}
+h1{font-family:system-ui,-apple-system,sans-serif;font-size:32px;line-height:1.2;margin:0 0 8px;}
+.byline{color:#666;font-style:italic;margin:0 0 2px;}
+.src{margin:0 0 28px;font-family:system-ui,sans-serif;font-size:13px;}
+.src a{color:#2c8a5b;text-decoration:none;}
+img{max-width:100%;height:auto;border-radius:8px;margin:18px 0;}
+a{color:#1a6e46;}
+h2,h3{font-family:system-ui,-apple-system,sans-serif;line-height:1.3;margin-top:1.6em;}
+blockquote{border-left:3px solid #d8d5cf;margin:1em 0;padding:0.2em 0 0.2em 1em;color:#555;}
+pre{background:#f0ede8;padding:12px;border-radius:8px;overflow:auto;font-size:15px;}
+hr{border:none;border-top:1px solid #e2ded7;margin:2em 0;}
+</style></head><body>
+<h1>${title}</h1>${by}${src}
+<div class="reader-content">${r.html}</div>
+</body></html>`;
+}
+
+async function openReaderView() {
+  const tab = activeTab();
+  const entry = currentEntry(tab);
+  if (!entry || entry.kind !== 'navigate') { toast('Reader view works on a live website.'); return; }
+  toast('Preparing reader view…');
+  let r;
+  try { r = await els.webview.executeJavaScript(READER_EXTRACT_JS, true); } catch { r = null; }
+  if (!r || !r.ok || !r.html) { toast('Couldn’t find a readable article on this page.'); return; }
+  pushEntry(tab, { kind: 'page', html: buildReaderHtml(r), title: `Reader · ${r.title || tab.title || 'Article'}`, query: entry.url, reader: true });
+  if (r.title) tab.title = r.title;
+  renderTabs();
+  renderCurrentPage();
+  scheduleSave();
+}
+
+// ---- Picture-in-picture (live-site video) ----
+async function togglePictureInPicture() {
+  if (!els.webview || els.webview.hidden) { toast('Open a site with a video first.'); return; }
+  const js = `(async()=>{try{
+    if(document.pictureInPictureElement){await document.exitPictureInPicture();return 'exit';}
+    var v=[...document.querySelectorAll('video')].find(function(x){return !x.paused;})||document.querySelector('video');
+    if(!v)return 'none';
+    await v.requestPictureInPicture();return 'ok';
+  }catch(e){return 'err:'+(e&&e.message||e);}})()`;
+  let r; try { r = await els.webview.executeJavaScript(js, true); } catch { r = 'err'; }
+  if (r === 'none') toast('No video found on this page.');
+  else if (typeof r === 'string' && r.startsWith('err')) toast('Picture-in-picture isn’t available here.');
+}
+
+// ---- Per-tab audio: mute + audible badge ----
+let webviewAudible = false; // whether the active live site is currently making sound
+function applyTabMute() {
+  const tab = activeTab();
+  try { if (els.webview) els.webview.setAudioMuted(!!(tab && tab.muted)); } catch { /* not ready */ }
+}
+function toggleTabMute(id) {
+  const tab = tabs.find((t) => t.id === id) || activeTab();
+  if (!tab) return;
+  tab.muted = !tab.muted;
+  if (tab.id === activeId) applyTabMute();
+  renderTabs();
+  scheduleSave();
 }
 
 // ---- Remix bar + Audio Overview ----
@@ -1858,6 +2093,7 @@ function onLiveSelectChange() {
   const tab = activeTab();
   const cur = currentEntry(tab);
   if (!cur || cur.kind !== 'page' || cur.lesson || cur.skill) return;
+  if (tab && tab.private) { els.liveSelect.value = 'off'; toast('Living pages aren’t available in private tabs.'); return; }
   const v = els.liveSelect.value;
   setLiving(tab, cur, v === 'off' ? 0 : parseInt(v, 10));
 }
@@ -4155,15 +4391,119 @@ function openUrlInNewTab(url) {
   newTab(true);
   openUrlInTab(url);
 }
-// Route an omnibox submission: a URL navigates; anything else goes to Sprig
-// (handleComposerSubmit already handles /commands, skills, deep mode, the web
-// agent on live sites, and composing).
+// Traditional web-search escape hatch — Chervil is AI-first, but a "bang" prefix
+// forces a normal search-results page for when the user explicitly wants links.
+// g!/google!, ddg!/duck!, b!/bing! pick an engine; s!/search! uses the default.
+const SEARCH_ENGINES = {
+  google: { label: 'Google', url: 'https://www.google.com/search?q=' },
+  duckduckgo: { label: 'DuckDuckGo', url: 'https://duckduckgo.com/?q=' },
+  bing: { label: 'Bing', url: 'https://www.bing.com/search?q=' },
+};
+function searchUrlFor(engine, q) {
+  const e = SEARCH_ENGINES[engine] || SEARCH_ENGINES.google;
+  return e.url + encodeURIComponent(q);
+}
+// Returns a search-results URL if `text` starts with a search bang, else null.
+function parseSearchBang(text) {
+  const m = (text || '').match(/^(g|google|ddg|duck|duckduckgo|b|bing|s|search)!\s+(.+)$/i);
+  if (!m) return null;
+  const alias = {
+    g: 'google', google: 'google', ddg: 'duckduckgo', duck: 'duckduckgo', duckduckgo: 'duckduckgo',
+    b: 'bing', bing: 'bing', s: settings.searchEngine, search: settings.searchEngine,
+  };
+  const engine = alias[m[1].toLowerCase()] || settings.searchEngine || 'google';
+  return searchUrlFor(engine, m[2].trim());
+}
+
+// Route an omnibox submission: a search bang searches the web; a URL navigates;
+// anything else goes to Sprig (handleComposerSubmit already handles /commands,
+// skills, deep mode, the web agent on live sites, and composing).
 function runOmnibox(raw) {
   const text = (raw || '').trim();
   if (!text) return;
+  closeOmniSuggest();
   els.pageTitle.blur();
-  if (looksLikeUrl(text)) openUrlInTab(text);
+  const bang = parseSearchBang(text);
+  if (bang) openUrlInTab(bang);
+  else if (looksLikeUrl(text)) openUrlInTab(text);
   else handleComposerSubmit(text);
+}
+
+// ---- Omnibox suggestions (history + bookmarks typeahead) ----
+let omniSuggestEl = null;
+let omniSuggestions = [];
+let omniSelIndex = -1;
+function closeOmniSuggest() {
+  if (omniSuggestEl) { omniSuggestEl.remove(); omniSuggestEl = null; }
+  omniSuggestions = [];
+  omniSelIndex = -1;
+}
+function buildOmniSuggestions(text) {
+  const q = text.trim().toLowerCase();
+  if (!q) return [];
+  const out = [];
+  const seen = new Set();
+  const add = (url, title) => { if (!url || seen.has(url)) return; seen.add(url); out.push({ type: 'url', url, title: title || url }); };
+  for (const b of bookmarks) { if (out.length >= 6) break; if (b.kind === 'site' && b.url && `${b.title || ''} ${b.url}`.toLowerCase().includes(q)) add(b.url, b.title); }
+  for (const s of siteHistory) { if (out.length >= 6) break; if (s.url && `${s.title || ''} ${s.url}`.toLowerCase().includes(q)) add(s.url, s.title); }
+  // Action rows when the text isn't already a bare URL or a search bang.
+  if (!looksLikeUrl(text) && !parseSearchBang(text)) {
+    out.push({ type: 'search', text: text.trim() });
+    out.push({ type: 'ask', text: text.trim() });
+  }
+  return out.slice(0, 8);
+}
+function paintOmniSel() {
+  if (!omniSuggestEl) return;
+  [...omniSuggestEl.children].forEach((c, i) => c.classList.toggle('sel', i === omniSelIndex));
+}
+function moveOmniSel(d) {
+  if (!omniSuggestions.length) return;
+  omniSelIndex = (omniSelIndex + d + omniSuggestions.length) % omniSuggestions.length;
+  paintOmniSel();
+}
+function pickOmniSuggestion(it) {
+  closeOmniSuggest();
+  els.pageTitle.blur();
+  if (it.type === 'url') openUrlInTab(it.url);
+  else if (it.type === 'search') openUrlInTab(searchUrlFor(settings.searchEngine || 'google', it.text));
+  else handleComposerSubmit(it.text);
+}
+function renderOmniSuggest() {
+  closeOmniSuggest();
+  if (document.activeElement !== els.pageTitle) return;
+  omniSuggestions = buildOmniSuggestions(els.pageTitle.value);
+  if (!omniSuggestions.length) return;
+  const menu = document.createElement('div');
+  menu.className = 'omni-suggest';
+  omniSuggestEl = menu;
+  omniSuggestions.forEach((it, i) => {
+    const row = document.createElement('div');
+    row.className = 'omni-suggest-row';
+    let label = '';
+    let sub = '';
+    if (it.type === 'url') {
+      const fi = faviconImg(it.url, 'omni-sg-fav'); if (fi) row.appendChild(fi);
+      label = it.title; sub = it.url;
+    } else {
+      const ic = document.createElement('span'); ic.className = 'omni-sg-icon';
+      ic.textContent = it.type === 'search' ? '🔎' : '🌿';
+      row.appendChild(ic);
+      label = it.type === 'search' ? `Search the web for “${it.text}”` : `Ask Sprig “${it.text}”`;
+    }
+    const txt = document.createElement('div'); txt.className = 'omni-sg-text';
+    const l = document.createElement('div'); l.className = 'omni-sg-title'; l.textContent = label; txt.appendChild(l);
+    if (sub) { const s = document.createElement('div'); s.className = 'omni-sg-sub'; s.textContent = sub; txt.appendChild(s); }
+    row.appendChild(txt);
+    row.addEventListener('mousedown', (e) => { e.preventDefault(); pickOmniSuggestion(it); }); // mousedown beats blur
+    row.addEventListener('mouseenter', () => { omniSelIndex = i; paintOmniSel(); });
+    menu.appendChild(row);
+  });
+  document.body.appendChild(menu);
+  const r = els.pageTitle.getBoundingClientRect();
+  menu.style.left = `${r.left}px`;
+  menu.style.top = `${r.bottom + 4}px`;
+  menu.style.width = `${r.width}px`;
 }
 
 // ---- Find in page (Ctrl+F) ----
@@ -4926,6 +5266,7 @@ async function showQrModal(title, text, caption) {
 
 // ---- Library (auto-collected History + Trash) ----
 function addToLibrary(tab, result, query) {
+  if (tab && tab.private) return; // private tabs aren't collected into the Library
   const item = {
     id: uid(),
     createdAt: Date.now(),
@@ -5268,6 +5609,7 @@ function toggleBookmark() {
   }
   updateBookmarkStar();
   if (els.libraryDrawer.classList.contains('open') && drawerTab === 'bookmarks') renderDrawer();
+  renderBookmarksBar();
   scheduleSave();
 }
 // Rebuild a full tab from a bookmark/snapshot, remapping page ids so the restored
@@ -5315,6 +5657,7 @@ function removeBookmark(id) {
   if (gone && gone.key) addBookmarkTombstone(gone.key);
   updateBookmarkStar();
   renderDrawer();
+  renderBookmarksBar();
   scheduleSave();
 }
 
@@ -5343,22 +5686,213 @@ function clearSiteHistory() {
   renderDrawer();
   scheduleSave();
 }
+// Downloads shelf — the list only; this never deletes the file on disk.
+function removeDownload(id) {
+  downloads = downloads.filter((d) => d.id !== id);
+  renderDrawer();
+  scheduleSave();
+}
+function clearDownloads() {
+  if (!downloads.length) return;
+  if (!confirm('Clear the downloads list? (The files stay on your disk.)')) return;
+  downloads = [];
+  renderDrawer();
+  scheduleSave();
+}
+
+// Searchable text for a Library row across all tab types.
+function libItemText(it) {
+  return [it.title, it.url, it.query, it.filename].filter(Boolean).join(' ').toLowerCase();
+}
+
+// A site favicon via DuckDuckGo's icon service (privacy-friendly, needs no capture
+// and works retroactively for saved history/bookmarks). Returns an <img> that
+// removes itself if the icon can't load, so there's never a broken-image box.
+function faviconUrl(u) {
+  try { return `https://icons.duckduckgo.com/ip3/${new URL(/^https?:\/\//i.test(u) ? u : 'https://' + u).hostname}.ico`; }
+  catch { return ''; }
+}
+function faviconImg(u, cls) {
+  const src = faviconUrl(u);
+  if (!src) return null;
+  const img = document.createElement('img');
+  img.className = cls;
+  img.src = src;
+  img.loading = 'lazy';
+  img.alt = '';
+  img.addEventListener('error', () => img.remove());
+  return img;
+}
+
+// ---- Bookmark folders + bookmarks bar ----
+// Every folder name in play: explicit ones (incl. empty) plus any a bookmark uses.
+function allBookmarkFolders() {
+  const set = new Set(bookmarkFolders);
+  for (const b of bookmarks) if (b.folder) set.add(b.folder);
+  return [...set];
+}
+function createBookmarkFolder() {
+  const name = (prompt('New folder name:') || '').trim();
+  if (!name) return;
+  if (!bookmarkFolders.includes(name)) bookmarkFolders.push(name);
+  scheduleSave();
+  renderDrawer();
+  renderBookmarksBar();
+}
+function moveBookmarkToFolder(id, folder) {
+  const b = bookmarks.find((x) => x.id === id);
+  if (!b) return;
+  b.folder = folder || '';
+  if (folder && !bookmarkFolders.includes(folder)) bookmarkFolders.push(folder);
+  scheduleSave();
+  renderDrawer();
+  renderBookmarksBar();
+}
+
+function applyBookmarksBar() {
+  if (!els.bookmarksBar) return;
+  els.bookmarksBar.hidden = !settings.bookmarksBar;
+  if (els.bookmarksBarToggle) els.bookmarksBarToggle.checked = !!settings.bookmarksBar;
+  if (settings.bookmarksBar) renderBookmarksBar();
+}
+
+// Reflect the Browsing & privacy controls (default-browser status, ad-block toggle
+// + session count) when Settings opens.
+async function refreshPrivacyUI() {
+  if (els.adblockToggle) els.adblockToggle.checked = !!settings.adblock;
+  if (els.adblockStat && window.chervil.adblockStats) {
+    try { const s = await window.chervil.adblockStats(); els.adblockStat.textContent = (s && s.enabled) ? `· ${s.blocked} blocked this session` : ''; }
+    catch { /* ignore */ }
+  }
+  if (els.defaultBrowserStatus && window.chervil.defaultBrowserStatus) {
+    try {
+      const st = await window.chervil.defaultBrowserStatus();
+      els.defaultBrowserStatus.textContent = (st && st.isDefault)
+        ? 'Chervil is your default browser.'
+        : 'Open links from other apps in Chervil.';
+      els.defaultBrowserStatus.className = 'field-note' + (st && st.isDefault ? ' ok' : '');
+    } catch { /* ignore */ }
+  }
+}
+function bookmarkBarButton(b) {
+  const btn = document.createElement('button');
+  btn.className = 'bmbar-item';
+  btn.title = b.url || b.title || '';
+  if (b.kind === 'site' && b.url) { const fav = faviconImg(b.url, 'bmbar-favicon'); if (fav) btn.appendChild(fav); }
+  const t = document.createElement('span'); t.className = 'bmbar-label';
+  t.textContent = b.title || b.url || 'Bookmark';
+  btn.appendChild(t);
+  btn.addEventListener('click', () => openBookmark(b));
+  return btn;
+}
+function renderBookmarksBar() {
+  if (!els.bookmarksBar || !settings.bookmarksBar) return;
+  els.bookmarksBar.innerHTML = '';
+  if (!bookmarks.length) {
+    const hint = document.createElement('span'); hint.className = 'bmbar-empty';
+    hint.textContent = 'No bookmarks yet — click ☆ to add one.';
+    els.bookmarksBar.appendChild(hint);
+    return;
+  }
+  for (const f of allBookmarkFolders().filter((f) => bookmarks.some((b) => b.folder === f))) {
+    const items = bookmarks.filter((b) => b.folder === f);
+    const btn = document.createElement('button');
+    btn.className = 'bmbar-item bmbar-folder';
+    btn.textContent = `📁 ${f}`;
+    btn.addEventListener('click', (e) => openBmFolderMenu(e, items));
+    els.bookmarksBar.appendChild(btn);
+  }
+  for (const b of bookmarks.filter((b) => !b.folder)) els.bookmarksBar.appendChild(bookmarkBarButton(b));
+}
+// Little dropdown listing a folder's bookmarks off the bookmarks bar.
+let bmFolderMenuEl = null;
+function closeBmFolderMenu() {
+  if (!bmFolderMenuEl) return;
+  bmFolderMenuEl.remove(); bmFolderMenuEl = null;
+  document.removeEventListener('mousedown', onBmMenuOutside, true);
+}
+function onBmMenuOutside(e) { if (bmFolderMenuEl && !bmFolderMenuEl.contains(e.target)) closeBmFolderMenu(); }
+function openBmFolderMenu(e, items) {
+  closeBmFolderMenu();
+  const menu = document.createElement('div'); menu.className = 'bmbar-menu';
+  for (const b of items) {
+    const row = document.createElement('button'); row.className = 'bmbar-menu-row';
+    if (b.kind === 'site' && b.url) { const fav = faviconImg(b.url, 'bmbar-favicon'); if (fav) row.appendChild(fav); }
+    const t = document.createElement('span'); t.textContent = b.title || b.url || 'Bookmark';
+    row.appendChild(t);
+    row.addEventListener('click', () => { closeBmFolderMenu(); openBookmark(b); });
+    menu.appendChild(row);
+  }
+  document.body.appendChild(menu);
+  const r = e.currentTarget.getBoundingClientRect();
+  menu.style.left = Math.max(6, Math.min(r.left, window.innerWidth - menu.offsetWidth - 8)) + 'px';
+  menu.style.top = (r.bottom + 4) + 'px';
+  setTimeout(() => document.addEventListener('mousedown', onBmMenuOutside, true), 0);
+}
+// A <select> for reassigning a bookmark's folder (used in the drawer rows).
+function bookmarkFolderSelect(item) {
+  const sel = document.createElement('select');
+  sel.className = 'lib-folder-select';
+  const optU = document.createElement('option'); optU.value = ''; optU.textContent = 'Unfiled';
+  sel.appendChild(optU);
+  for (const f of allBookmarkFolders()) {
+    const o = document.createElement('option'); o.value = f; o.textContent = f;
+    sel.appendChild(o);
+  }
+  const optNew = document.createElement('option'); optNew.value = '__new__'; optNew.textContent = 'New folder…';
+  sel.appendChild(optNew);
+  sel.value = item.folder || '';
+  sel.addEventListener('click', (e) => e.stopPropagation());
+  sel.addEventListener('change', () => {
+    if (sel.value === '__new__') {
+      const name = (prompt('New folder name:') || '').trim();
+      if (!name) { sel.value = item.folder || ''; return; }
+      moveBookmarkToFolder(item.id, name);
+    } else {
+      moveBookmarkToFolder(item.id, sel.value);
+    }
+  });
+  return sel;
+}
 
 function renderDrawer() {
   els.libTabHistory.classList.toggle('active', drawerTab === 'history');
   els.libTabTrash.classList.toggle('active', drawerTab === 'trash');
   if (els.libTabBookmarks) els.libTabBookmarks.classList.toggle('active', drawerTab === 'bookmarks');
   if (els.libTabSites) els.libTabSites.classList.toggle('active', drawerTab === 'sites');
+  if (els.libTabDownloads) els.libTabDownloads.classList.toggle('active', drawerTab === 'downloads');
   els.emptyTrash.hidden = drawerTab !== 'trash';
   if (els.clearSites) els.clearSites.hidden = drawerTab !== 'sites' || !siteHistory.length;
+  if (els.clearDownloads) els.clearDownloads.hidden = drawerTab !== 'downloads' || !downloads.length;
+  if (els.libNewFolder) els.libNewFolder.hidden = drawerTab !== 'bookmarks';
   // Select mode only applies to History; leaving History cancels it.
   if (drawerTab !== 'history' && librarySelectMode) { librarySelectMode = false; selectedLibraryIds.clear(); }
   renderSpaceBar();
 
-  const items = drawerTab === 'history' ? spaceItems()
+  let items = drawerTab === 'history' ? spaceItems()
     : drawerTab === 'bookmarks' ? bookmarks
       : drawerTab === 'sites' ? siteHistory
-        : library.trash;
+        : drawerTab === 'downloads' ? downloads
+          : library.trash;
+
+  // Free-text filter across the visible list (title/url/query/filename).
+  const q = librarySearch.trim().toLowerCase();
+  if (q) items = items.filter((it) => libItemText(it).includes(q));
+
+  // Bookmarks (unsearched): group by folder — sort so folder headers can be
+  // inserted between groups, with Unfiled last.
+  const grouping = drawerTab === 'bookmarks' && !q;
+  if (grouping) {
+    const order = allBookmarkFolders();
+    items = items.slice().sort((a, b) => {
+      const fa = a.folder || '', fb = b.folder || '';
+      if (fa === fb) return 0;
+      if (!fa) return 1;
+      if (!fb) return -1;
+      return order.indexOf(fa) - order.indexOf(fb);
+    });
+  }
+  let lastFolder = null;
 
   // Toggle + select-bar visibility (History only).
   if (els.libSelectToggle) els.libSelectToggle.hidden = drawerTab !== 'history' || librarySelectMode || !items.length;
@@ -5375,19 +5909,32 @@ function renderDrawer() {
   if (!items.length) {
     const empty = document.createElement('div');
     empty.className = 'lib-empty';
+    if (q) { empty.textContent = `No matches for “${librarySearch.trim()}”.`; els.libraryList.appendChild(empty); return; }
     empty.textContent = drawerTab === 'history'
       ? 'No pages in this Space yet. Compose some, then synthesize.'
       : drawerTab === 'bookmarks'
         ? 'No bookmarks yet. Click ☆ in the toolbar to save a page or site.'
         : drawerTab === 'sites'
           ? 'No browsing history yet. Open a website and it shows up here.'
-          : 'Trash is empty.';
+          : drawerTab === 'downloads'
+            ? 'No downloads yet. Files you download from sites show up here.'
+            : 'Trash is empty.';
     els.libraryList.appendChild(empty);
     return;
   }
 
   const selecting = drawerTab === 'history' && librarySelectMode;
   for (const item of items) {
+    if (grouping) {
+      const f = item.folder || '';
+      if (f !== lastFolder) {
+        lastFolder = f;
+        const head = document.createElement('div');
+        head.className = 'lib-folder-head';
+        head.textContent = f || 'Unfiled';
+        els.libraryList.appendChild(head);
+      }
+    }
     const row = document.createElement('div');
     row.className = 'lib-row'
       + (selecting ? ' selecting' : '')
@@ -5404,20 +5951,27 @@ function renderDrawer() {
     main.className = 'lib-main';
     const title = document.createElement('div');
     title.className = 'lib-title';
+    // Site-type rows show a real favicon (added below) instead of a leading emoji.
+    const isSiteRow = drawerTab === 'sites' || (drawerTab === 'bookmarks' && item.kind === 'site');
     title.textContent = drawerTab === 'bookmarks'
-      ? `${item.kind === 'site' ? '🔗' : '📄'} ${item.title || item.url || 'Bookmark'}`
+      ? (item.kind === 'site' ? (item.title || item.url || 'Bookmark') : `📄 ${item.title || item.url || 'Bookmark'}`)
       : drawerTab === 'sites'
-        ? `🌐 ${item.title || item.url}`
-        : (item.title || item.query || 'Untitled page');
+        ? (item.title || item.url)
+        : drawerTab === 'downloads'
+          ? `${item.ok ? '⬇' : '⚠'} ${item.filename || 'file'}`
+          : (item.title || item.query || 'Untitled page');
     const meta = document.createElement('div');
     meta.className = 'lib-meta';
     meta.textContent = drawerTab === 'bookmarks'
       ? (item.kind === 'site' ? item.url : 'Composed page')
       : drawerTab === 'sites'
         ? `${item.url} · ${relTime(item.at)}`
-        : relTime(item.createdAt);
+        : drawerTab === 'downloads'
+          ? (item.ok ? `${item.path} · ${relTime(item.at)}` : `${item.state || 'failed'} · ${relTime(item.at)}`)
+          : relTime(item.createdAt);
     main.appendChild(title);
     main.appendChild(meta);
+    if (isSiteRow) { const fav = faviconImg(item.url, 'lib-favicon'); if (fav) row.appendChild(fav); }
     row.appendChild(main);
 
     const actions = document.createElement('div');
@@ -5430,6 +5984,7 @@ function renderDrawer() {
       main.title = 'Open';
       main.style.cursor = 'pointer';
       main.addEventListener('click', () => openBookmark(item));
+      actions.appendChild(bookmarkFolderSelect(item));
       const del = document.createElement('button');
       del.className = 'lib-btn';
       del.textContent = 'Remove';
@@ -5443,6 +5998,22 @@ function renderDrawer() {
       del.className = 'lib-btn';
       del.textContent = 'Remove';
       del.addEventListener('click', () => removeSite(item.id));
+      actions.appendChild(del);
+    } else if (drawerTab === 'downloads') {
+      if (item.ok && item.path) {
+        main.title = 'Open file';
+        main.style.cursor = 'pointer';
+        main.addEventListener('click', () => window.chervil.openPath(item.path));
+        const show = document.createElement('button');
+        show.className = 'lib-btn';
+        show.textContent = 'Show in folder';
+        show.addEventListener('click', () => window.chervil.showInFolder(item.path));
+        actions.appendChild(show);
+      }
+      const del = document.createElement('button');
+      del.className = 'lib-btn';
+      del.textContent = 'Remove';
+      del.addEventListener('click', () => removeDownload(item.id));
       actions.appendChild(del);
     } else if (drawerTab === 'history') {
       main.title = 'Open';
@@ -5467,6 +6038,8 @@ function renderDrawer() {
 
 function openDrawer() {
   drawerTab = 'history';
+  librarySearch = '';
+  if (els.libSearch) els.libSearch.value = '';
   renderDrawer();
   els.libraryDrawer.classList.add('open');
 }
@@ -5500,6 +6073,7 @@ function applySettingsToUI() {
   if (els.notifyToggle) els.notifyToggle.checked = settings.notifications !== false;
   if (els.tabLayoutSelect) els.tabLayoutSelect.value = isVerticalTabs() ? 'vertical' : 'horizontal';
   if (els.remixDefaultSelect) els.remixDefaultSelect.value = settings.remixMinimized ? 'minimized' : 'expanded';
+  if (els.menuBarToggle) els.menuBarToggle.checked = !!settings.showMenuBar;
   if (els.sttEndpoint) els.sttEndpoint.value = settings.sttEndpoint || '';
   if (els.sttModel) els.sttModel.value = settings.sttModel || '';
   if (els.publishToken) els.publishToken.value = settings.publishToken || '';
@@ -5519,6 +6093,7 @@ function applySettingsToUI() {
   if (els.heroToggle) els.heroToggle.checked = !!settings.heroImages;
   { const ps = document.getElementById('page-style-select'); if (ps) ps.value = settings.pageStyle || 'balanced'; }
   { const sf = document.getElementById('space-files-select'); if (sf) sf.value = settings.spaceFilesMode || 'synthesize'; }
+  { const se = document.getElementById('search-engine-select'); if (se) se.value = settings.searchEngine || 'google'; }
   refreshSttKeyStatus();
   refreshImageKeyStatus();
   renderCredsPanel();
@@ -5773,14 +6348,18 @@ function addMcpServer() {
 // Reflect the selected provider: which fields show, labels, and current values.
 function applyProviderUI() {
   const p = settings.provider;
-  els.providerKeyRow.hidden = p === 'ollama'; // Ollama needs no key
+  els.providerKeyRow.hidden = false; // every provider can take a key — Ollama's is optional (authed remote servers)
   els.providerModelRow.hidden = p === 'azure'; // Azure uses the deployment instead
   els.ollamaExtra.hidden = p !== 'ollama';
   els.azureExtra.hidden = p !== 'azure';
+  if (els.ollamaKeyHint) els.ollamaKeyHint.hidden = p !== 'ollama';
 
-  els.providerKeyLabel.textContent = `API key for ${PROVIDER_LABELS[p]}`;
+  els.providerKeyLabel.textContent = p === 'ollama'
+    ? 'API key for Ollama (optional)'
+    : `API key for ${PROVIDER_LABELS[p]}`;
   rebuildModelSelect();
   els.ollamaUrl.value = settings.ollamaUrl || '';
+  if (els.ollamaUrlStatus) { els.ollamaUrlStatus.textContent = ''; els.ollamaUrlStatus.className = 'field-note'; }
   els.azureEndpoint.value = settings.azureEndpoint || '';
   els.azureDeployment.value = settings.azureDeployment || '';
   els.azureApiVersion.value = settings.azureApiVersion || '';
@@ -5853,9 +6432,17 @@ function fetchModelsFor(p) {
 
 function refreshKeyStatus() {
   const p = settings.provider;
-  if (p === 'ollama') { els.apiKeyStatus.textContent = ''; return; }
   window.chervil.getKeyStatus().then((s) => {
     const has = s && s[p];
+    if (p === 'ollama') {
+      // Ollama's key is optional — never warn that calls will fail without one.
+      // The "why optional" explanation lives in the persistent #ollama-key-hint below.
+      els.apiKeyStatus.textContent = has
+        ? 'A saved token is in use (sent as a Bearer header, encrypted on this machine).'
+        : 'No token saved — fine for local Ollama.';
+      els.apiKeyStatus.className = has ? 'field-note ok' : 'field-note';
+      return;
+    }
     if (has) {
       els.apiKeyStatus.textContent = (p === 'claude' && s.claudeFromEnv)
         ? 'Using the key from your .env file.'
@@ -5884,11 +6471,15 @@ function setSettingsTab(group) {
 // === false (missing = shown).
 const TOOLBAR_BUTTONS = [
   { key: 'map', id: 'map-btn', label: 'Map' },
-  { key: 'history', id: 'history-btn', label: 'History' },
+  { key: 'history', id: 'history-btn', label: 'Library' },
   { key: 'schedules', id: 'sched-btn', label: 'Schedules' },
   { key: 'agents', id: 'agents-btn', label: 'Agents' },
   { key: 'bookmark', id: 'bookmark-btn', label: 'Bookmark (★)' },
   { key: 'save', id: 'save-btn', label: 'Save' },
+  { key: 'reader', id: 'reader-btn', label: 'Reader view' },
+  { key: 'pip', id: 'pip-btn', label: 'Picture-in-picture' },
+  { key: 'zoom', id: 'zoom-controls', label: 'Zoom controls' },
+  { key: 'print', id: 'print-btn', label: 'Print' },
 ];
 
 function toolbarVisible(key) { return !settings.toolbar || settings.toolbar[key] !== false; }
@@ -5931,29 +6522,38 @@ function closeToolbarMenu() {
   toolbarMenuEl = null;
   document.removeEventListener('mousedown', onToolbarMenuOutside, true);
   document.removeEventListener('keydown', onToolbarMenuEsc, true);
+  window.removeEventListener('blur', closeToolbarMenu);
 }
 function onToolbarMenuOutside(e) { if (toolbarMenuEl && !toolbarMenuEl.contains(e.target)) closeToolbarMenu(); }
 function onToolbarMenuEsc(e) { if (e.key === 'Escape') closeToolbarMenu(); }
+// A checkable row for the menu.
+function toolbarMenuRow(menu, label, on, onClick) {
+  const row = document.createElement('button'); row.className = 'toolbar-menu-row';
+  const check = document.createElement('span'); check.className = 'tm-check'; check.textContent = on ? '✓' : '';
+  const lbl = document.createElement('span'); lbl.textContent = label;
+  row.appendChild(check); row.appendChild(lbl);
+  row.addEventListener('click', onClick);
+  menu.appendChild(row);
+}
 function showToolbarMenu(x, y) {
   closeToolbarMenu();
   const menu = document.createElement('div'); menu.className = 'toolbar-menu';
+  toolbarMenuEl = menu; // track it so it can actually be dismissed/replaced
   const head = document.createElement('div'); head.className = 'toolbar-menu-head'; head.textContent = 'Show on toolbar';
   menu.appendChild(head);
   for (const b of TOOLBAR_BUTTONS) {
-    const on = toolbarVisible(b.key);
-    const row = document.createElement('button'); row.className = 'toolbar-menu-row';
-    const check = document.createElement('span'); check.className = 'tm-check'; check.textContent = on ? '✓' : '';
-    const lbl = document.createElement('span'); lbl.textContent = b.label;
-    row.appendChild(check); row.appendChild(lbl);
-    row.addEventListener('click', () => { setToolbarVisible(b.key, !on); renderToolbarPrefs(); closeToolbarMenu(); });
-    menu.appendChild(row);
+    toolbarMenuRow(menu, b.label, toolbarVisible(b.key), () => { setToolbarVisible(b.key, !toolbarVisible(b.key)); renderToolbarPrefs(); closeToolbarMenu(); });
   }
+  // The bookmarks bar isn't a toolbar button, but users look for it here too.
+  const sep = document.createElement('div'); sep.className = 'toolbar-menu-sep'; menu.appendChild(sep);
+  toolbarMenuRow(menu, 'Bookmarks bar', !!settings.bookmarksBar, () => { settings.bookmarksBar = !settings.bookmarksBar; applyBookmarksBar(); scheduleSave(); closeToolbarMenu(); });
   document.body.appendChild(menu);
   menu.style.left = Math.min(x, window.innerWidth - menu.offsetWidth - 8) + 'px';
   menu.style.top = Math.min(y, window.innerHeight - menu.offsetHeight - 8) + 'px';
   setTimeout(() => {
     document.addEventListener('mousedown', onToolbarMenuOutside, true);
     document.addEventListener('keydown', onToolbarMenuEsc, true);
+    window.addEventListener('blur', closeToolbarMenu); // clicks into the page iframe/webview blur the window
   }, 0);
 }
 
@@ -5962,6 +6562,7 @@ function openSettings() {
   renderToolbarPrefs();
   renderSyncFolder();
   renderAccountBox();
+  refreshPrivacyUI();
   setSettingsTab('general');
   els.settingsModal.classList.add('open');
 }
@@ -6094,7 +6695,12 @@ function scheduleSave() {
   if (saveTimer) clearTimeout(saveTimer);
   saveTimer = setTimeout(() => {
     saveTimer = null;
-    window.chervil.saveState({ tabs, activeId, settings, library, bookmarks, bookmarkTombstones, siteHistory, agentAudit, spaces, activeSpaceId, living, schedules, agents, activeAgentId, pipelines, pageStores })
+    // Private tabs are ephemeral — never persist them (or point activeId at one).
+    const persistTabs = tabs.filter((t) => !t.private);
+    const persistActiveId = persistTabs.some((t) => t.id === activeId)
+      ? activeId
+      : (persistTabs[0] && persistTabs[0].id) || null;
+    window.chervil.saveState({ tabs: persistTabs, activeId: persistActiveId, settings, library, bookmarks, bookmarkFolders, bookmarkTombstones, siteHistory, downloads, agentAudit, spaces, activeSpaceId, living, schedules, agents, activeAgentId, pipelines, pageStores })
       .then((r) => { if (r && r.mtimeMs) lastStateMtimeMs = r.mtimeMs; }) // our own write — keep baseline current
       .catch(() => {});
   }, 500);
@@ -6115,6 +6721,7 @@ async function reconcileNow() {
   if (!r || !r.ok || !r.changed || !r.state) return;
   const m = r.state;
   if (Array.isArray(m.bookmarks)) bookmarks = m.bookmarks;
+  if (Array.isArray(m.bookmarkFolders)) bookmarkFolders = m.bookmarkFolders.filter((f) => typeof f === 'string');
   if (Array.isArray(m.bookmarkTombstones)) bookmarkTombstones = m.bookmarkTombstones;
   if (Array.isArray(m.siteHistory)) siteHistory = m.siteHistory;
   if (m.library && Array.isArray(m.library.history)) {
@@ -6128,6 +6735,7 @@ async function reconcileNow() {
   if (r.mtimeMs) lastStateMtimeMs = r.mtimeMs;               // we just absorbed it — don't also prompt to reload
   updateBookmarkStar();
   if (els.libraryDrawer.classList.contains('open')) renderDrawer();
+  renderBookmarksBar();
   toast('Synced new items from another computer.');
 }
 
@@ -6213,8 +6821,10 @@ async function init() {
     };
   }
   if (restored && Array.isArray(restored.bookmarks)) bookmarks = restored.bookmarks;
+  if (restored && Array.isArray(restored.bookmarkFolders)) bookmarkFolders = restored.bookmarkFolders.filter((f) => typeof f === 'string');
   if (restored && Array.isArray(restored.bookmarkTombstones)) bookmarkTombstones = restored.bookmarkTombstones;
   if (restored && Array.isArray(restored.siteHistory)) siteHistory = restored.siteHistory;
+  if (restored && Array.isArray(restored.downloads)) downloads = restored.downloads;
   if (restored && Array.isArray(restored.agentAudit)) agentAudit = restored.agentAudit;
 
   // Spaces: restore, or migrate by creating a default Space and adopting any
@@ -6260,6 +6870,9 @@ async function init() {
   applyTabLayout();
   applySidebarCollapsed();
   applyToolbar(); // honor the user's chosen top-bar buttons
+  applyBookmarksBar(); // restore the bookmarks bar (if enabled) + its contents
+  if (window.chervil.setAdblock) window.chervil.setAdblock(settings.adblock); // sync ad-block to main
+  if (window.chervil.setMenuBarVisible) window.chervil.setMenuBarVisible(!!settings.showMenuBar); // this window's menu bar
   setChatMode(settings.chatMode); // reflect the persisted "Just a chatbot" toggle
   renderTabs();
   renderConversation();
@@ -6642,10 +7255,20 @@ els.composer.addEventListener('submit', (e) => {
 
 // Omnibox: focus selects all; Enter routes; Escape restores the canonical value.
 els.pageTitle.addEventListener('focus', () => els.pageTitle.select());
-els.pageTitle.addEventListener('blur', () => { els.pageTitle.value = omniboxCanonical; });
+els.pageTitle.addEventListener('blur', () => { els.pageTitle.value = omniboxCanonical; setTimeout(closeOmniSuggest, 120); });
+els.pageTitle.addEventListener('input', () => renderOmniSuggest());
 els.pageTitle.addEventListener('keydown', (e) => {
-  if (e.key === 'Enter') { e.preventDefault(); runOmnibox(els.pageTitle.value); }
-  else if (e.key === 'Escape') { e.preventDefault(); els.pageTitle.value = omniboxCanonical; els.pageTitle.blur(); }
+  if (e.key === 'ArrowDown' && omniSuggestions.length) { e.preventDefault(); moveOmniSel(1); }
+  else if (e.key === 'ArrowUp' && omniSuggestions.length) { e.preventDefault(); moveOmniSel(-1); }
+  else if (e.key === 'Enter') {
+    e.preventDefault();
+    if (omniSelIndex >= 0 && omniSuggestions[omniSelIndex]) pickOmniSuggestion(omniSuggestions[omniSelIndex]);
+    else runOmnibox(els.pageTitle.value);
+  } else if (e.key === 'Escape') {
+    e.preventDefault();
+    if (omniSuggestEl) { closeOmniSuggest(); return; }
+    els.pageTitle.value = omniboxCanonical; els.pageTitle.blur();
+  }
 });
 
 // Find in page (Ctrl+F) wiring.
@@ -6685,6 +7308,7 @@ function onWebviewNavigated(url) {
 // Log a visited real site into browsing history (newest-first, deduped, capped).
 function recordSiteVisit(url, title) {
   if (!url || !/^https?:\/\//i.test(url)) return;
+  { const at = activeTab(); if (at && at.private) return; } // private tabs leave no history
   if (siteHistory[0] && siteHistory[0].url === url) { siteHistory[0].at = Date.now(); return; }
   siteHistory.unshift({ id: uid(), url, title: title || hostOf(url), at: Date.now() });
   if (siteHistory.length > MAX_SITE_HISTORY) siteHistory.length = MAX_SITE_HISTORY;
@@ -6692,6 +7316,12 @@ function recordSiteVisit(url, title) {
 if (els.webview) {
   els.webview.addEventListener('did-navigate', (e) => onWebviewNavigated(e.url));
   els.webview.addEventListener('did-navigate-in-page', (e) => { if (e.isMainFrame) onWebviewNavigated(e.url); });
+  // Chromium resets a webview's zoom on each navigation — re-apply the user's level
+  // and the tab's mute state.
+  els.webview.addEventListener('dom-ready', () => { applyZoom(); applyTabMute(); });
+  // Audio badge: reflect when the embedded site starts/stops making sound.
+  els.webview.addEventListener('media-started-playing', () => { if (els.webview.isCurrentlyAudible && els.webview.isCurrentlyAudible()) { webviewAudible = true; renderTabs(); } });
+  els.webview.addEventListener('media-paused', () => { webviewAudible = false; renderTabs(); });
   // Login-capture messages from the webview preload (RFC 0008 8.3).
   els.webview.addEventListener('ipc-message', (e) => {
     if (e.channel === 'chervil:login-submit') onCapturedLogin(e.args && e.args[0]);
@@ -6899,7 +7529,18 @@ els.modelCustom.addEventListener('input', () => {
   settings[MODEL_SETTING[settings.provider]] = els.modelCustom.value.trim();
   scheduleSave();
 });
-els.ollamaUrl.addEventListener('input', () => { settings.ollamaUrl = els.ollamaUrl.value.trim(); scheduleSave(); });
+let ollamaUrlSavedTimer = null;
+els.ollamaUrl.addEventListener('input', () => {
+  settings.ollamaUrl = els.ollamaUrl.value.trim();
+  els.ollamaUrlStatus.textContent = 'Saving…';
+  els.ollamaUrlStatus.className = 'field-note';
+  scheduleSave();
+  if (ollamaUrlSavedTimer) clearTimeout(ollamaUrlSavedTimer);
+  ollamaUrlSavedTimer = setTimeout(() => {  // fires after scheduleSave's 500ms debounce has written
+    els.ollamaUrlStatus.textContent = 'Saved ✓';
+    els.ollamaUrlStatus.className = 'field-note ok';
+  }, 650);
+});
 els.azureEndpoint.addEventListener('input', () => { settings.azureEndpoint = els.azureEndpoint.value.trim(); scheduleSave(); });
 els.azureDeployment.addEventListener('input', () => { settings.azureDeployment = els.azureDeployment.value.trim(); scheduleSave(); });
 els.azureApiVersion.addEventListener('input', () => { settings.azureApiVersion = els.azureApiVersion.value.trim(); scheduleSave(); });
@@ -7007,6 +7648,13 @@ if (els.remixDefaultSelect) els.remixDefaultSelect.addEventListener('change', ()
   scheduleSave();
 });
 
+// Show/hide the native menu bar (File/Edit/View) for this window.
+if (els.menuBarToggle) els.menuBarToggle.addEventListener('change', () => {
+  settings.showMenuBar = els.menuBarToggle.checked;
+  if (window.chervil.setMenuBarVisible) window.chervil.setMenuBarVisible(settings.showMenuBar);
+  scheduleSave();
+});
+
 // Notifications toggle.
 if (els.notifyToggle) els.notifyToggle.addEventListener('change', () => {
   settings.notifications = els.notifyToggle.checked;
@@ -7024,7 +7672,31 @@ if (els.heroToggle) els.heroToggle.addEventListener('change', () => {
   if (ps) ps.addEventListener('change', () => { settings.pageStyle = ps.value; scheduleSave(); });
   const sf = document.getElementById('space-files-select');
   if (sf) sf.addEventListener('change', () => { settings.spaceFilesMode = sf.value; scheduleSave(); });
+  const se = document.getElementById('search-engine-select');
+  if (se) se.addEventListener('change', () => { settings.searchEngine = se.value; scheduleSave(); });
 }
+
+// Browsing & privacy controls (default browser, ad-block, clear data).
+if (els.makeDefaultBtn) els.makeDefaultBtn.addEventListener('click', async () => {
+  try { await window.chervil.makeDefaultBrowser(); } catch { /* ignore */ }
+  toast('Choose Chervil in the system Default Apps window to finish.');
+  setTimeout(refreshPrivacyUI, 400);
+});
+if (els.adblockToggle) els.adblockToggle.addEventListener('change', async () => {
+  settings.adblock = els.adblockToggle.checked;
+  try { await window.chervil.setAdblock(settings.adblock); } catch { /* ignore */ }
+  scheduleSave();
+  refreshPrivacyUI();
+});
+if (els.clearDataBtn) els.clearDataBtn.addEventListener('click', async () => {
+  if (!confirm('Clear cookies, cache, and site data for embedded sites — plus your Sites history and Downloads list? Bookmarks and saved logins are kept.')) return;
+  let r; try { r = await window.chervil.clearBrowsingData(); } catch { r = null; }
+  siteHistory = [];
+  downloads = [];
+  if (els.libraryDrawer.classList.contains('open')) renderDrawer();
+  scheduleSave();
+  toast(r && r.ok ? 'Browsing data cleared.' : 'Cleared local history; site data may not have fully cleared.');
+});
 
 // MCP servers: add button + Enter-to-add in the URL field.
 if (els.mcpAddBtn) els.mcpAddBtn.addEventListener('click', addMcpServer);
@@ -7054,8 +7726,13 @@ els.libraryDrawer.addEventListener('click', (e) => {
 els.libTabHistory.addEventListener('click', () => { drawerTab = 'history'; renderDrawer(); });
 if (els.libTabBookmarks) els.libTabBookmarks.addEventListener('click', () => { drawerTab = 'bookmarks'; renderDrawer(); });
 if (els.libTabSites) els.libTabSites.addEventListener('click', () => { drawerTab = 'sites'; renderDrawer(); });
+if (els.libTabDownloads) els.libTabDownloads.addEventListener('click', () => { drawerTab = 'downloads'; renderDrawer(); });
 els.libTabTrash.addEventListener('click', () => { drawerTab = 'trash'; renderDrawer(); });
 if (els.clearSites) els.clearSites.addEventListener('click', clearSiteHistory);
+if (els.clearDownloads) els.clearDownloads.addEventListener('click', clearDownloads);
+if (els.libSearch) els.libSearch.addEventListener('input', () => { librarySearch = els.libSearch.value; renderDrawer(); });
+if (els.libNewFolder) els.libNewFolder.addEventListener('click', createBookmarkFolder);
+if (els.bookmarksBarToggle) els.bookmarksBarToggle.addEventListener('change', () => { settings.bookmarksBar = els.bookmarksBarToggle.checked; applyBookmarksBar(); scheduleSave(); });
 if (els.bookmarkBtn) els.bookmarkBtn.addEventListener('click', toggleBookmark);
 if (els.pwFillBtn) els.pwFillBtn.addEventListener('click', fillPasswordOnSite);
 els.emptyTrash.addEventListener('click', emptyTrash);
@@ -7111,6 +7788,8 @@ document.addEventListener('keydown', (e) => {
   else if ((e.ctrlKey || e.metaKey) && (e.key === 'l' || e.key === 'L')) { e.preventDefault(); els.pageTitle.focus(); els.pageTitle.select(); }
   else if ((e.ctrlKey || e.metaKey) && (e.key === 'k' || e.key === 'K')) { e.preventDefault(); openTabSwitcher(); }
   else if (e.ctrlKey && e.shiftKey && (e.key === 't' || e.key === 'T')) { e.preventDefault(); reopenClosedTab(); }
+  else if (e.ctrlKey && e.shiftKey && (e.key === 'n' || e.key === 'N')) { e.preventDefault(); newTab(true, { private: true }); }
+  else if (e.ctrlKey && e.shiftKey && (e.key === 'b' || e.key === 'B')) { e.preventDefault(); settings.bookmarksBar = !settings.bookmarksBar; applyBookmarksBar(); scheduleSave(); }
   else if (e.ctrlKey && e.key === 't') { e.preventDefault(); newTab(true); }
   else if (e.ctrlKey && e.key === 'w') { e.preventDefault(); if (activeId) closeTab(activeId); }
   else if ((e.ctrlKey || e.metaKey) && e.key === '\\') { e.preventDefault(); toggleSidebar(); }
@@ -7309,13 +7988,36 @@ if (window.chervil.onContextAsk) {
   });
 }
 
-// A file downloaded from an embedded site — let the user know.
+// A file downloaded from an embedded site — record it in the Downloads shelf and
+// let the user know.
 if (window.chervil.onDownloadDone) {
   window.chervil.onDownloadDone((d) => {
-    if (d && d.ok) toast(`⬇ Downloaded ${d.filename} to your Downloads folder.`);
-    else if (d) toast(`Download failed: ${d.filename || ''}`);
+    if (!d) return;
+    downloads.unshift({ id: uid(), filename: d.filename || 'file', path: d.path || '', at: Date.now(), ok: !!d.ok, state: d.state || (d.ok ? 'completed' : 'failed') });
+    if (downloads.length > MAX_DOWNLOADS) downloads.length = MAX_DOWNLOADS;
+    scheduleSave();
+    if (els.libraryDrawer.classList.contains('open') && drawerTab === 'downloads') renderDrawer();
+    if (d.ok) toast(`⬇ Downloaded ${d.filename} to your Downloads folder.`);
+    else toast(`Download failed: ${d.filename || ''}`);
   });
 }
+
+// Page zoom + print driven from the app menu (owns the Ctrl +/−/0 and Ctrl+P
+// accelerators so they don't also fire as renderer keydowns).
+if (window.chervil.onMenuZoom) {
+  window.chervil.onMenuZoom((dir) => {
+    if (dir === 'in') nudgeZoom(1);
+    else if (dir === 'out') nudgeZoom(-1);
+    else setZoom(1);
+  });
+}
+if (window.chervil.onMenuPrint) window.chervil.onMenuPrint(() => printCurrentView());
+if (els.zoomIndicator) els.zoomIndicator.addEventListener('click', () => setZoom(1)); // click % = reset
+if (els.zoomIn) els.zoomIn.addEventListener('click', () => nudgeZoom(1));
+if (els.zoomOut) els.zoomOut.addEventListener('click', () => nudgeZoom(-1));
+if (els.printBtn) els.printBtn.addEventListener('click', () => printCurrentView());
+if (els.readerBtn) els.readerBtn.addEventListener('click', () => openReaderView());
+if (els.pipBtn) els.pipBtn.addEventListener('click', () => togglePictureInPicture());
 
 // Show the running app version in Settings (from the preload bridge), and wire
 // the "Check for updates" link to the GitHub-releases check.

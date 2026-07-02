@@ -27,6 +27,8 @@
     </div>
     <div id="tab-menu" class="ctx-menu" hidden>
       <button data-act="new">New tab</button>
+      <button data-act="new-private">New private tab</button>
+      <button data-act="new-window">New window</button>
       <button data-act="pin">Pin tab</button>
       <button data-act="close">Close tab</button>
       <button data-act="others">Close other tabs</button>
@@ -99,16 +101,27 @@
                placeholder="Search, ask Sprig, or enter a URL…" />
         <div id="omni-actions">
           <button id="map-btn" class="omni-btn text" title="Thinking canvas — map of this tab's pages">⌗ <span class="lbl">Map</span></button>
-          <button id="history-btn" class="omni-btn text" title="History &amp; Trash">🕘 <span class="lbl">History</span></button>
+          <button id="history-btn" class="omni-btn text" title="Library — History, Bookmarks, Sites, Downloads &amp; Trash">🕘 <span class="lbl">Library</span></button>
           <button id="sched-btn" class="omni-btn text" title="Scheduled agents">⏰ <span class="lbl">Schedules</span></button>
           <button id="agents-btn" class="omni-btn text" title="Agents — personas &amp; tools">👤 <span class="lbl">Agents</span></button>
           <button id="autofill-pw-btn" class="omni-btn" title="Fill a saved login" hidden>🔑</button>
           <button id="bookmark-btn" class="omni-btn" title="Bookmark this page" disabled>☆</button>
+          <button id="reader-btn" class="omni-btn" title="Reader view — declutter this page" disabled>📖</button>
+          <button id="pip-btn" class="omni-btn" title="Picture-in-picture (pop out the video)" disabled>📺</button>
           <button id="save-btn" class="omni-btn text" title="Save this page to disk" disabled>⤓ <span class="lbl">Save</span></button>
+          <div id="zoom-controls" class="omni-zoom" title="Zoom (Ctrl +/− , reset Ctrl+0)">
+            <button id="zoom-out" class="omni-btn" title="Zoom out (Ctrl+-)">−</button>
+            <button id="zoom-indicator" class="omni-btn" title="Reset zoom (Ctrl+0)">100%</button>
+            <button id="zoom-in" class="omni-btn" title="Zoom in (Ctrl+=)">+</button>
+          </div>
+          <button id="print-btn" class="omni-btn" title="Print (Ctrl+P)">🖨</button>
           <button id="settings-btn" class="omni-btn" title="Settings">⚙</button>
           <div id="mode-badge" class="badge">ready</div>
         </div>
       </div>
+
+      <!-- Bookmarks bar (toggle: Settings → General, or Ctrl+Shift+B) -->
+      <div id="bookmarks-bar" hidden></div>
 
       <div id="viewport">
         <!-- Generated pages render here -->
@@ -274,6 +287,43 @@
       </section>
 
       <section class="setting-group" data-sgroup="general">
+        <h3>Search</h3>
+        <label class="opt-row">
+          <span>Search engine</span>
+          <select id="search-engine-select">
+            <option value="google">Google</option>
+            <option value="duckduckgo">DuckDuckGo</option>
+            <option value="bing">Bing</option>
+          </select>
+        </label>
+        <p class="group-hint">Chervil answers with Sprig by default. To do a plain web search instead, start the address bar with a <strong>bang</strong>: <code>g!</code> Google, <code>ddg!</code> DuckDuckGo, <code>b!</code> Bing, or <code>s!</code> for your default above — e.g. <code>g! best hiking boots</code>.</p>
+      </section>
+
+      <section class="setting-group" data-sgroup="general">
+        <h3>Browsing &amp; privacy</h3>
+        <div class="opt-row">
+          <span>Default browser<br><small id="default-browser-status" class="field-note">Open links from other apps in Chervil.</small></span>
+          <button id="make-default-btn" class="lib-btn">Make default…</button>
+        </div>
+        <label class="toggle-row">
+          <input type="checkbox" id="adblock-toggle" />
+          <span>Block ads &amp; trackers on embedded sites <small id="adblock-stat"></small></span>
+        </label>
+        <div class="opt-row">
+          <span>Clear browsing data<br><small class="field-note">Cookies, cache &amp; site data for embedded sites, plus your Sites history and Downloads list. Won't touch bookmarks or saved logins.</small></span>
+          <button id="clear-data-btn" class="lib-btn danger">Clear…</button>
+        </div>
+      </section>
+
+      <section class="setting-group" data-sgroup="general">
+        <h3>Bookmarks bar</h3>
+        <label class="toggle-row">
+          <input type="checkbox" id="bookmarks-bar-toggle" />
+          <span>Show the bookmarks bar under the address bar <small>(toggle anytime with Ctrl+Shift+B)</small></span>
+        </label>
+      </section>
+
+      <section class="setting-group" data-sgroup="general">
         <h3>Toolbar buttons</h3>
         <p class="group-hint">Choose which buttons show on the top bar. (You can also <strong>right-click the top bar</strong> for a quick toggle.)</p>
         <div id="toolbar-prefs"></div>
@@ -319,6 +369,8 @@
             <small class="field-note">Stored encrypted on this machine (never plain text). Leave blank and Save to clear.</small>
           </label>
 
+          <p id="ollama-key-hint" class="group-hint" hidden>Why optional? Ollama running on your own machine needs no key — leave this blank. Add a token only if you point the server URL below at a <strong>remote or password-protected</strong> Ollama (behind a reverse proxy, or Ollama's cloud). When set, it's sent as an <code>Authorization: Bearer</code> header.</p>
+
           <div class="field" id="provider-model-row">
             <span class="field-label">Model</span>
             <select id="model-select"></select>
@@ -329,6 +381,7 @@
             <label class="field">
               <span class="field-label">Ollama server URL</span>
               <input id="ollama-url" type="text" placeholder="http://localhost:11434" spellcheck="false" />
+              <small id="ollama-url-status" class="field-note"></small>
             </label>
           </div>
 
@@ -457,6 +510,10 @@
             <option value="minimized">Start minimized — collapsed to a corner handle</option>
             <option value="expanded">Start expanded — full bar on every page</option>
           </select>
+        </label>
+        <label class="toggle-row">
+          <input type="checkbox" id="menu-bar-toggle" />
+          <span>Always show the menu bar <small>(File, Edit, View — otherwise hidden until you press Alt)</small></span>
         </label>
       </section>
 
@@ -607,12 +664,15 @@
           <button id="lib-tab-history" class="drawer-tab active">History</button>
           <button id="lib-tab-bookmarks" class="drawer-tab">Bookmarks</button>
           <button id="lib-tab-sites" class="drawer-tab">Sites</button>
+          <button id="lib-tab-downloads" class="drawer-tab">Downloads</button>
           <button id="lib-tab-trash" class="drawer-tab">Trash</button>
         </div>
         <div class="drawer-head-right">
           <button id="lib-import-page" class="lib-btn" title="Import a shared Chervil page (.chervil)">⤒ Import page</button>
+          <button id="lib-new-folder" class="lib-btn" title="Create a bookmark folder" hidden>+ Folder</button>
           <button id="lib-select-toggle" class="lib-btn" hidden>Select</button>
           <button id="clear-sites" class="lib-btn danger" hidden>Clear history</button>
+          <button id="clear-downloads" class="lib-btn danger" hidden>Clear list</button>
           <button id="empty-trash" class="lib-btn danger" hidden>Empty Trash</button>
           <button id="library-close" class="modal-close" title="Close">✕</button>
         </div>
@@ -641,6 +701,10 @@
       <div id="synth-row" hidden>
         <input id="synth-input" type="text" placeholder="Ask across these pages…  (blank = full overview)" />
         <button id="synth-go" class="lib-btn primary">Go</button>
+      </div>
+
+      <div id="lib-search-row">
+        <input id="lib-search" type="text" placeholder="Search this list…" spellcheck="false" autocomplete="off" />
       </div>
 
       <div id="library-list" class="drawer-list"></div>

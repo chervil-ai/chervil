@@ -4,7 +4,7 @@ const path = require('path');
 const fs = require('fs');
 const os = require('os');
 const { execFile } = require('child_process');
-const { app, BrowserWindow, ipcMain, dialog, safeStorage, Notification, Tray, Menu, globalShortcut, screen, shell, clipboard } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, safeStorage, Notification, Tray, Menu, globalShortcut, screen, shell, clipboard, session } = require('electron');
 
 // Load .env from the project root (one level up from /electron).
 // quiet:true suppresses dotenv v17's "injected env … tip" banner (which also
@@ -20,9 +20,76 @@ const { registrableDomain } = require('../lib/etld');
 const { mergeStates } = require('../lib/stateMerge');
 
 let mainWindow = null;
+let primaryWcId = null; // webContents id of the persisting window; secondary windows are ephemeral
 let tray = null;
 let quickWindow = null;
 let isQuitting = false; // true only when truly quitting (tray → Quit); otherwise window close = hide-to-tray
+
+// Send a message to the main renderer (no-op if the window is gone). Used by menu
+// accelerators (page zoom, print) that the renderer acts on.
+function sendToMain(channel, arg) {
+  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(channel, arg);
+}
+
+// --- Ad / tracker blocking ------------------------------------------------
+// A curated blocklist of common ad/tracking hosts (host-suffix match). Applied to
+// the default session (which embedded <webview> sites use). Chervil's own requests
+// (local files, DuckDuckGo favicons, getchervil.com) never match these, so the app
+// is unaffected. Opt-in — off unless the renderer enables it.
+const AD_HOSTS = [
+  'doubleclick.net', 'g.doubleclick.net', 'stats.g.doubleclick.net', 'googlesyndication.com',
+  'pagead2.googlesyndication.com', 'googleadservices.com', 'adservice.google.com', 'google-analytics.com',
+  'analytics.google.com', 'googletagmanager.com', 'googletagservices.com', 'scorecardresearch.com',
+  'adnxs.com', 'criteo.com', 'criteo.net', 'taboola.com', 'outbrain.com', 'amazon-adsystem.com',
+  'adsafeprotected.com', 'moatads.com', 'quantserve.com', 'quantcount.com', 'rubiconproject.com',
+  'pubmatic.com', 'openx.net', 'casalemedia.com', '2mdn.net', 'serving-sys.com', 'bidswitch.net',
+  'yieldmo.com', 'sharethrough.com', 'contextweb.com', 'connect.facebook.net', 'advertising.com',
+  'bat.bing.com', 'hotjar.com', 'mixpanel.com', 'segment.io', 'segment.com', 'fullstory.com',
+  'doubleverify.com', 'adroll.com', 'bluekai.com', 'demdex.net', 'omtrdc.net', 'krxd.net',
+  'mathtag.com', 'rlcdn.com', 'agkn.com', 'clarity.ms', 'branch.io', 'zqtk.net', 'adform.net',
+];
+let adblockEnabled = false;
+let adblockCount = 0; // blocked this session (for the Settings readout)
+function isAdHost(hostname) {
+  const h = (hostname || '').toLowerCase();
+  for (const d of AD_HOSTS) if (h === d || h.endsWith('.' + d)) return true;
+  return false;
+}
+function setupAdblock() {
+  session.defaultSession.webRequest.onBeforeRequest((details, cb) => {
+    if (!adblockEnabled) return cb({});
+    try {
+      if (isAdHost(new URL(details.url).hostname)) { adblockCount++; return cb({ cancel: true }); }
+    } catch { /* ignore malformed URLs */ }
+    cb({});
+  });
+}
+
+// Register Chervil as a handler for http/https so the OS can offer it as the
+// default browser. Windows/macOS still require the user to confirm the choice in
+// system settings; this just makes Chervil eligible and reversible.
+function registerWebProtocols() {
+  for (const scheme of ['http', 'https']) {
+    try {
+      if (process.defaultApp && process.argv.length >= 2) {
+        app.setAsDefaultProtocolClient(scheme, process.execPath, [path.resolve(process.argv[1])]);
+      } else {
+        app.setAsDefaultProtocolClient(scheme);
+      }
+    } catch { /* ignore */ }
+  }
+}
+
+// A URL handed to Chervil by the OS (default-browser link) → open it in a tab.
+function openExternalHttpUrl(url) {
+  if (!/^https?:\/\//i.test(String(url || ''))) return false;
+  showMain();
+  const wc = mainWindow && mainWindow.webContents;
+  if (!wc) return false;
+  if (wc.isLoading()) wc.once('did-finish-load', () => { if (!wc.isDestroyed()) wc.send('chervil:open-tab-url', url); });
+  else wc.send('chervil:open-tab-url', url);
+  return true;
+}
 
 // Credential vault (RFC 0008) — passphrase-gated, lazily created once app is ready.
 let credVault = null;
@@ -248,6 +315,14 @@ function buildAppMenu() {
   const isDev = !app.isPackaged;
   const template = [
     {
+      label: 'File',
+      submenu: [
+        { label: 'New Window', accelerator: 'CmdOrCtrl+N', click: () => createWindow({ secondary: true }) },
+        { type: 'separator' },
+        { role: 'close' },
+      ],
+    },
+    {
       label: 'Edit',
       submenu: [
         { role: 'undo' }, { role: 'redo' }, { type: 'separator' },
@@ -260,7 +335,14 @@ function buildAppMenu() {
         { role: 'reload' }, { role: 'forceReload' },
         ...(isDev ? [{ role: 'toggleDevTools' }] : []),
         { type: 'separator' },
-        { role: 'resetZoom' }, { role: 'zoomIn' }, { role: 'zoomOut' },
+        // Page-content zoom (composed page or embedded site), NOT the whole app UI.
+        // Routed to the renderer so it zooms the viewport like a browser. Owning the
+        // accelerators here means they don't also fire as renderer keydowns.
+        { label: 'Zoom In', accelerator: 'CmdOrCtrl+=', click: () => sendToMain('chervil:menu-zoom', 'in') },
+        { label: 'Zoom Out', accelerator: 'CmdOrCtrl+-', click: () => sendToMain('chervil:menu-zoom', 'out') },
+        { label: 'Actual Size', accelerator: 'CmdOrCtrl+0', click: () => sendToMain('chervil:menu-zoom', 'reset') },
+        { type: 'separator' },
+        { label: 'Print…', accelerator: 'CmdOrCtrl+P', click: () => sendToMain('chervil:menu-print') },
         { type: 'separator' }, { role: 'togglefullscreen' },
       ],
     },
@@ -315,16 +397,18 @@ function attachDownloadHandler(session) {
 
 function createWindow(opts = {}) {
   const startHidden = !!opts.startHidden;
-  mainWindow = new BrowserWindow({
+  const secondary = !!opts.secondary; // an extra, ephemeral browsing window
+  const win = new BrowserWindow({
     // Launched at sign-in: stay hidden in the tray instead of popping the window
-    // open. The user can summon it from the tray or the global hotkey.
-    show: !startHidden,
+    // open. The user can summon it from the tray or the global hotkey. (Extra
+    // windows are always shown — the user just asked for one.)
+    show: secondary ? true : !startHidden,
     width: 1280,
     height: 860,
     minWidth: 900,
     minHeight: 600,
     backgroundColor: '#0b0d12',
-    title: 'Chervil',
+    title: secondary ? 'Chervil — New Window' : 'Chervil',
     // Chervil has its own chrome (tabs, omnibar), so hide the native menu bar by
     // default. A minimal menu (set below) keeps standard accelerators; Alt reveals it.
     autoHideMenuBar: true,
@@ -343,18 +427,18 @@ function createWindow(opts = {}) {
     },
   });
 
-  mainWindow.loadFile(path.join(__dirname, '..', 'src', 'index.html'));
-  mainWindow.setMenuBarVisibility(false);
+  win.loadFile(path.join(__dirname, '..', 'src', 'index.html'));
+  win.setMenuBarVisibility(false);
   buildAppMenu();
 
   // Native right-click menus for the app UI (and any embedded real sites).
-  attachContextMenu(mainWindow.webContents, { isMainUI: true });
+  attachContextMenu(win.webContents, { isMainUI: true });
   // Inject the login-capture preload into every guest <webview> (RFC 0008 8.3).
   // It runs isolated, exposes nothing to the page, and only messages the host.
-  mainWindow.webContents.on('will-attach-webview', (_e, webPreferences) => {
+  win.webContents.on('will-attach-webview', (_e, webPreferences) => {
     webPreferences.preload = path.join(__dirname, 'webview-preload.js');
   });
-  mainWindow.webContents.on('did-attach-webview', (_e, wc) => {
+  win.webContents.on('did-attach-webview', (_e, wc) => {
     attachContextMenu(wc, { isMainUI: false });
     attachDownloadHandler(wc.session);
     // Popups / new windows from embedded real sites (RFC 0011 A1). Without this,
@@ -367,7 +451,7 @@ function createWindow(opts = {}) {
     wc.setWindowOpenHandler(({ url, disposition }) => {
       if (!/^https?:\/\//i.test(url)) return { action: 'deny' };
       if (disposition === 'foreground-tab' || disposition === 'background-tab') {
-        if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('chervil:open-tab-url', url);
+        if (!win.isDestroyed()) win.webContents.send('chervil:open-tab-url', url);
         return { action: 'deny' };
       }
       return {
@@ -382,11 +466,11 @@ function createWindow(opts = {}) {
     });
     // The allowed popup is a real child window; give it the same chrome (no menu,
     // native context menu, downloads-to-folder) as embedded sites.
-    wc.on('did-create-window', (win) => {
+    wc.on('did-create-window', (child) => {
       try {
-        win.setMenuBarVisibility(false);
-        attachContextMenu(win.webContents, { isMainUI: false });
-        attachDownloadHandler(win.webContents.session);
+        child.setMenuBarVisibility(false);
+        attachContextMenu(child.webContents, { isMainUI: false });
+        attachDownloadHandler(child.webContents.session);
       } catch { /* best effort */ }
     });
   });
@@ -396,7 +480,7 @@ function createWindow(opts = {}) {
   // in the <webview>. Benign browsing permissions (fullscreen, pointer lock) stay
   // allowed so embedded real sites still work; sensitive ones (geolocation,
   // notifications, etc.) are denied.
-  const ses = mainWindow.webContents.session;
+  const ses = win.webContents.session;
   const fromApp = (url) => (url || '').startsWith('file://');
   const BROWSING_OK = new Set(['fullscreen', 'pointerLock', 'keyboardLock', 'clipboard-sanitized-write']);
   ses.setPermissionRequestHandler((wc, permission, callback, details) => {
@@ -408,14 +492,23 @@ function createWindow(opts = {}) {
     return BROWSING_OK.has(permission);
   });
 
+  if (secondary) {
+    // Ephemeral: no session persistence (see the primary gate in load/save-state),
+    // so it can't clobber the saved session. Closing it just disposes the window.
+    return win;
+  }
+
+  mainWindow = win;
+  primaryWcId = win.webContents.id;
   // Close to tray instead of quitting, so the global hotkey (and background work)
   // keep running. A real quit goes through the tray menu (which sets isQuitting).
-  mainWindow.on('close', (e) => {
-    if (!isQuitting) { e.preventDefault(); mainWindow.hide(); }
+  win.on('close', (e) => {
+    if (!isQuitting) { e.preventDefault(); win.hide(); }
   });
 
   // Uncomment to debug the renderer.
-  // mainWindow.webContents.openDevTools({ mode: 'detach' });
+  // win.webContents.openDevTools({ mode: 'detach' });
+  return win;
 }
 
 // --- Floating quick-ask (global hotkey) + system tray -------------------------
@@ -804,11 +897,18 @@ if (!app.requestSingleInstanceLock()) {
 } else {
   app.on('second-instance', (_e, argv) => {
     showMain();
-    const url = argv.find((a) => String(a).startsWith('chervil://'));
-    if (url) handleChervilUrl(url);
+    const deep = argv.find((a) => String(a).startsWith('chervil://'));
+    if (deep) { handleChervilUrl(deep); return; }
+    // Default-browser: a link opened from another app arrives as an argv URL.
+    const web = argv.find((a) => /^https?:\/\//i.test(String(a)));
+    if (web) openExternalHttpUrl(web);
   });
 }
-app.on('open-url', (e, url) => { e.preventDefault(); handleChervilUrl(url); }); // macOS
+app.on('open-url', (e, url) => { // macOS
+  e.preventDefault();
+  if (String(url).startsWith('chervil://')) handleChervilUrl(url);
+  else openExternalHttpUrl(url);
+});
 if (process.defaultApp) {
   // Dev (running `electron .`): register with the explicit exec path + script.
   if (process.argv.length >= 2) app.setAsDefaultProtocolClient('chervil', process.execPath, [path.resolve(process.argv[1])]);
@@ -827,6 +927,7 @@ app.whenReady().then(() => {
     app.setAppUserModelId('Chervil');
   }
   loadSavedKeys();
+  setupAdblock(); // install the (opt-in) ad/tracker request filter on the default session
   applyFirstRunProvisioning(); // import installer wizard choices on first launch
   // Silent startup: when Windows launches Chervil at sign-in (registry Run key
   // adds "--hidden"; the tray toggle does the same), start minimized to the tray
@@ -839,6 +940,9 @@ app.whenReady().then(() => {
   // Cold start via a chervil:// deep link (URL passed in argv on first launch).
   const startUrl = process.argv.find((a) => String(a).startsWith('chervil://'));
   if (startUrl) handleChervilUrl(startUrl); // deliverPrompt waits for the renderer
+  // Cold start as the default browser (a link launched us with an http(s) argv).
+  const startWeb = process.argv.find((a) => /^https?:\/\//i.test(String(a)));
+  if (startWeb) openExternalHttpUrl(startWeb);
   // System-wide hotkey to summon the floating quick-ask, even when Chervil isn't focused.
   globalShortcut.register('CommandOrControl+Shift+Space', toggleQuick);
 
@@ -1492,7 +1596,7 @@ ipcMain.handle('chervil:notify', async (_event, payload) => {
 // --- Bring-your-own API key IPC (per provider) ---------------------------
 ipcMain.handle('chervil:get-key-status', async () => {
   const status = {};
-  for (const p of ['claude', 'grok', 'gemini', 'openai', 'azure', 'stt']) status[p] = !!savedKeys[p];
+  for (const p of ['claude', 'grok', 'gemini', 'openai', 'azure', 'ollama', 'stt']) status[p] = !!savedKeys[p];
   status.claudeFromEnv = !!process.env.ANTHROPIC_API_KEY && savedKeys.claude === process.env.ANTHROPIC_API_KEY;
   return status;
 });
@@ -1501,6 +1605,58 @@ ipcMain.handle('chervil:set-api-key', async (_event, payload) => {
   const provider = payload && typeof payload.provider === 'string' ? payload.provider : '';
   const key = payload && typeof payload.apiKey === 'string' ? payload.apiKey.trim() : '';
   return setKey(provider, key);
+});
+
+// Downloads shelf: open a downloaded file, or reveal it in the OS file manager.
+ipcMain.handle('chervil:open-path', async (_event, p) => {
+  try { const err = await shell.openPath(String(p || '')); return { ok: !err, error: err || undefined }; }
+  catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
+});
+ipcMain.handle('chervil:show-in-folder', async (_event, p) => {
+  try { shell.showItemInFolder(String(p || '')); return { ok: true }; }
+  catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
+});
+
+// Ad/tracker blocking: renderer syncs the toggle on load + change; stats feed the
+// Settings readout.
+ipcMain.handle('chervil:set-adblock', async (_event, enabled) => { adblockEnabled = !!enabled; return { ok: true }; });
+ipcMain.handle('chervil:adblock-stats', async () => ({ enabled: adblockEnabled, blocked: adblockCount }));
+
+// Clear browsing data: cookies, cache, and site storage for embedded sites. This
+// does NOT touch Chervil's own session/library (state file) or the password vault.
+ipcMain.handle('chervil:clear-browsing-data', async () => {
+  try {
+    const ses = session.defaultSession;
+    await ses.clearCache();
+    await ses.clearStorageData({ storages: ['cookies', 'localstorage', 'indexdb', 'websql', 'serviceworkers', 'cachestorage', 'filesystem', 'shadercache'] });
+    return { ok: true };
+  } catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
+});
+
+// Default browser: report status, and make Chervil eligible (opening the OS picker
+// where the user confirms — Windows/macOS don't let apps self-assign silently).
+ipcMain.handle('chervil:default-browser-status', async () => {
+  let isDefault = false;
+  try { isDefault = app.isDefaultProtocolClient('https') && app.isDefaultProtocolClient('http'); } catch { /* ignore */ }
+  return { isDefault, platform: process.platform, dev: !!process.defaultApp };
+});
+ipcMain.handle('chervil:make-default-browser', async () => {
+  registerWebProtocols();
+  if (process.platform === 'win32') { try { await shell.openExternal('ms-settings:defaultapps'); } catch { /* ignore */ } }
+  let isDefault = false;
+  try { isDefault = app.isDefaultProtocolClient('https'); } catch { /* ignore */ }
+  return { ok: true, isDefault, platform: process.platform };
+});
+
+// Open another window (from the tab menu / an in-app button).
+ipcMain.handle('chervil:new-window', async () => { createWindow({ secondary: true }); return { ok: true }; });
+
+// Show/hide the native menu bar for the calling window (Alt still reveals it when
+// hidden). Per-window so an ephemeral window can't change the primary's bar.
+ipcMain.handle('chervil:set-menu-bar-visible', async (event, visible) => {
+  const w = BrowserWindow.fromWebContents(event.sender);
+  if (w) { w.setAutoHideMenuBar(!visible); w.setMenuBarVisibility(!!visible); }
+  return { ok: true };
 });
 
 // Web-agent: decide the next action on a live site.
@@ -2200,7 +2356,9 @@ function reconcileConflictCopies(canonical) {
   } catch { return null; }
 }
 
-ipcMain.handle('chervil:load-state', async () => {
+ipcMain.handle('chervil:load-state', async (event) => {
+  // Secondary (ephemeral) windows start fresh and never read the saved session.
+  if (primaryWcId != null && event.sender.id !== primaryWcId) return null;
   try {
     let p = stateFile();
     // If a configured sync file isn't there yet, fall back to local, then legacy.
@@ -2220,7 +2378,9 @@ ipcMain.handle('chervil:load-state', async () => {
   }
 });
 
-ipcMain.handle('chervil:save-state', async (_event, state) => {
+ipcMain.handle('chervil:save-state', async (event, state) => {
+  // Secondary (ephemeral) windows must not write over the primary's saved session.
+  if (primaryWcId != null && event.sender.id !== primaryWcId) return { ok: true, mtimeMs: 0 };
   try {
     const p = stateFile();
     let toWrite = state;
@@ -2267,7 +2427,9 @@ ipcMain.handle('chervil:reconcile-state', async () => {
 // Info about the active state file: whether it's the synced location and its
 // last-modified time. The renderer uses this to detect when another computer has
 // updated the shared synced session (RFC 0005, decision 3 — reload-on-focus).
-ipcMain.handle('chervil:state-info', async () => {
+ipcMain.handle('chervil:state-info', async (event) => {
+  // Ephemeral windows never sync, so never prompt them to reload.
+  if (primaryWcId != null && event.sender.id !== primaryWcId) return { ok: true, synced: false, mtimeMs: 0 };
   try {
     const cfg = readConfig();
     const active = stateFile();

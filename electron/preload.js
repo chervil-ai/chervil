@@ -155,6 +155,27 @@ contextBridge.exposeInMainWorld('chervil', {
   openExternal: (url) => ipcRenderer.invoke('chervil:open-external', url),
   /** Notified when a download from an embedded site finishes. */
   onDownloadDone: (cb) => ipcRenderer.on('chervil:download-done', (_e, d) => cb(d)),
+  /** Open a downloaded file with its default app. */
+  openPath: (p) => ipcRenderer.invoke('chervil:open-path', p),
+  /** Reveal a file in the OS file manager (Explorer/Finder). */
+  showInFolder: (p) => ipcRenderer.invoke('chervil:show-in-folder', p),
+  /** Menu → page zoom ('in' | 'out' | 'reset'). */
+  onMenuZoom: (cb) => ipcRenderer.on('chervil:menu-zoom', (_e, dir) => cb(dir)),
+  /** Menu → print the current view. */
+  onMenuPrint: (cb) => ipcRenderer.on('chervil:menu-print', () => cb()),
+
+  /** Ad/tracker blocking: enable/disable + session stats. */
+  setAdblock: (enabled) => ipcRenderer.invoke('chervil:set-adblock', enabled),
+  adblockStats: () => ipcRenderer.invoke('chervil:adblock-stats'),
+  /** Clear cookies/cache/site-storage for embedded sites. */
+  clearBrowsingData: () => ipcRenderer.invoke('chervil:clear-browsing-data'),
+  /** Default browser: current status, and make Chervil eligible (opens the OS picker). */
+  defaultBrowserStatus: () => ipcRenderer.invoke('chervil:default-browser-status'),
+  makeDefaultBrowser: () => ipcRenderer.invoke('chervil:make-default-browser'),
+  /** Open another (ephemeral) browsing window. */
+  newWindow: () => ipcRenderer.invoke('chervil:new-window'),
+  /** Show/hide this window's native menu bar (File/Edit/View). */
+  setMenuBarVisible: (visible) => ipcRenderer.invoke('chervil:set-menu-bar-visible', visible),
   /** Guarded OS write-action (allowlisted in main): { type, args } → { ok }. */
   osAction: (payload) => ipcRenderer.invoke('chervil:os-action', payload),
   /** Account status for Settings → You: { ok, pro, username }. */

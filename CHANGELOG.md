@@ -6,6 +6,82 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.11.0] — 2026-07-02
+
+The everyday-browser release. Chervil is AI-first — but to be the browser you *live*
+in, it also has to do the mundane things every browser does. This release fills in
+that furniture: page zoom, a downloads shelf, printing, favicons, reader mode, a
+real bookmarks bar with folders, ad & tracker blocking, private tabs, multiple
+windows, picture-in-picture, and an address bar that suggests your history as you
+type — plus Chervil can now be your OS default browser. None of it dilutes the
+thesis; all of it removes a reason not to switch. (Also: Ollama can now use an
+optional auth token for remote servers.)
+
+### Added
+- **Page zoom.** Zoom composed pages *and* embedded sites like a real browser —
+  `Ctrl +` / `Ctrl −` / `Ctrl 0`, or a `−  100%  +` cluster in the toolbar (click the
+  percentage to reset). Persists across sessions. Toggle the cluster in
+  **Settings → toolbar buttons** (or right-click the toolbar).
+- **Downloads shelf.** Files you download from embedded sites now land in a
+  persistent **Downloads** tab in the Library, with **Open**, **Show in folder**,
+  and **Remove** (removing only clears the list, never the file).
+- **Print.** `Ctrl+P` (or **View → Print…**) prints the current page or site
+  through the normal system print dialog. Optional toolbar button too.
+- **Reader view.** On a live site, one click declutters the article into a clean,
+  readable page — no ads, no chrome. It becomes a normal Chervil page, so **Back**
+  returns to the site and you can listen to it, export it, or bookmark it. Runs
+  entirely on-device (no model cost).
+- **Favicons.** Real site icons now show on live-site tabs and in your Library
+  (Sites and bookmarked sites).
+- **Bookmark folders + a bookmarks bar.** Organize bookmarks into folders (group
+  headers + a per-bookmark folder picker in the Library), and turn on a
+  **bookmarks bar** under the address bar — folders become dropdowns, loose
+  bookmarks become one-click buttons. Toggle it in **Settings → General**, the
+  toolbar right-click menu, or **Ctrl+Shift+B**.
+- **Private tabs.** **Ctrl+Shift+N** (or the tab right-click menu) opens a private
+  tab: nothing in it is saved to your history, Library, or living pages, and it
+  isn't reopened after a restart.
+- **Multiple windows.** **Ctrl+N**, **File → New Window**, or the tab right-click
+  menu opens another window — handy on multiple monitors.
+- **Default browser.** **Settings → General → Browsing & privacy → "Make default…"**
+  registers Chervil as an http/https handler and opens the OS picker; links opened
+  from other apps then open in a Chervil tab. (Windows/macOS still ask you to
+  confirm the choice.)
+- **Ad & tracker blocking.** An opt-in toggle blocks common ad/tracker hosts on
+  embedded sites, with a running "blocked this session" count. Off by default.
+- **Clear browsing data.** One button clears cookies, cache, and site data for
+  embedded sites — plus your Sites history and Downloads list. Bookmarks and saved
+  logins are kept.
+- **Search from the address bar.** Chervil still answers with Sprig by default, but
+  a **bang** does a plain web search: `g!` Google, `ddg!` DuckDuckGo, `b!` Bing, or
+  `s!` for your default (set in **Settings → General → Search**).
+- **Address-bar suggestions.** As you type, a dropdown suggests matching sites from
+  your history and bookmarks (with favicons), plus **Search the web** and **Ask
+  Sprig** — arrow keys + Enter to pick.
+- **Library search.** A search box in the Library filters the current list
+  (History, Bookmarks, Sites, Downloads, Trash) as you type.
+- **Picture-in-picture.** Pop a video out of an embedded site into a floating,
+  always-on-top window.
+- **Mute a noisy tab.** When a site is making sound, a speaker badge appears on its
+  tab — click to mute/unmute.
+- **Show the menu bar.** **Settings → Appearance** can keep the native File/Edit/View
+  menu bar visible instead of hiding it until you press Alt.
+- **Optional Ollama token.** The Ollama provider now accepts an optional API key,
+  sent as an `Authorization: Bearer` header — for remote or password-protected
+  Ollama servers. Local Ollama still needs none.
+
+### Changed
+- The toolbar **History** button is now **Library** — it opens History, Bookmarks,
+  Sites, Downloads, and Trash.
+- Page zoom, print, and reader view are all toggleable toolbar buttons (Settings or
+  the toolbar right-click menu), which now also toggles the bookmarks bar.
+
+### Fixed
+- The toolbar right-click ("Show on toolbar") menu no longer stacks up duplicate
+  copies or refuses to close — it now dismisses on outside-click, Esc, or clicking
+  the page.
+- Saving an Ollama setting now shows a clear confirmation like the other providers.
+
 ## [0.10.0] — 2026-07-01
 
 Chat gets smart, and Chervil gets docs. Chat mode used to be a knowledgeable but
