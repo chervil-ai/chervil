@@ -6,6 +6,39 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.12.0] — 2026-07-03
+
+The wallet release. Chervil already kept your passwords in an encrypted,
+passphrase-locked vault; now it keeps your **payment cards** there too — filled
+into a checkout with one deliberate click, never shown to Sprig, never
+auto-submitted. Plus a real fix for making Chervil your Windows default browser
+(it now actually registers as a browser, so it shows up in the picker), and
+show/hide toggles for the address-bar fill buttons.
+
+### Added
+- **Payment-card autofill.** Save cards to the **same encrypted vault** as your
+  passwords (one master passphrase, AES-256-GCM + your OS keychain) and fill them
+  at checkout with a new **💳 button** on the address bar — name, number, and
+  expiry, across combined `MM/YY` fields or separate month/year inputs and
+  dropdowns. It **never auto-submits**, and card details are **never shown to
+  Sprig** and never written to the plaintext settings file. For your security the
+  **CVC is never stored** — you type it yourself at checkout — and card listings
+  show only the brand and last four digits. Manage cards in **Settings → Security
+  → Payment cards** (add, reveal, delete). Numbers are Luhn-checked on save.
+- **Show/hide the fill buttons.** New toggles in **Settings → Security** let you
+  hide the 🔑 (saved-login) and 💳 (saved-card) buttons from the address bar if you
+  don't want them there. Both are shown by default.
+
+### Fixed
+- **"Make default browser" now actually works on Windows.** Previously the button
+  only opened the Windows *Default apps* page — where Chervil wasn't even listed as
+  a browser to choose. It now registers Chervil's browser capabilities in the
+  registry (per-user, no admin needed) so it appears as a selectable web browser,
+  deep-links to its own entry in the picker, and keeps the registration fresh
+  across updates. The confirmation is honest about the one manual step Windows
+  still requires (no app can silently seize the default), and dev builds say so
+  instead of sending you on a dead-end trip.
+
 ## [0.11.0] — 2026-07-02
 
 The everyday-browser release. Chervil is AI-first — but to be the browser you *live*

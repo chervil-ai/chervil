@@ -105,6 +105,7 @@
           <button id="sched-btn" class="omni-btn text" title="Scheduled agents">⏰ <span class="lbl">Schedules</span></button>
           <button id="agents-btn" class="omni-btn text" title="Agents — personas &amp; tools">👤 <span class="lbl">Agents</span></button>
           <button id="autofill-pw-btn" class="omni-btn" title="Fill a saved login" hidden>🔑</button>
+          <button id="autofill-card-btn" class="omni-btn" title="Fill a saved payment card" hidden>💳</button>
           <button id="bookmark-btn" class="omni-btn" title="Bookmark this page" disabled>☆</button>
           <button id="reader-btn" class="omni-btn" title="Reader view — declutter this page" disabled>📖</button>
           <button id="pip-btn" class="omni-btn" title="Picture-in-picture (pop out the video)" disabled>📺</button>
@@ -587,6 +588,20 @@
         <h3>Passwords <span class="badge-soft">encrypted</span></h3>
         <p class="group-hint">Save logins for real sites and fill them back in with the 🔑 button. Passwords are encrypted with a <strong>master passphrase</strong> (and your OS keychain) and <strong>never shown to Sprig, never sent anywhere</strong>. Sprig itself never types passwords. The vault <strong>auto-locks</strong> (see below) and asks for your passphrase again before filling. <em>(Windows Hello unlock is planned.)</em></p>
         <div id="creds-panel" class="creds-panel"></div>
+        <label class="toggle-row">
+          <input type="checkbox" id="pw-fill-toggle" />
+          <span>Show the 🔑 fill button on the address bar <small>(it appears on real sites when you have a saved login)</small></span>
+        </label>
+      </section>
+
+      <section class="setting-group" data-sgroup="security">
+        <h3>Payment cards <span class="badge-soft">encrypted</span></h3>
+        <p class="group-hint">Save cards to fill at checkout with the 💳 button. Cards live in the <strong>same encrypted vault</strong> as your passwords (one master passphrase) and are <strong>never shown to Sprig, never sent anywhere</strong>. For your security, the <strong>CVC/security code is never stored</strong> — you type it yourself at checkout. Chervil <strong>never auto-submits</strong> a payment.</p>
+        <div id="cards-panel" class="creds-panel"></div>
+        <label class="toggle-row">
+          <input type="checkbox" id="card-fill-toggle" />
+          <span>Show the 💳 fill button on the address bar <small>(it appears on real sites when you have a saved card)</small></span>
+        </label>
       </section>
 
       <section class="setting-group" data-sgroup="you">

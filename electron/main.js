@@ -80,6 +80,58 @@ function registerWebProtocols() {
   }
 }
 
+// Register Chervil as a *browser* in the Windows registry so it actually shows up
+// in Settings → Default apps as a selectable web browser. `setAsDefaultProtocolClient`
+// above only registers a URL-protocol handler — that is NOT enough for the Win10/11
+// default-apps picker, which only lists apps that publish the "Capabilities" keys
+// under HKCU\Software\Clients\StartMenuInternet + RegisteredApplications. Without
+// these, opening ms-settings:defaultapps is a dead end (nothing to select), which
+// is exactly why "Make default" appeared to do nothing. All keys are per-user
+// (HKCU) so no elevation is needed. Windows still requires the user to confirm the
+// choice in Settings — no app can self-assign the default browser.
+function runReg(args) {
+  return new Promise((resolve) => {
+    execFile('reg', args, { windowsHide: true }, (err) => resolve(!err));
+  });
+}
+const BROWSER_PROGID = 'ChervilHTML';
+const BROWSER_APPKEY = 'Chervil'; // key under StartMenuInternet + RegisteredApplications
+async function registerAsBrowser() {
+  // Only meaningful on Windows, and only for a packaged build — in dev,
+  // process.execPath is electron.exe, which we must never register as "the browser".
+  if (process.platform !== 'win32' || process.defaultApp) return false;
+  const exe = process.execPath;
+  const icon = exe + ',0';
+  const openUrlCmd = `"${exe}" "%1"`;
+  const startMenu = `Software\\Clients\\StartMenuInternet\\${BROWSER_APPKEY}`;
+  const caps = `HKCU\\${startMenu}\\Capabilities`;
+  const set = (key, name, data) =>
+    runReg(name === null
+      ? ['add', key, '/ve', '/d', data, '/f']
+      : ['add', key, '/v', name, '/t', 'REG_SZ', '/d', data, '/f']);
+  try {
+    // 1) ProgID that describes how to open an http(s) URL / .htm(l) file with Chervil.
+    await set(`HKCU\\Software\\Classes\\${BROWSER_PROGID}`, null, 'Chervil HTML Document');
+    await set(`HKCU\\Software\\Classes\\${BROWSER_PROGID}\\Application`, 'ApplicationName', 'Chervil');
+    await set(`HKCU\\Software\\Classes\\${BROWSER_PROGID}\\DefaultIcon`, null, icon);
+    await set(`HKCU\\Software\\Classes\\${BROWSER_PROGID}\\shell\\open\\command`, null, openUrlCmd);
+    // 2) StartMenuInternet client entry — what marks Chervil as a *browser*.
+    await set(`HKCU\\${startMenu}`, null, 'Chervil');
+    await set(`HKCU\\${startMenu}\\DefaultIcon`, null, icon);
+    await set(`HKCU\\${startMenu}\\shell\\open\\command`, null, `"${exe}"`);
+    // 3) Capabilities — the URL/file associations the default-apps picker reads.
+    await set(caps, 'ApplicationName', 'Chervil');
+    await set(caps, 'ApplicationIcon', icon);
+    await set(caps, 'ApplicationDescription', 'The agentic, conversational web browser.');
+    await set(`${caps}\\StartMenu`, 'StartMenuInternet', BROWSER_APPKEY);
+    for (const scheme of ['http', 'https']) await set(`${caps}\\URLAssociations`, scheme, BROWSER_PROGID);
+    for (const ext of ['.htm', '.html']) await set(`${caps}\\FileAssociations`, ext, BROWSER_PROGID);
+    // 4) Advertise the capabilities set so Windows surfaces Chervil in Default apps.
+    await set('HKCU\\Software\\RegisteredApplications', BROWSER_APPKEY, `${startMenu}\\Capabilities`);
+    return true;
+  } catch { return false; }
+}
+
 // A URL handed to Chervil by the OS (default-browser link) → open it in a tab.
 function openExternalHttpUrl(url) {
   if (!/^https?:\/\//i.test(String(url || ''))) return false;
@@ -937,6 +989,9 @@ app.whenReady().then(() => {
   const launchedHidden = process.argv.includes('--hidden') || process.argv.includes('--startup');
   createWindow({ startHidden: launchedHidden || openedAtLogin });
   createTray();
+  // Keep the browser registration fresh (the exe path moves across updates) so
+  // Chervil stays selectable in Default apps. Fire-and-forget, packaged Windows only.
+  registerAsBrowser().catch(() => {});
   // Cold start via a chervil:// deep link (URL passed in argv on first launch).
   const startUrl = process.argv.find((a) => String(a).startsWith('chervil://'));
   if (startUrl) handleChervilUrl(startUrl); // deliverPrompt waits for the renderer
@@ -1141,6 +1196,45 @@ ipcMain.handle('chervil:creds-for-origin', async (_e, payload) => {
     if (!origin) return { ok: true, items: [] };
     return { ok: true, origin, items: vault().getForOrigin(origin) };
   } catch (err) { return { ok: false, error: String(err && err.message ? err.message : err) }; }
+});
+
+// --- Payment cards (RFC 0008, Phase 8.5): same vault, same passphrase gate -----
+// The full card number leaves the main process ONLY via cards-reveal (Settings)
+// and cards-for-fill (a deliberate fill gesture), both requiring an UNLOCKED
+// vault. Listings carry brand + last4 only. The CVC is never stored. Card data is
+// never placed in any model prompt (never touches Sprig).
+ipcMain.handle('chervil:cards-list', async () => {
+  try { return { ok: true, items: vault().listCards() }; }
+  catch (err) { return { ok: false, error: String(err && err.message ? err.message : err) }; }
+});
+// Count for the fill affordance — reports configured/unlocked without needing the
+// passphrase, mirroring creds-count-for-origin.
+ipcMain.handle('chervil:cards-count', async () => {
+  try {
+    const v = vault();
+    const configured = v.isConfigured();
+    const unlocked = v.isUnlocked();
+    return { ok: true, configured, unlocked, count: unlocked ? v.countCards() : null };
+  } catch (err) { return { ok: false, error: String(err && err.message ? err.message : err) }; }
+});
+ipcMain.handle('chervil:cards-save', async (_e, payload) => {
+  try {
+    const p = payload || {};
+    const res = vault().saveCard({ id: p.id, cardholder: p.cardholder, number: p.number, expMonth: p.expMonth, expYear: p.expYear, label: p.label });
+    return { ok: true, id: res.id };
+  } catch (err) { return { ok: false, error: String(err && err.message ? err.message : err) }; }
+});
+ipcMain.handle('chervil:cards-delete', async (_e, payload) => {
+  try { vault().removeCard((payload || {}).id); return { ok: true }; }
+  catch (err) { return { ok: false, error: String(err && err.message ? err.message : err) }; }
+});
+ipcMain.handle('chervil:cards-reveal', async (_e, payload) => {
+  try { return { ok: true, ...vault().revealCard((payload || {}).id) }; }
+  catch (err) { return { ok: false, error: String(err && err.message ? err.message : err) }; }
+});
+ipcMain.handle('chervil:cards-for-fill', async (_e, payload) => {
+  try { return { ok: true, ...vault().getCardForFill((payload || {}).id) }; }
+  catch (err) { return { ok: false, error: String(err && err.message ? err.message : err) }; }
 });
 
 // --- Plain chat ("Just a chatbot" mode): a text reply, no page composed ----
@@ -1642,10 +1736,21 @@ ipcMain.handle('chervil:default-browser-status', async () => {
 });
 ipcMain.handle('chervil:make-default-browser', async () => {
   registerWebProtocols();
-  if (process.platform === 'win32') { try { await shell.openExternal('ms-settings:defaultapps'); } catch { /* ignore */ } }
+  // Publish the browser Capabilities so Chervil is actually selectable in the
+  // picker, THEN open it. Deep-link to Chervil's own entry when we can (Win11
+  // honors registeredAppUser; older builds ignore the query and open the list).
+  let registered = false;
+  if (process.platform === 'win32') {
+    registered = await registerAsBrowser();
+    const target = registered
+      ? `ms-settings:defaultapps?registeredAppUser=${BROWSER_APPKEY}`
+      : 'ms-settings:defaultapps';
+    try { await shell.openExternal(target); } catch { try { await shell.openExternal('ms-settings:defaultapps'); } catch { /* ignore */ } }
+  }
   let isDefault = false;
-  try { isDefault = app.isDefaultProtocolClient('https'); } catch { /* ignore */ }
-  return { ok: true, isDefault, platform: process.platform };
+  try { isDefault = app.isDefaultProtocolClient('https') && app.isDefaultProtocolClient('http'); } catch { /* ignore */ }
+  // dev builds can't self-register (execPath is electron.exe) — tell the renderer.
+  return { ok: true, registered, isDefault, platform: process.platform, dev: !!process.defaultApp };
 });
 
 // Open another window (from the tab menu / an in-app button).

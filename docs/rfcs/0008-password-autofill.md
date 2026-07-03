@@ -169,6 +169,19 @@ locked.
   fill username+password, never submit.
 - **8.3 — Save-on-submit capture** prompt + manual save.
 - **8.4 — Re-auth / auto-lock** (OS Hello or master passphrase), reveal-gated.
+- **8.5 — Payment-card autofill.** Cards live in the *same* passphrase-gated vault
+  (`chervil-creds.bin`), stored alongside logins under a `{ logins, cards }`
+  payload (legacy bare-array vaults migrate transparently on first write). A card
+  holds cardholder / full PAN / expiry / brand / last4 — **the CVC is never
+  stored** (card-network best practice; the user types it at checkout). Listings
+  expose brand + last4 only; the full number leaves the main process solely via
+  `cards-reveal` (Settings) and `cards-for-fill` (a deliberate 💳 fill gesture),
+  both requiring an unlocked vault. A `cc-*`-aware injector fills number / name /
+  expiry (combined *or* split month/year inputs and `<select>`s) and **never
+  submits**. Card data is never placed in a model prompt (never touches Sprig) and
+  never written to the plaintext settings/state file where identity autofill lives.
+  The 💳 affordance and its Settings → Security show/hide toggle mirror the 🔑
+  login button.
 - **Later — encrypted sync** via RFC 0005 (end-to-end only), browser import,
   password generator, passkeys.
 

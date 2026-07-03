@@ -75,6 +75,18 @@ contextBridge.exposeInMainWorld('chervil', {
     hasExact: (url, username, password) => ipcRenderer.invoke('chervil:creds-has-exact', { url, username, password }),
   },
 
+  /** Payment cards (RFC 0008, Phase 8.5) — same passphrase-gated vault as `creds`.
+   *  reveal/forFill return the full number and require an unlocked vault. No CVC
+   *  is ever stored; card data never reaches the model. */
+  cards: {
+    list: () => ipcRenderer.invoke('chervil:cards-list'),
+    count: () => ipcRenderer.invoke('chervil:cards-count'),
+    save: (card) => ipcRenderer.invoke('chervil:cards-save', card),
+    remove: (id) => ipcRenderer.invoke('chervil:cards-delete', { id }),
+    reveal: (id) => ipcRenderer.invoke('chervil:cards-reveal', { id }),
+    forFill: (id) => ipcRenderer.invoke('chervil:cards-for-fill', { id }),
+  },
+
   /** Build any registered skill (RFC 0003) → { ok, kind, artifact, html }. */
   buildSkill: (payload) => ipcRenderer.invoke('chervil:build-skill', payload),
 

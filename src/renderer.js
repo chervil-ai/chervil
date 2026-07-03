@@ -183,6 +183,10 @@ const els = {
   pipBtn: document.getElementById('pip-btn'),
   bookmarkBtn: document.getElementById('bookmark-btn'),
   pwFillBtn: document.getElementById('autofill-pw-btn'),
+  pwFillToggle: document.getElementById('pw-fill-toggle'),
+  cardFillBtn: document.getElementById('autofill-card-btn'),
+  cardFillToggle: document.getElementById('card-fill-toggle'),
+  cardsPanel: document.getElementById('cards-panel'),
   emptyTrash: document.getElementById('empty-trash'),
   libImportPage: document.getElementById('lib-import-page'),
   libSelectToggle: document.getElementById('lib-select-toggle'),
@@ -265,6 +269,8 @@ let settings = {
   pageZoom: 1,               // viewport zoom for the page/site (Ctrl +/−/0), applied to the frame + webview
   searchEngine: 'google',    // engine used by omnibox search escapes (g!/ddg!/b!/s!) — 'google' | 'duckduckgo' | 'bing'
   bookmarksBar: false,       // show the bookmarks strip under the omnibar (Ctrl+Shift+B)
+  showPwFill: true,          // show the 🔑 saved-login fill button on the omnibar (Settings → Security)
+  showCardFill: true,        // show the 💳 saved-card fill button on the omnibar (Settings → Security)
   adblock: false,            // block common ad/tracker hosts in embedded sites (main-process filter)
   showMenuBar: false,        // always show the native menu bar (File/Edit/View); else Alt reveals it
 };
@@ -2483,6 +2489,51 @@ function passwordFillScript(credJson) {
   })()`;
 }
 
+// ---- Payment-card autofill (RFC 0008, Phase 8.5): user-initiated ---------------
+// Injected into the live <webview> to fill ONE saved card into a checkout form.
+// Handles combined MM/YY fields and separate month/year inputs or <select>s.
+// NEVER fills the CVC (we don't store it) and NEVER submits. Returns { found, filled }.
+function cardFillScript(cardJson) {
+  return `(function(){
+    var c = ${cardJson};
+    var mm = ('0'+c.expMonth).slice(-2);
+    var yyyy = String(c.expYear);
+    var yy = yyyy.slice(-2);
+    function vis(el){ return el && el.offsetParent !== null && !el.disabled && !el.readOnly; }
+    function hay(el){ return ((el.getAttribute('autocomplete')||'')+' '+(el.name||'')+' '+(el.id||'')+' '+(el.placeholder||'')+' '+(el.getAttribute('aria-label')||'')).toLowerCase(); }
+    function setVal(el,val){ try{ el.focus(); el.value=val; el.dispatchEvent(new Event('input',{bubbles:true})); el.dispatchEvent(new Event('change',{bubbles:true})); return true; }catch(e){ return false; } }
+    function setSelect(el,cands){
+      var opts=Array.prototype.slice.call(el.options);
+      for(var i=0;i<cands.length;i++){
+        var want=String(cands[i]).toLowerCase();
+        var m=opts.find(function(o){ return (o.value||'').toLowerCase()===want || (o.text||'').trim().toLowerCase()===want; });
+        if(m){ el.value=m.value; el.dispatchEvent(new Event('input',{bubbles:true})); el.dispatchEvent(new Event('change',{bubbles:true})); return true; }
+      }
+      return false;
+    }
+    var fields = Array.prototype.slice.call(document.querySelectorAll('input, select')).filter(vis);
+    var n=0, filledNumber=false;
+    // 1) Card number (most identifying).
+    var numEl = fields.find(function(el){ var h=hay(el); return el.tagName==='INPUT' && (/cc-number|cardnumber|card-number|ccnum/.test(h) || (/card/.test(h) && /number|num\\b/.test(h))); });
+    if(numEl){ if(setVal(numEl, c.number)) { n++; filledNumber=true; } }
+    // 2) Cardholder name.
+    var nameEl = fields.find(function(el){ var h=hay(el); return el.tagName==='INPUT' && (/cc-name|ccname|card.?holder|name.?on.?card|cardname/.test(h) || (/card/.test(h)&&/name/.test(h))); });
+    if(nameEl && c.cardholder){ if(setVal(nameEl, c.cardholder)) n++; }
+    // 3) Expiry — separate month/year fields, else a combined field.
+    var monthEl = fields.find(function(el){ var h=hay(el); return /cc-exp-month|exp.?month|expmonth|expiry.?month|expirationmonth/.test(h) || (/month/.test(h)&&/exp|card/.test(h)); });
+    var yearEl = fields.find(function(el){ var h=hay(el); return /cc-exp-year|exp.?year|expyear|expiry.?year|expirationyear/.test(h) || (/year/.test(h)&&/exp|card/.test(h)); });
+    if(monthEl || yearEl){
+      if(monthEl){ var okm = monthEl.tagName==='SELECT' ? setSelect(monthEl,[mm,String(c.expMonth)]) : setVal(monthEl, mm); if(okm) n++; }
+      if(yearEl){ var oky = yearEl.tagName==='SELECT' ? setSelect(yearEl,[yyyy,yy]) : setVal(yearEl, (yearEl.maxLength===2 ? yy : yyyy)); if(oky) n++; }
+    } else {
+      var expEl = fields.find(function(el){ var h=hay(el); return el.tagName==='INPUT' && (/cc-exp|expir|\\bexp\\b|mm.?\\/.?yy/.test(h)); });
+      if(expEl){ var fmt = /yyyy/.test(hay(expEl)) ? (mm+'/'+yyyy) : (mm+'/'+yy); if(setVal(expEl, fmt)) n++; }
+    }
+    // NOTE: the CVC / security code is intentionally never filled — it is never stored.
+    return { found: (filledNumber || n>0), filled: n };
+  })()`;
+}
+
 // ---- Vault auto-lock (RFC 0008, Phase 8.4) ----
 // Re-auth = the master passphrase is required again after the vault locks. The
 // vault locks on app hide/minimize (unless "never") and after an idle timeout.
@@ -2494,7 +2545,7 @@ async function lockVault(reason) {
     if (!st || !st.ok || !st.unlocked) return; // already locked / not set up
     await window.chervil.creds.lock();
     updatePwFillButton();
-    if (els.settingsModal && els.settingsModal.classList.contains('open')) renderCredsPanel();
+    if (els.settingsModal && els.settingsModal.classList.contains('open')) { renderCredsPanel(); renderCardsPanel(); }
     if (reason === 'idle') toast('Passwords locked (idle).');
   } catch { /* ignore */ }
 }
@@ -2537,8 +2588,8 @@ async function ensureVaultUnlocked() {
   if (!st.configured) { toast('Set up a master passphrase first in Settings → Security.'); return false; }
   if (st.unlocked) return true;
   const pass = await showInputSheet({
-    title: 'Unlock your passwords',
-    subtitle: 'Enter your master passphrase to fill this login.',
+    title: 'Unlock your vault',
+    subtitle: 'Enter your master passphrase to continue.',
     placeholder: 'Master passphrase', type: 'password', okLabel: 'Unlock',
   });
   if (pass == null) return false;
@@ -2584,6 +2635,46 @@ async function fillPasswordOnSite() {
   if (items.length === 1) { doFillCredential(items[0], cur); return; }
   showActionSheet('Choose a login', `Fill credentials for ${site}`,
     items.map((it) => ({ label: it.username || '(no username)', onClick: () => doFillCredential(it, cur) })));
+}
+
+// Fill one saved card into the live checkout form. Explicit action only: the user
+// clicks 💳, unlocks the vault if needed, and picks a card. The full number lives
+// in the renderer only for the moment it takes to inject it — never logged, never
+// sent to the model.
+async function doFillCard(cardId, cur) {
+  const tab = activeTab();
+  let res;
+  try { res = await window.chervil.cards.forFill(cardId); } catch { res = null; }
+  if (!res || !res.ok) { toast((res && res.error) || 'Couldn’t read that card.'); return; }
+  const last4 = String(res.number || '').slice(-4);
+  try {
+    const r = await els.webview.executeJavaScript(cardFillScript(JSON.stringify({ number: res.number, cardholder: res.cardholder, expMonth: res.expMonth, expYear: res.expYear })), true);
+    // Audit records WHAT happened, never the card number.
+    auditAction({ type: 'card_fill', target: cur.url || '', decision: 'allow', ok: !!(r && r.filled) });
+    if (r && r.found) {
+      addMessage(tab, 'bot', r.filled
+        ? `Filled your ${res.brand} ····${last4} on ${hostOf(cur.url) || 'this page'}. Enter the security code (CVC) and review before you pay — Chervil never submits a payment.`
+        : 'Found a payment form but couldn’t fill it.');
+    } else {
+      toast('No payment form found on this page.');
+    }
+  } catch (e) {
+    toast(`Couldn’t fill the card — ${errText(e, 'no payment form found')}.`);
+  }
+}
+
+async function fillCardOnSite() {
+  const tab = activeTab();
+  const cur = currentEntry(tab);
+  if (!cur || cur.kind !== 'navigate' || els.webview.hidden) { toast('Open a checkout page first.'); return; }
+  if (!(await ensureVaultUnlocked())) return;
+  let res;
+  try { res = await window.chervil.cards.list(); } catch { res = null; }
+  const items = (res && res.ok && res.items) || [];
+  if (!items.length) { toast('No saved cards yet — add one in Settings → Security.'); return; }
+  if (items.length === 1) { doFillCard(items[0].id, cur); return; }
+  showActionSheet('Choose a card', 'Fill a saved card on this page',
+    items.map((it) => ({ label: `${it.brand} ····${it.last4}${it.label ? ' · ' + it.label : ''}`, onClick: () => doFillCard(it.id, cur) })));
 }
 
 // Read the username/password currently typed into the live page's login form.
@@ -2653,11 +2744,12 @@ async function onCapturedLogin(data) {
 // Show/enable the 🔑 fill button based on context: only on a live site, enabled
 // when there's a saved login to fill (or the vault needs unlocking first).
 async function updatePwFillButton() {
+  updateCardFillButton(); // keep the 💳 affordance in sync at every call site
   const btn = els.pwFillBtn;
   if (!btn) return;
   const cur = currentEntry(activeTab());
   const onLive = !!(cur && cur.kind === 'navigate' && els.webview && !els.webview.hidden);
-  btn.hidden = !onLive || !window.chervil.creds;
+  btn.hidden = !onLive || !window.chervil.creds || settings.showPwFill === false;
   if (btn.hidden) return;
   try {
     const url = (els.webview.getURL && els.webview.getURL()) || cur.url || '';
@@ -2666,6 +2758,25 @@ async function updatePwFillButton() {
     if (!r.unlocked) { btn.disabled = false; btn.classList.remove('dim'); btn.title = 'Fill a saved login (unlock required)'; return; }
     if (r.count > 0) { btn.disabled = false; btn.classList.remove('dim'); btn.title = `Fill saved login (${r.count})`; }
     else { btn.disabled = true; btn.classList.add('dim'); btn.title = 'No saved login for this site'; }
+  } catch { btn.disabled = true; btn.classList.add('dim'); }
+}
+
+// Show/enable the 💳 fill button: only on a live site, enabled when the vault has
+// at least one saved card (or needs unlocking first). Cards aren't origin-scoped —
+// a card can fill any checkout — so we gate on "has cards", not on the domain.
+async function updateCardFillButton() {
+  const btn = els.cardFillBtn;
+  if (!btn) return;
+  const cur = currentEntry(activeTab());
+  const onLive = !!(cur && cur.kind === 'navigate' && els.webview && !els.webview.hidden);
+  btn.hidden = !onLive || !window.chervil.cards || settings.showCardFill === false;
+  if (btn.hidden) return;
+  try {
+    const r = await window.chervil.cards.count();
+    if (!r || !r.ok || !r.configured) { btn.disabled = true; btn.classList.add('dim'); btn.title = 'No saved cards yet (set up in Settings → Security)'; return; }
+    if (!r.unlocked) { btn.disabled = false; btn.classList.remove('dim'); btn.title = 'Fill a saved card (unlock required)'; return; }
+    if (r.count > 0) { btn.disabled = false; btn.classList.remove('dim'); btn.title = `Fill a saved card (${r.count})`; }
+    else { btn.disabled = true; btn.classList.add('dim'); btn.title = 'No saved cards yet (add one in Settings → Security)'; }
   } catch { btn.disabled = true; btn.classList.add('dim'); }
 }
 
@@ -6074,6 +6185,8 @@ function applySettingsToUI() {
   if (els.tabLayoutSelect) els.tabLayoutSelect.value = isVerticalTabs() ? 'vertical' : 'horizontal';
   if (els.remixDefaultSelect) els.remixDefaultSelect.value = settings.remixMinimized ? 'minimized' : 'expanded';
   if (els.menuBarToggle) els.menuBarToggle.checked = !!settings.showMenuBar;
+  if (els.pwFillToggle) els.pwFillToggle.checked = settings.showPwFill !== false;
+  if (els.cardFillToggle) els.cardFillToggle.checked = settings.showCardFill !== false;
   if (els.sttEndpoint) els.sttEndpoint.value = settings.sttEndpoint || '';
   if (els.sttModel) els.sttModel.value = settings.sttModel || '';
   if (els.publishToken) els.publishToken.value = settings.publishToken || '';
@@ -6097,6 +6210,7 @@ function applySettingsToUI() {
   refreshSttKeyStatus();
   refreshImageKeyStatus();
   renderCredsPanel();
+  renderCardsPanel();
   renderMcpServers();
 }
 
@@ -6152,7 +6266,7 @@ async function renderCredsPanel() {
     const note = credsEl('small', { class: 'field-note' });
     const submit = async () => {
       const r = await window.chervil.creds.setup(input.value);
-      if (r && r.ok) { toast('Password vault created.'); renderCredsPanel(); }
+      if (r && r.ok) { toast('Password vault created.'); renderCredsPanel(); renderCardsPanel(); }
       else { note.textContent = (r && r.error) || 'Couldn’t create the vault.'; note.className = 'field-note warn'; }
     };
     input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); submit(); } });
@@ -6168,7 +6282,7 @@ async function renderCredsPanel() {
     const note = credsEl('small', { class: 'field-note' });
     const submit = async () => {
       const r = await window.chervil.creds.unlock(input.value);
-      if (r && r.ok) { toast('Passwords unlocked.'); renderCredsPanel(); }
+      if (r && r.ok) { toast('Passwords unlocked.'); renderCredsPanel(); renderCardsPanel(); updatePwFillButton(); }
       else { note.textContent = (r && r.error) || 'Wrong passphrase.'; note.className = 'field-note warn'; input.select(); }
     };
     input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); submit(); } });
@@ -6180,7 +6294,7 @@ async function renderCredsPanel() {
   }
 
   // 3) Unlocked — manage entries.
-  const lockBtn = credsEl('button', { class: 'lib-btn', text: '🔒 Lock', title: 'Lock the vault now', onclick: async () => { await window.chervil.creds.lock(); toast('Passwords locked.'); renderCredsPanel(); } });
+  const lockBtn = credsEl('button', { class: 'lib-btn', text: '🔒 Lock', title: 'Lock the vault now', onclick: async () => { await window.chervil.creds.lock(); toast('Passwords locked.'); renderCredsPanel(); renderCardsPanel(); updatePwFillButton(); } });
   panel.appendChild(credsEl('div', { class: 'creds-toolbar' }, [credsEl('span', { class: 'field-note ok', text: 'Unlocked for this session.' }), lockBtn]));
 
   // Add-new form.
@@ -6230,6 +6344,96 @@ async function renderCredsList(wrap) {
       if (!confirm(`Delete the saved login for ${it.origin}?`)) return;
       const r = await window.chervil.creds.remove(it.id);
       if (r && r.ok) { toast('Login deleted.'); renderCredsList(wrap); } else { toast('Couldn’t delete.'); }
+    } });
+    wrap.appendChild(credsEl('div', { class: 'creds-row' }, [meta, credsEl('div', { class: 'creds-actions' }, [revealBtn, delBtn])]));
+  }
+}
+
+// Format a stored expiry (month int, 4-digit year) as MM/YY for display.
+function fmtExpiry(month, year) { return ('0' + month).slice(-2) + '/' + String(year).slice(-2); }
+
+// Payment cards panel — shares the same vault (and passphrase gate) as passwords.
+async function renderCardsPanel() {
+  const panel = els.cardsPanel;
+  if (!panel || !window.chervil.cards || !window.chervil.creds) return;
+  panel.innerHTML = '';
+  let st;
+  try { st = await window.chervil.creds.status(); } catch { st = null; }
+  if (!st || !st.ok) { panel.appendChild(credsEl('p', { class: 'field-note warn', text: 'Card storage is unavailable in this build.' })); return; }
+  if (!st.encryptionAvailable) {
+    panel.appendChild(credsEl('p', { class: 'field-note warn', text: 'Your OS has no encryption backend available, so cards can’t be stored securely here.' }));
+    return;
+  }
+  // The vault is created in the Passwords section above — don't duplicate setup.
+  if (!st.configured) {
+    panel.appendChild(credsEl('p', { class: 'group-hint', text: 'Set a master passphrase in the Passwords section above first — cards use the same encrypted vault.' }));
+    return;
+  }
+  // Locked — offer to unlock right here (unlocks the whole vault for this session).
+  if (!st.unlocked) {
+    const input = credsEl('input', { type: 'password', class: 'mcp-field', placeholder: 'Master passphrase', autocomplete: 'current-password' });
+    const note = credsEl('small', { class: 'field-note' });
+    const submit = async () => {
+      const r = await window.chervil.creds.unlock(input.value);
+      if (r && r.ok) { toast('Vault unlocked.'); renderCardsPanel(); renderCredsPanel(); updatePwFillButton(); }
+      else { note.textContent = (r && r.error) || 'Wrong passphrase.'; note.className = 'field-note warn'; input.select(); }
+    };
+    input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); submit(); } });
+    panel.appendChild(credsEl('p', { class: 'group-hint', text: 'Enter your master passphrase to view and manage saved cards.' }));
+    panel.appendChild(credsEl('div', { class: 'mcp-add' }, [input, credsEl('button', { class: 'lib-btn primary', text: 'Unlock', onclick: submit })]));
+    panel.appendChild(note);
+    return;
+  }
+
+  // Unlocked — add-new card form.
+  const nameInput = credsEl('input', { type: 'text', class: 'mcp-field', placeholder: 'Name on card', spellcheck: 'false', autocomplete: 'off' });
+  const numInput = credsEl('input', { type: 'text', class: 'mcp-field', placeholder: 'Card number', spellcheck: 'false', autocomplete: 'off', inputmode: 'numeric' });
+  const mmInput = credsEl('input', { type: 'text', class: 'mcp-field mcp-field-sm', placeholder: 'MM', spellcheck: 'false', autocomplete: 'off', inputmode: 'numeric', maxlength: '2' });
+  const yyInput = credsEl('input', { type: 'text', class: 'mcp-field mcp-field-sm', placeholder: 'YYYY', spellcheck: 'false', autocomplete: 'off', inputmode: 'numeric', maxlength: '4' });
+  const labelInput = credsEl('input', { type: 'text', class: 'mcp-field', placeholder: 'Label (optional, e.g. Personal)', spellcheck: 'false', autocomplete: 'off' });
+  const addNote = credsEl('small', { class: 'field-note' });
+  const addBtn = credsEl('button', { class: 'lib-btn primary', text: 'Save card', onclick: async () => {
+    if (!numInput.value.trim() || !mmInput.value.trim() || !yyInput.value.trim()) { addNote.textContent = 'Card number and expiry are required.'; addNote.className = 'field-note warn'; return; }
+    const r = await window.chervil.cards.save({ cardholder: nameInput.value.trim(), number: numInput.value, expMonth: mmInput.value.trim(), expYear: yyInput.value.trim(), label: labelInput.value.trim() });
+    if (r && r.ok) { nameInput.value = numInput.value = mmInput.value = yyInput.value = labelInput.value = ''; addNote.textContent = ''; toast('Card saved.'); renderCardsList(listWrap); updatePwFillButton(); }
+    else { addNote.textContent = (r && r.error) || 'Couldn’t save.'; addNote.className = 'field-note warn'; }
+  } });
+  panel.appendChild(credsEl('p', { class: 'field-note', text: 'The security code (CVC) is never stored — you’ll enter it at checkout.' }));
+  panel.appendChild(credsEl('div', { class: 'mcp-add creds-add' }, [nameInput, numInput, mmInput, yyInput, labelInput, addBtn]));
+  panel.appendChild(addNote);
+
+  const listWrap = credsEl('div', { class: 'creds-list' });
+  panel.appendChild(listWrap);
+  renderCardsList(listWrap);
+}
+
+async function renderCardsList(wrap) {
+  wrap.innerHTML = '';
+  let items = [];
+  try { const r = await window.chervil.cards.list(); items = (r && r.ok && r.items) || []; } catch { /* ignore */ }
+  if (!items.length) { wrap.appendChild(credsEl('div', { class: 'lib-empty', text: 'No saved cards yet.' })); return; }
+  items.sort((a, b) => (a.brand || '').localeCompare(b.brand || '') || (a.last4 || '').localeCompare(b.last4 || ''));
+  for (const it of items) {
+    const title = `${it.brand} ····${it.last4}` + (it.label ? ` · ${it.label}` : '');
+    const meta = credsEl('div', { class: 'creds-meta' }, [
+      credsEl('div', { class: 'creds-origin', text: title }),
+      credsEl('div', { class: 'creds-user', text: `${it.cardholder || '(no name)'} · exp ${fmtExpiry(it.expMonth, it.expYear)}` }),
+    ]);
+    const revealBtn = credsEl('button', { class: 'lib-btn', text: '👁 Reveal', onclick: async (e) => {
+      const shown = e.target.dataset.shown === '1';
+      if (shown) { e.target.textContent = '👁 Reveal'; e.target.dataset.shown = '0'; meta.querySelector('.creds-pass')?.remove(); return; }
+      const r = await window.chervil.cards.reveal(it.id);
+      if (r && r.ok) {
+        // Group the full number in 4s for readability; it isn't persisted anywhere.
+        const grouped = String(r.number).replace(/(.{4})/g, '$1 ').trim();
+        e.target.textContent = '🙈 Hide'; e.target.dataset.shown = '1';
+        meta.appendChild(credsEl('div', { class: 'creds-pass', text: grouped }));
+      } else { toast((r && r.error) || 'Couldn’t reveal.'); }
+    } });
+    const delBtn = credsEl('button', { class: 'lib-btn danger', text: 'Delete', onclick: async () => {
+      if (!confirm(`Delete ${it.brand} ····${it.last4}?`)) return;
+      const r = await window.chervil.cards.remove(it.id);
+      if (r && r.ok) { toast('Card deleted.'); renderCardsList(wrap); updatePwFillButton(); } else { toast('Couldn’t delete.'); }
     } });
     wrap.appendChild(credsEl('div', { class: 'creds-row' }, [meta, credsEl('div', { class: 'creds-actions' }, [revealBtn, delBtn])]));
   }
@@ -7678,9 +7882,24 @@ if (els.heroToggle) els.heroToggle.addEventListener('change', () => {
 
 // Browsing & privacy controls (default browser, ad-block, clear data).
 if (els.makeDefaultBtn) els.makeDefaultBtn.addEventListener('click', async () => {
-  try { await window.chervil.makeDefaultBrowser(); } catch { /* ignore */ }
-  toast('Choose Chervil in the system Default Apps window to finish.');
-  setTimeout(refreshPrivacyUI, 400);
+  let r; try { r = await window.chervil.makeDefaultBrowser(); } catch { r = null; }
+  if (r && r.dev) {
+    // In `electron .` dev, execPath is electron.exe so we can't register a real
+    // browser — say so plainly instead of sending the user on a dead-end trip.
+    toast('Making Chervil the default only works in the installed app, not dev.');
+  } else if (r && r.isDefault) {
+    toast('Chervil is already your default browser.');
+  } else {
+    // The picker is now open with Chervil selectable — the OS won't let us flip it
+    // for you, so tell the user exactly what to do to finish.
+    toast('In the window that opened, pick Chervil as your web browser to finish.');
+  }
+  refreshPrivacyUI();
+});
+// When the user comes back from the OS Default apps window, refresh the status
+// line so it flips to "Chervil is your default browser." without reopening Settings.
+window.addEventListener('focus', () => {
+  if (els.settingsModal && els.settingsModal.classList.contains('open')) refreshPrivacyUI();
 });
 if (els.adblockToggle) els.adblockToggle.addEventListener('change', async () => {
   settings.adblock = els.adblockToggle.checked;
@@ -7735,6 +7954,9 @@ if (els.libNewFolder) els.libNewFolder.addEventListener('click', createBookmarkF
 if (els.bookmarksBarToggle) els.bookmarksBarToggle.addEventListener('change', () => { settings.bookmarksBar = els.bookmarksBarToggle.checked; applyBookmarksBar(); scheduleSave(); });
 if (els.bookmarkBtn) els.bookmarkBtn.addEventListener('click', toggleBookmark);
 if (els.pwFillBtn) els.pwFillBtn.addEventListener('click', fillPasswordOnSite);
+if (els.pwFillToggle) els.pwFillToggle.addEventListener('change', () => { settings.showPwFill = els.pwFillToggle.checked; updatePwFillButton(); scheduleSave(); });
+if (els.cardFillBtn) els.cardFillBtn.addEventListener('click', fillCardOnSite);
+if (els.cardFillToggle) els.cardFillToggle.addEventListener('change', () => { settings.showCardFill = els.cardFillToggle.checked; updateCardFillButton(); scheduleSave(); });
 els.emptyTrash.addEventListener('click', emptyTrash);
 if (els.libImportPage) els.libImportPage.addEventListener('click', importPageFile);
 if (els.libSelectToggle) els.libSelectToggle.addEventListener('click', enterLibrarySelect);
