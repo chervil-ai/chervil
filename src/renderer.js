@@ -159,6 +159,7 @@ const els = {
   libraryList: document.getElementById('library-list'),
   libTabHistory: document.getElementById('lib-tab-history'),
   libTabBookmarks: document.getElementById('lib-tab-bookmarks'),
+  libTabFavorites: document.getElementById('lib-tab-favorites'),
   libTabSites: document.getElementById('lib-tab-sites'),
   libTabDownloads: document.getElementById('lib-tab-downloads'),
   libTabTrash: document.getElementById('lib-tab-trash'),
@@ -166,10 +167,21 @@ const els = {
   clearDownloads: document.getElementById('clear-downloads'),
   libSearch: document.getElementById('lib-search'),
   libNewFolder: document.getElementById('lib-new-folder'),
+  libCollapseAll: document.getElementById('lib-collapse-all'),
   bookmarksBar: document.getElementById('bookmarks-bar'),
   bookmarksBarToggle: document.getElementById('bookmarks-bar-toggle'),
+  favoritesBar: document.getElementById('favorites-bar'),
+  favoritesBarToggle: document.getElementById('favorites-bar-toggle'),
   makeDefaultBtn: document.getElementById('make-default-btn'),
   defaultBrowserStatus: document.getElementById('default-browser-status'),
+  importBookmarksBtn: document.getElementById('import-bookmarks-btn'),
+  importStatus: document.getElementById('import-status'),
+  importHistoryBtn: document.getElementById('import-history-btn'),
+  importHistoryStatus: document.getElementById('import-history-status'),
+  importPwBtn: document.getElementById('import-pw-btn'),
+  importPwStatus: document.getElementById('import-pw-status'),
+  importAddressBtn: document.getElementById('import-address-btn'),
+  importAddressStatus: document.getElementById('import-address-status'),
   adblockToggle: document.getElementById('adblock-toggle'),
   adblockStat: document.getElementById('adblock-stat'),
   clearDataBtn: document.getElementById('clear-data-btn'),
@@ -182,6 +194,7 @@ const els = {
   readerBtn: document.getElementById('reader-btn'),
   pipBtn: document.getElementById('pip-btn'),
   bookmarkBtn: document.getElementById('bookmark-btn'),
+  favoriteBtn: document.getElementById('favorite-btn'),
   pwFillBtn: document.getElementById('autofill-pw-btn'),
   pwFillToggle: document.getElementById('pw-fill-toggle'),
   cardFillBtn: document.getElementById('autofill-card-btn'),
@@ -269,8 +282,8 @@ let settings = {
   pageZoom: 1,               // viewport zoom for the page/site (Ctrl +/−/0), applied to the frame + webview
   searchEngine: 'google',    // engine used by omnibox search escapes (g!/ddg!/b!/s!) — 'google' | 'duckduckgo' | 'bing'
   bookmarksBar: false,       // show the bookmarks strip under the omnibar (Ctrl+Shift+B)
-  showPwFill: true,          // show the 🔑 saved-login fill button on the omnibar (Settings → Security)
-  showCardFill: true,        // show the 💳 saved-card fill button on the omnibar (Settings → Security)
+  favoritesBar: false,       // show the favorites strip (★ sites) under the omnibar
+  collapsedFolders: [],      // ["favorites:Name" | "bookmarks:Name"] folder groups the user collapsed in the Library
   adblock: false,            // block common ad/tracker hosts in embedded sites (main-process filter)
   showMenuBar: false,        // always show the native menu bar (File/Edit/View); else Alt reveals it
 };
@@ -336,12 +349,24 @@ function providerConfig(agentOverride) {
 // Auto-collected library of composed pages, plus a trash bin.
 //   item = { id, createdAt, title, query, html, sources, conversation, history, spaceId }
 let library = { history: [], trash: [] };
-let bookmarks = []; // [{ id, key, kind:'site'|'page', url?, query?, title, at, folder? }]
-let bookmarkFolders = []; // ordered folder names; also holds empty folders (bookmarks carry `folder`)
+// "Saved Pages" (internally still `bookmarks`): composed Chervil pages the user
+// saved, on the ribbon button. Sites live in Favorites, not here. [{ id, key, kind:'page', query, title, at, folder?, tab }]
+let bookmarks = [];
+let bookmarkFolders = []; // ordered folder names; also holds empty folders (pages carry `folder`)
+// Favorites: your websites, on the ★ star — like a standard browser's favorites/
+// bookmarks. Folders + the browser-import target. [{ id, key, url, title, at, folder? }]
+let favorites = [];
+let favoriteFolders = []; // ordered folder names (favorites carry `folder`)
+let favoriteTombstones = []; // [{ key, at }] — same delete-survives-sync trick as bookmarks
 // Tombstones for removed bookmarks, so a delete propagates across synced machines
 // and the union-merge (lib/stateMerge.js) doesn't resurrect it. [{ key, at }]
 let bookmarkTombstones = [];
 const MAX_BOOKMARK_TOMBSTONES = 1000;
+// Id-keyed delete tombstones for the other synced collections (composed pages,
+// trash, site history, agents, schedules), so those removals also survive the
+// cross-machine union-merge instead of resurrecting. { coll: [{ id, at }] }
+let deletionTombstones = { pages: [], trash: [], sites: [], agents: [], schedules: [] };
+const MAX_DEL_TOMBSTONES = 1000;
 let siteHistory = []; // [{ id, url, title, at }] newest-first — real sites visited
 const MAX_SITE_HISTORY = 500;
 let downloads = []; // [{ id, filename, path, at, ok, state }] newest-first — files saved from embedded sites
@@ -354,11 +379,15 @@ let librarySearch = ''; // filter text for the Library drawer list (all tabs)
 let librarySelectMode = false;
 let selectedLibraryIds = new Set();
 
-// Spaces: persistent topic workspaces. Each composed page is filed into the active
-// Space; Sprig can synthesize across everything collected in a Space.
+// Spaces (legacy): these organized the Activity timeline's auto-captured pages.
+// Activity is now a flat timeline, so this data stays dormant (kept, not shown).
 //   space = { id, name, createdAt }
 let spaces = [];
 let activeSpaceId = null;
+// Saved-Pages Spaces: the organizing structure for Saved Pages (replacing folders).
+// A saved page carries `spaceId`; Synthesize/Publish operate on the active Space.
+let savedSpaces = [];
+let activeSavedSpaceId = null;
 
 // Living pages: composed pages that re-ground themselves on a schedule.
 //   record = { id, tabId, entryId, query, intervalMs, lastRun, title, refreshing }
@@ -1156,6 +1185,46 @@ function sprigAvatar() {
   return av;
 }
 
+// Turn bare URLs in a plain-text chat message into clickable links that open in
+// a fresh Chervil tab. We build DOM nodes (never innerHTML) so message text stays
+// safe from injection — only the URLs we explicitly match become anchors.
+const CHAT_URL_RE = /((?:https?:\/\/|www\.)[^\s<>]+)/gi;
+function appendLinkified(container, text) {
+  const str = String(text == null ? '' : text);
+  CHAT_URL_RE.lastIndex = 0;
+  let last = 0;
+  let m;
+  while ((m = CHAT_URL_RE.exec(str))) {
+    const start = m.index;
+    let url = m[0];
+    // Peel trailing punctuation that's almost certainly sentence, not URL…
+    let trail = '';
+    const tm = url.match(/[)\].,;:!?'"]+$/);
+    if (tm) {
+      trail = tm[0];
+      let core = url.slice(0, url.length - trail.length);
+      // …but hand back a ')' when the URL has an unmatched '(' e.g. wiki_(disambig).
+      while (trail.startsWith(')') && (core.split('(').length > core.split(')').length)) {
+        core += ')';
+        trail = trail.slice(1);
+      }
+      url = core;
+    }
+    if (start > last) container.appendChild(document.createTextNode(str.slice(last, start)));
+    const href = /^https?:\/\//i.test(url) ? url : 'https://' + url;
+    const a = document.createElement('a');
+    a.className = 'chat-link';
+    a.textContent = url;
+    a.href = href;
+    a.title = href;
+    a.addEventListener('click', (e) => { e.preventDefault(); openUrlInNewTab(href); });
+    container.appendChild(a);
+    if (trail) container.appendChild(document.createTextNode(trail));
+    last = start + m[0].length;
+  }
+  if (last < str.length) container.appendChild(document.createTextNode(str.slice(last)));
+}
+
 function appendMessageEl(role, text, cls, sources) {
   // Bot messages come from Sprig, so pair them with his avatar.
   if (role === 'bot') {
@@ -1163,7 +1232,7 @@ function appendMessageEl(role, text, cls, sources) {
     row.className = 'bot-row';
     const bubble = document.createElement('div');
     bubble.className = `msg bot${cls ? ' ' + cls : ''}`;
-    bubble.textContent = text;
+    appendLinkified(bubble, text);
     // Chat mode can search the web — when it did, list the live sources it used
     // as clickable links under the reply (they open like any other Chervil link).
     if (Array.isArray(sources) && sources.length) {
@@ -1193,7 +1262,7 @@ function appendMessageEl(role, text, cls, sources) {
   }
   const el = document.createElement('div');
   el.className = `msg ${role}${cls ? ' ' + cls : ''}`;
-  el.textContent = text;
+  appendLinkified(el, text);
   els.conversation.appendChild(el);
   return el;
 }
@@ -2749,7 +2818,7 @@ async function updatePwFillButton() {
   if (!btn) return;
   const cur = currentEntry(activeTab());
   const onLive = !!(cur && cur.kind === 'navigate' && els.webview && !els.webview.hidden);
-  btn.hidden = !onLive || !window.chervil.creds || settings.showPwFill === false;
+  btn.hidden = !onLive || !window.chervil.creds || !toolbarVisible('pwFill');
   if (btn.hidden) return;
   try {
     const url = (els.webview.getURL && els.webview.getURL()) || cur.url || '';
@@ -2769,7 +2838,7 @@ async function updateCardFillButton() {
   if (!btn) return;
   const cur = currentEntry(activeTab());
   const onLive = !!(cur && cur.kind === 'navigate' && els.webview && !els.webview.hidden);
-  btn.hidden = !onLive || !window.chervil.cards || settings.showCardFill === false;
+  btn.hidden = !onLive || !window.chervil.cards || !toolbarVisible('cardFill');
   if (btn.hidden) return;
   try {
     const r = await window.chervil.cards.count();
@@ -3297,7 +3366,7 @@ function renderSchedules() {
     const del = document.createElement('button');
     del.className = 'si-btn';
     del.textContent = 'Delete';
-    del.addEventListener('click', () => { schedules = schedules.filter((s) => s.id !== sch.id); scheduleSave(); renderSchedules(); });
+    del.addEventListener('click', () => { addTombstone('schedules', sch.id); schedules = schedules.filter((s) => s.id !== sch.id); scheduleSave(); renderSchedules(); });
 
     item.appendChild(main);
     item.appendChild(runBtn);
@@ -3667,6 +3736,7 @@ function renderAgents() {
     del.textContent = 'Delete';
     del.addEventListener('click', () => {
       if (activeAgentId === a.id) activeAgentId = null;
+      addTombstone('agents', a.id);
       agents = agents.filter((x) => x.id !== a.id);
       scheduleSave();
       renderAgents();
@@ -4649,7 +4719,7 @@ function runFind(forward) {
   }
 }
 
-function handleComposerSubmit(text) {
+function handleComposerSubmit(text, opts = {}) {
   const tab = activeTab();
   if (!tab || isTabBusy(tab.id) || agentRunning) return;
   let query = stripWake(text);
@@ -4669,7 +4739,9 @@ function handleComposerSubmit(text) {
   if (skillMode) { buildAndRenderSkill(tab, skillMode, query, skillMode === 'learn' ? 'lesson' : 'quiz'); return; }
 
   // "Just a chatbot" mode: a plain conversational reply, no page composed.
-  if (settings.chatMode) { chatSubmit(tab, query); return; }
+  // forceChat routes a single turn to chat (e.g. the extension's "Chervil Chat")
+  // without flipping the sticky global toggle.
+  if (settings.chatMode || opts.forceChat) { chatSubmit(tab, query); return; }
 
   // On a live site, the composer drives the web agent instead of composing a page.
   const cur = currentEntry(tab);
@@ -5393,31 +5465,102 @@ function addToLibrary(tab, result, query) {
   if (library.history.length > MAX_LIBRARY) library.history.length = MAX_LIBRARY;
 }
 
-// ---- Spaces ----
+// ---- Spaces (legacy) ----
+// Kept only because the "Pin files to Space" feature still files pins into the legacy
+// active space bucket (loadSpacePinnedAttachments). setActiveSpace/createSpace/
+// spaceItems were removed — dead after Spaces moved to Saved Pages.
 function activeSpace() {
   return spaces.find((s) => s.id === activeSpaceId) || spaces[0] || null;
 }
 
-function setActiveSpace(id) {
-  if (!spaces.find((s) => s.id === id)) return;
-  activeSpaceId = id;
+// ---- Saved-Pages Spaces ----
+// Saved Pages are organized into Spaces (not folders). Ensure a default Space exists
+// and every saved page is filed into one — runs on load + after sync.
+function ensureSavedSpaces() {
+  let changed = false;
+  if (!savedSpaces.length) { savedSpaces.push({ id: uid(), name: 'My Pages', createdAt: Date.now() }); changed = true; }
+  // Two machines each mint a fresh "My Pages" before their first sync; after merge
+  // that's two near-identical defaults with pages split between them. Collapse them
+  // deterministically (earliest createdAt wins on every machine) and remap pages.
+  const defs = savedSpaces.filter((s) => s.name === 'My Pages').sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
+  if (defs.length > 1) {
+    const keep = defs[0].id;
+    const drop = new Set(defs.slice(1).map((s) => s.id));
+    for (const b of bookmarks) if (b && b.kind === 'page' && drop.has(b.spaceId)) b.spaceId = keep;
+    savedSpaces = savedSpaces.filter((s) => !drop.has(s.id));
+    if (drop.has(activeSavedSpaceId)) activeSavedSpaceId = keep;
+    changed = true;
+  }
+  if (!activeSavedSpaceId || !savedSpaces.find((s) => s.id === activeSavedSpaceId)) { activeSavedSpaceId = savedSpaces[0].id; changed = true; }
+  const def = savedSpaces[0].id;
+  for (const b of bookmarks) if (b && b.kind === 'page' && !b.spaceId) { b.spaceId = def; changed = true; }
+  if (changed) scheduleSave(); // persist the default Space + filings so ids stay stable across launches
+  return changed;
+}
+function activeSavedSpace() { return savedSpaces.find((s) => s.id === activeSavedSpaceId) || savedSpaces[0] || null; }
+function setActiveSavedSpace(id) {
+  if (!savedSpaces.find((s) => s.id === id)) return;
+  activeSavedSpaceId = id;
   renderDrawer();
   scheduleSave();
 }
-
-function createSpace(name) {
+function createSavedSpace(name) {
   const sp = { id: uid(), name: String(name || '').trim().slice(0, 40) || 'New Space', createdAt: Date.now() };
-  spaces.push(sp);
-  activeSpaceId = sp.id;
+  savedSpaces.push(sp);
+  activeSavedSpaceId = sp.id;
   renderDrawer();
   scheduleSave();
   return sp;
 }
-
-// History items for the active Space (older items lacking spaceId fall into it too,
-// so nothing gets stranded after migration).
-function spaceItems() {
-  return library.history.filter((it) => (it.spaceId || activeSpaceId) === activeSpaceId);
+function moveSavedPageToSpace(id, spaceId) {
+  const b = bookmarks.find((x) => x.id === id);
+  if (!b || !spaceId) return;
+  b.spaceId = spaceId;
+  scheduleSave();
+  renderDrawer();
+  renderBookmarksBar();
+}
+// The saved pages filed into the active Space.
+function savedSpaceItems() {
+  return bookmarks.filter((b) => b.kind === 'page' && (b.spaceId || activeSavedSpaceId) === activeSavedSpaceId);
+}
+// Pull the display HTML out of a saved page's session snapshot (its current page).
+function savedPageHtml(b) {
+  const pages = b && b.tab && Array.isArray(b.tab.pages) ? b.tab.pages : [];
+  if (!pages.length) return '';
+  const cur = pages.find((p) => p.id === (b.tab && b.tab.currentId)) || pages[pages.length - 1];
+  return (cur && cur.html) || '';
+}
+// Normalize the active Saved-Pages Space into library-item-like docs for Synthesize
+// and Publish (which expect { title, query, html, createdAt }).
+function savedSpaceDocs() {
+  return savedSpaceItems()
+    .map((b) => ({ id: b.id, title: b.title, query: b.query || b.title, html: savedPageHtml(b), createdAt: b.at }))
+    .filter((d) => d.html);
+}
+// A <select> to move a saved page between Spaces (drawer rows).
+function savedSpaceSelect(item) {
+  const sel = document.createElement('select');
+  sel.className = 'lib-folder-select';
+  for (const sp of savedSpaces) {
+    const o = document.createElement('option'); o.value = sp.id; o.textContent = sp.name;
+    sel.appendChild(o);
+  }
+  const optNew = document.createElement('option'); optNew.value = '__new__'; optNew.textContent = 'New space…';
+  sel.appendChild(optNew);
+  sel.value = item.spaceId || activeSavedSpaceId || (savedSpaces[0] && savedSpaces[0].id) || '';
+  sel.addEventListener('click', (e) => e.stopPropagation());
+  sel.addEventListener('change', () => {
+    if (sel.value === '__new__') {
+      const name = (prompt('New space name:') || '').trim();
+      if (!name) { sel.value = item.spaceId || ''; return; }
+      const sp = createSavedSpace(name);
+      moveSavedPageToSpace(item.id, sp.id);
+    } else {
+      moveSavedPageToSpace(item.id, sel.value);
+    }
+  });
+  return sel;
 }
 
 function stripText(html) {
@@ -5440,56 +5583,53 @@ function buildSpaceContext(items) {
   return parts.join('\n\n').slice(0, 7000);
 }
 
-// Synthesize a new page grounded in everything collected in the active Space.
-async function synthesizeSpace(query) {
-  const items = spaceItems();
-  const sp = activeSpace();
-  if (!items.length) {
+// Synthesize across the active Saved-Pages Space (composed pages you saved).
+async function synthesizeSavedSpace(query) {
+  const docs = savedSpaceDocs();
+  const sp = activeSavedSpace();
+  const name = sp ? sp.name : 'Space';
+  if (!docs.length) {
     closeDrawer();
     const tab = activeTab();
-    if (tab) addMessage(tab, 'bot', `Your "${sp ? sp.name : 'Space'}" has no pages yet — compose a few, then synthesize.`, 'error');
+    if (tab) addMessage(tab, 'bot', `"${name}" has no saved pages with content yet — save a few pages into it, then synthesize.`, 'error');
     return;
   }
-  const spaceContext = buildSpaceContext(items);
-  // Pinned Space files feed Synthesize unless the user turned the feature off.
+  const spaceContext = buildSpaceContext(docs);
+  // Pinned Space files feed Synthesize too (parity with the old Space synthesize),
+  // unless the user turned the feature off.
   let attachments = [];
   if (settings.spaceFilesMode !== 'off') { try { attachments = await loadSpacePinnedAttachments(); } catch { attachments = []; } }
   const q = (query || '').trim() ||
-    `Synthesize everything I've collected in my "${sp ? sp.name : 'research'}" Space into one clear overview — compare the pages, connect the themes, and tell me the key takeaways.`;
+    `Synthesize everything I've saved in my "${name}" Space into one clear overview — compare the pages, connect the themes, and tell me the key takeaways.`;
   closeDrawer();
   submitQuery(q, {
     spaceContext,
     attachments,
     skipFollowup: true,
     allowNavigate: false,
-    displayText: (query || '').trim() || `Synthesize "${sp ? sp.name : 'my Space'}" (${items.length} pages)`,
+    displayText: (query || '').trim() || `Synthesize "${name}" (${docs.length} pages)`,
   });
 }
 
-// Publish every page in the active Space to the web, then a styled index page
-// linking them all. Returns the index URL (the shareable Space link).
-async function publishCurrentSpace() {
-  const items = spaceItems();
-  const sp = activeSpace();
+// Publish every page in the active Saved-Pages Space, then a styled index.
+async function publishCurrentSavedSpace() {
+  const docs = savedSpaceDocs();
+  const sp = activeSavedSpace();
   const spaceName = sp ? sp.name : 'My Space';
-  if (!items.length) { toast(`"${spaceName}" has no pages to publish.`); return; }
+  if (!docs.length) { toast(`"${spaceName}" has no pages to publish.`); return; }
   if (!settings.publishToken) { toast('Add a publish token in Settings → Publishing.'); return; }
   if (!window.chervil.publishPage) { toast('Publishing isn’t available in this build.'); return; }
-  const pages = items.filter((it) => it.html);
-  if (!pages.length) { toast('No composed pages in this Space to publish.'); return; }
-  if (!confirm(`Publish all ${pages.length} page${pages.length === 1 ? '' : 's'} in "${spaceName}" to the web?`)) return;
-
+  if (!confirm(`Publish all ${docs.length} page${docs.length === 1 ? '' : 's'} in "${spaceName}" to the web?`)) return;
   const token = settings.publishToken;
   const baseUrl = settings.publishBase || 'https://getchervil.com';
-  toast(`Publishing ${pages.length} page${pages.length === 1 ? '' : 's'}…`);
+  toast(`Publishing ${docs.length} page${docs.length === 1 ? '' : 's'}…`);
   const published = [];
-  for (const it of pages) {
+  for (const it of docs) {
     try {
       const res = await window.chervil.publishPage({ html: it.html, title: it.title || it.query || 'Chervil page', token, baseUrl });
       if (res && res.ok && res.url) published.push({ title: it.title || it.query || 'Untitled page', url: res.url, createdAt: it.createdAt });
     } catch { /* skip this page, keep going */ }
   }
-
   closeDrawer();
   const tab = activeTab();
   if (!published.length) {
@@ -5501,7 +5641,6 @@ async function publishCurrentSpace() {
     const res = await window.chervil.publishPage({ html: buildSpaceIndexHtml(spaceName, published), title: spaceName, token, baseUrl });
     if (res && res.ok && res.url) indexUrl = res.url;
   } catch { /* index failed; pages are still up */ }
-
   const n = published.length;
   if (indexUrl) {
     if (tab) addMessage(tab, 'bot', `Published "${spaceName}" — ${n} page${n === 1 ? '' : 's'} live at ${indexUrl}`);
@@ -5574,8 +5713,10 @@ function deleteLibraryItem(id) {
   const idx = library.history.findIndex((i) => i.id === id);
   if (idx === -1) return;
   const [it] = library.history.splice(idx, 1);
+  it.updatedAt = Date.now();          // fresh recency so the move wins over sync
   library.trash.unshift(it);
   if (library.trash.length > MAX_LIBRARY) library.trash.length = MAX_LIBRARY;
+  addTombstone('pages', id);          // don't let another machine resurrect it into history
   renderDrawer();
   scheduleSave();
 }
@@ -5590,7 +5731,11 @@ function deleteLibraryItems(ids) {
     if (idSet.has(it.id)) { moved.push(it); return false; }
     return true;
   });
-  for (let i = moved.length - 1; i >= 0; i--) library.trash.unshift(moved[i]);
+  for (let i = moved.length - 1; i >= 0; i--) {
+    moved[i].updatedAt = Date.now();
+    library.trash.unshift(moved[i]);
+    addTombstone('pages', moved[i].id);
+  }
   if (library.trash.length > MAX_LIBRARY) library.trash.length = MAX_LIBRARY;
   renderDrawer();
   scheduleSave();
@@ -5613,7 +5758,7 @@ function toggleLibrarySelected(id) {
   renderDrawer();
 }
 function selectAllLibrary() {
-  const shown = spaceItems();
+  const shown = library.history; // Activity is now a flat timeline of every composed page
   const allSel = shown.length > 0 && shown.every((it) => selectedLibraryIds.has(it.id));
   selectedLibraryIds = new Set(allSel ? [] : shown.map((it) => it.id));
   renderDrawer();
@@ -5630,12 +5775,16 @@ function restoreLibraryItem(id) {
   const idx = library.trash.findIndex((i) => i.id === id);
   if (idx === -1) return;
   const [it] = library.trash.splice(idx, 1);
+  it.updatedAt = Date.now();          // fresh recency so the restore wins over sync
   library.history.unshift(it);
+  clearTombstone('pages', id);        // it's allowed back in history now…
+  addTombstone('trash', id);          // …and gone from trash on every machine
   renderDrawer();
   scheduleSave();
 }
 
 function emptyTrash() {
+  for (const it of library.trash) addTombstone('trash', it && it.id);
   library.trash = [];
   renderDrawer();
   scheduleSave();
@@ -5654,40 +5803,47 @@ function relTime(ts) {
 }
 
 function renderSpaceBar() {
-  // The Space bar only applies to the History tab, and is hidden while multi-selecting.
-  els.spaceBar.hidden = drawerTab !== 'history' || librarySelectMode;
-  if (drawerTab !== 'history' || librarySelectMode) {
+  // The Space bar now organizes Saved Pages (composed pages), with Synthesize/Publish.
+  const show = drawerTab === 'bookmarks';
+  els.spaceBar.hidden = !show;
+  if (!show) {
     if (els.newSpaceRow) els.newSpaceRow.hidden = true;
     if (els.synthRow) els.synthRow.hidden = true;
     return;
   }
+  ensureSavedSpaces();
   els.spaceSelect.innerHTML = '';
-  for (const sp of spaces) {
+  for (const sp of savedSpaces) {
     const opt = document.createElement('option');
     opt.value = sp.id;
     opt.textContent = sp.name;
-    if (sp.id === activeSpaceId) opt.selected = true;
+    if (sp.id === activeSavedSpaceId) opt.selected = true;
     els.spaceSelect.appendChild(opt);
   }
 }
 
 // ---- Bookmarks ----
 // A stable key per entry so toggling/lookup is reliable (site → URL, page → query).
+// Saved Pages only hold composed Chervil pages (kind:'page'). Live sites go to
+// Favorites via the ★ star, so a site entry has no Saved-Pages key.
 function entryBookmarkKey(entry) {
   if (!entry) return null;
-  if (entry.kind === 'navigate') return 'site:' + (entry.url || '');
   if (entry.kind === 'page') return 'page:' + (entry.query || entry.title || '');
   return null;
 }
+// Bookmark ribbon — outline when not saved, filled when saved. (Favorites keep
+// the ★ star; bookmarks now read as a proper bookmark, like other browsers.)
+const BOOKMARK_ICON = (filled) => `<svg viewBox="0 0 24 24" width="15" height="15" fill="${filled ? 'currentColor' : 'none'}" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><path d="M6 3h12a1 1 0 0 1 1 1v17l-7-4.5L5 21V4a1 1 0 0 1 1-1z"/></svg>`;
 function updateBookmarkStar() {
+  updateFavoriteStar(); // the ★ favorite affordance rides along at every call site
   if (!els.bookmarkBtn) return;
   const entry = currentEntry(activeTab());
   const key = entryBookmarkKey(entry);
   const on = !!key && bookmarks.some((b) => b.key === key);
   els.bookmarkBtn.disabled = !key;
-  els.bookmarkBtn.textContent = on ? '★' : '☆';
+  els.bookmarkBtn.innerHTML = BOOKMARK_ICON(on);
   els.bookmarkBtn.classList.toggle('on', on);
-  els.bookmarkBtn.title = !key ? 'Bookmark' : on ? 'Remove bookmark' : 'Bookmark this page';
+  els.bookmarkBtn.title = !key ? 'Save page (composed Chervil pages only)' : on ? 'Remove from Saved Pages' : 'Save this page';
 }
 function toggleBookmark() {
   const tab = activeTab();
@@ -5695,28 +5851,28 @@ function toggleBookmark() {
   const key = entryBookmarkKey(entry);
   if (!key) return;
   const idx = bookmarks.findIndex((b) => b.key === key);
-  if (idx >= 0) { bookmarks.splice(idx, 1); addBookmarkTombstone(key); toast('Bookmark removed.'); }
+  if (idx >= 0) { bookmarks.splice(idx, 1); addBookmarkTombstone(key); toast('Removed from Saved Pages.'); }
   else {
     clearBookmarkTombstone(key); // re-adding overrides any prior delete
-    const bm = entry.kind === 'navigate'
-      ? { id: uid(), key, kind: 'site', url: entry.url, title: tab.title || hostOf(entry.url) || entry.url, at: Date.now() }
-      : {
-          id: uid(), key, kind: 'page',
-          query: entry.query || '',
-          title: entry.title || tab.title || 'Saved page',
-          at: Date.now(),
-          // Snapshot the whole tab (conversation + history + page tree) so reopening
-          // restores the full session like History does — not a recompose-from-query.
-          tab: {
-            title: tab.title,
-            conversation: (tab.conversation || []).map((m) => ({ ...m })),
-            history: (tab.history || []).map((h) => ({ ...h })),
-            pages: (tab.pages || []).map((p) => ({ ...p })),
-            currentId: tab.currentId,
-          },
-        };
+    ensureSavedSpaces(); // guarantee an active Space to file this into
+    const bm = {
+      id: uid(), key, kind: 'page',
+      query: entry.query || '',
+      title: entry.title || tab.title || 'Saved page',
+      at: Date.now(),
+      spaceId: activeSavedSpaceId,
+      // Snapshot the whole tab (conversation + history + page tree) so reopening
+      // restores the full session like History does — not a recompose-from-query.
+      tab: {
+        title: tab.title,
+        conversation: (tab.conversation || []).map((m) => ({ ...m })),
+        history: (tab.history || []).map((h) => ({ ...h })),
+        pages: (tab.pages || []).map((p) => ({ ...p })),
+        currentId: tab.currentId,
+      },
+    };
     bookmarks.unshift(bm);
-    toast('Bookmarked.');
+    toast('Saved to Pages.');
   }
   updateBookmarkStar();
   if (els.libraryDrawer.classList.contains('open') && drawerTab === 'bookmarks') renderDrawer();
@@ -5760,7 +5916,7 @@ function openBookmark(b) {
   if (b.tab && Array.isArray(b.tab.pages) && b.tab.pages.length) { restoreTabSnapshot(b.tab); return; }
   // Legacy lightweight bookmarks ({query,title}) — recompose from the query.
   if (b.query) { newTab(true); submitQuery(b.query); return; }
-  toast('This bookmark can’t be opened.');
+  toast('This saved page can’t be opened.');
 }
 function removeBookmark(id) {
   const gone = bookmarks.find((b) => b.id === id);
@@ -5785,7 +5941,368 @@ function clearBookmarkTombstone(key) {
   bookmarkTombstones = bookmarkTombstones.filter((t) => t.key !== key);
 }
 
+// Same idea as bookmark tombstones, but keyed by id for the id-based collections.
+function addTombstone(coll, id) {
+  if (id == null) return;
+  const key = String(id);
+  const arr = deletionTombstones[coll] || (deletionTombstones[coll] = []);
+  const i = arr.findIndex((t) => String(t.id) === key);
+  if (i >= 0) arr.splice(i, 1);
+  arr.unshift({ id: key, at: Date.now() });
+  if (arr.length > MAX_DEL_TOMBSTONES) arr.length = MAX_DEL_TOMBSTONES;
+}
+function clearTombstone(coll, id) {
+  if (id == null) return;
+  const key = String(id);
+  const arr = deletionTombstones[coll];
+  if (arr) deletionTombstones[coll] = arr.filter((t) => String(t.id) !== key);
+}
+
+// ---- Favorites (sites-only, on the ★ star) ----
+// A favorite is just the current website. Only live sites qualify — a composed
+// Chervil page can't be a favorite (that's what Bookmarks are for).
+function favoriteKey(entry) {
+  if (!entry || entry.kind !== 'navigate' || !entry.url) return null;
+  return 'site:' + entry.url;
+}
+function updateFavoriteStar() {
+  if (!els.favoriteBtn) return;
+  const key = favoriteKey(currentEntry(activeTab()));
+  const on = !!key && favorites.some((f) => f.key === key);
+  els.favoriteBtn.disabled = !key;
+  els.favoriteBtn.textContent = on ? '★' : '☆';
+  els.favoriteBtn.classList.toggle('on', on);
+  els.favoriteBtn.title = !key ? 'Favorites are for websites' : on ? 'Remove from Favorites' : 'Add to Favorites';
+}
+function toggleFavorite() {
+  const tab = activeTab();
+  const entry = currentEntry(tab);
+  const key = favoriteKey(entry);
+  if (!key) { toast('Favorites are for websites — open a site first.'); return; }
+  const idx = favorites.findIndex((f) => f.key === key);
+  if (idx >= 0) { favorites.splice(idx, 1); addFavoriteTombstone(key); toast('Removed from Favorites.'); }
+  else {
+    clearFavoriteTombstone(key); // re-adding overrides any prior delete
+    favorites.unshift({ id: uid(), key, url: entry.url, title: tab.title || hostOf(entry.url) || entry.url, at: Date.now(), folder: '' });
+    toast('Added to Favorites.');
+  }
+  updateFavoriteStar();
+  if (els.libraryDrawer.classList.contains('open') && drawerTab === 'favorites') renderDrawer();
+  renderFavoritesBar();
+  scheduleSave();
+}
+function removeFavorite(id) {
+  const gone = favorites.find((f) => f.id === id);
+  favorites = favorites.filter((f) => f.id !== id);
+  if (gone && gone.key) addFavoriteTombstone(gone.key);
+  updateFavoriteStar();
+  renderDrawer();
+  renderFavoritesBar();
+  scheduleSave();
+}
+function addFavoriteTombstone(key) {
+  if (!key) return;
+  favoriteTombstones = favoriteTombstones.filter((t) => t.key !== key);
+  favoriteTombstones.unshift({ key, at: Date.now() });
+  if (favoriteTombstones.length > MAX_BOOKMARK_TOMBSTONES) favoriteTombstones.length = MAX_BOOKMARK_TOMBSTONES;
+}
+function clearFavoriteTombstone(key) {
+  if (!key) return;
+  favoriteTombstones = favoriteTombstones.filter((t) => t.key !== key);
+}
+// Favorite folders — mirror the bookmark-folder helpers.
+function allFavoriteFolders() {
+  const set = new Set(favoriteFolders);
+  for (const f of favorites) if (f.folder) set.add(f.folder);
+  return [...set];
+}
+function createFavoriteFolder() {
+  const name = (prompt('New folder name:') || '').trim();
+  if (!name) return;
+  if (!favoriteFolders.includes(name)) favoriteFolders.push(name);
+  scheduleSave();
+  renderDrawer();
+  renderFavoritesBar();
+}
+function moveFavoriteToFolder(id, folder) {
+  const f = favorites.find((x) => x.id === id);
+  if (!f) return;
+  f.folder = folder || '';
+  if (folder && !favoriteFolders.includes(folder)) favoriteFolders.push(folder);
+  scheduleSave();
+  renderDrawer();
+  renderFavoritesBar();
+}
+// A <select> for reassigning a favorite's folder (used in the drawer rows).
+function favoriteFolderSelect(item) {
+  const sel = document.createElement('select');
+  sel.className = 'lib-folder-select';
+  const optU = document.createElement('option'); optU.value = ''; optU.textContent = 'Unfiled';
+  sel.appendChild(optU);
+  for (const f of allFavoriteFolders()) {
+    const o = document.createElement('option'); o.value = f; o.textContent = f;
+    sel.appendChild(o);
+  }
+  const optNew = document.createElement('option'); optNew.value = '__new__'; optNew.textContent = 'New folder…';
+  sel.appendChild(optNew);
+  sel.value = item.folder || '';
+  sel.addEventListener('click', (e) => e.stopPropagation());
+  sel.addEventListener('change', () => {
+    if (sel.value === '__new__') {
+      const name = (prompt('New folder name:') || '').trim();
+      if (!name) { sel.value = item.folder || ''; return; }
+      moveFavoriteToFolder(item.id, name);
+    } else {
+      moveFavoriteToFolder(item.id, sel.value);
+    }
+  });
+  return sel;
+}
+function favoriteBarButton(f) {
+  const btn = document.createElement('button');
+  btn.className = 'bmbar-item';
+  btn.title = f.url || f.title || '';
+  const fav = faviconImg(f.url, 'bmbar-favicon'); if (fav) btn.appendChild(fav);
+  const t = document.createElement('span'); t.className = 'bmbar-label';
+  t.textContent = f.title || f.url || 'Favorite';
+  btn.appendChild(t);
+  btn.addEventListener('click', () => { closeDrawer(); openUrlInTab(f.url); });
+  return btn;
+}
+function renderFavoritesBar() {
+  if (!els.favoritesBar || !settings.favoritesBar) return;
+  els.favoritesBar.innerHTML = '';
+  if (!favorites.length) {
+    const hint = document.createElement('span'); hint.className = 'bmbar-empty';
+    hint.textContent = 'No favorites yet — click ★ to add a website.';
+    els.favoritesBar.appendChild(hint);
+    return;
+  }
+  // Foldered favorites collapse into dropdown buttons; unfiled ones sit inline.
+  for (const fld of allFavoriteFolders().filter((f) => favorites.some((x) => x.folder === f))) {
+    const items = favorites.filter((x) => x.folder === fld);
+    const btn = document.createElement('button');
+    btn.className = 'bmbar-item bmbar-folder';
+    btn.textContent = `📁 ${fld}`;
+    btn.addEventListener('click', (e) => openFavFolderMenu(e, items));
+    els.favoritesBar.appendChild(btn);
+  }
+  for (const f of favorites.filter((x) => !x.folder)) els.favoritesBar.appendChild(favoriteBarButton(f));
+}
+function applyFavoritesBar() {
+  if (!els.favoritesBar) return;
+  els.favoritesBar.hidden = !settings.favoritesBar;
+  if (els.favoritesBarToggle) els.favoritesBarToggle.checked = !!settings.favoritesBar;
+  if (settings.favoritesBar) renderFavoritesBar();
+}
+
+// ---- Import websites from another browser (Chrome/Edge/Brave/Vivaldi) ----
+// Browser "bookmarks" are websites, so they land in Favorites (not Saved Pages,
+// which is for composed Chervil pages). De-duplicates by site key and keeps the
+// original folder structure. Returns { added, skipped }.
+function mergeImportedFavorites(entries) {
+  let added = 0;
+  let skipped = 0;
+  const seen = new Set(favorites.map((f) => f.key));
+  const fresh = [];
+  for (const e of entries || []) {
+    if (!e || !e.url) continue;
+    const key = 'site:' + e.url;
+    if (seen.has(key)) { skipped++; continue; }
+    seen.add(key);
+    clearFavoriteTombstone(key); // an import re-adds — override any prior delete
+    const folder = (e.folder || '').trim();
+    if (folder && !favoriteFolders.includes(folder)) favoriteFolders.push(folder);
+    fresh.push({ id: uid(), key, url: e.url, title: e.title || e.url, at: e.addedAt || Date.now(), folder });
+    added++;
+  }
+  if (fresh.length) {
+    favorites = favorites.concat(fresh); // keep imports in source order, after existing
+    updateFavoriteStar();
+    if (els.libraryDrawer.classList.contains('open')) renderDrawer();
+    renderFavoritesBar();
+    scheduleSave();
+  }
+  return { added, skipped };
+}
+
+async function importFromBrowser() {
+  if (!window.chervil.importListSources) return;
+  if (els.importBookmarksBtn) els.importBookmarksBtn.disabled = true;
+  let res;
+  try { res = await window.chervil.importListSources(); } catch { res = null; }
+  if (els.importBookmarksBtn) els.importBookmarksBtn.disabled = false;
+  const sources = (res && res.ok && Array.isArray(res.sources)) ? res.sources : [];
+  if (!sources.length) { toast('No bookmarks found from Chrome, Edge, Brave, or Vivaldi.'); return; }
+
+  const doImport = async (src) => {
+    let r;
+    try { r = await window.chervil.importBookmarks(src.path); } catch { r = null; }
+    if (!r || !r.ok || !Array.isArray(r.entries)) { toast('Couldn’t read those bookmarks.'); return; }
+    const { added, skipped } = mergeImportedFavorites(r.entries);
+    let msg = `Imported ${added} website${added === 1 ? '' : 's'} to Favorites from ${src.label}.`;
+    if (skipped) msg += ` ${skipped} were already there.`;
+    toast(msg);
+    if (els.importStatus) els.importStatus.textContent = `Last import: ${added} added, ${skipped} skipped from ${src.label}.`;
+  };
+
+  if (sources.length === 1) {
+    const s = sources[0];
+    showActionSheet('Import to Favorites', `Import ${s.count} websites from ${s.label} into your Favorites?`, [
+      { label: `Import ${s.count}`, primary: true, onClick: () => doImport(s) },
+      { label: 'Cancel' },
+    ]);
+  } else {
+    const actions = sources.map((s) => ({ label: `${s.label} · ${s.count}`, onClick: () => doImport(s) }));
+    showActionSheet('Import to Favorites', 'Choose which browser profile to import from:', actions);
+  }
+}
+
+// ---- Import browsing history from another browser ----
+// Merge imported {url,title,at} into siteHistory (the History tab). De-dupes by URL,
+// keeps newest-first, and honors the same cap as normal browsing history.
+function mergeImportedHistory(entries) {
+  let added = 0;
+  let skipped = 0;
+  const seen = new Set(siteHistory.map((s) => s.url));
+  const fresh = [];
+  for (const e of entries || []) {
+    if (!e || !e.url) continue;
+    if (seen.has(e.url)) { skipped++; continue; }
+    seen.add(e.url);
+    fresh.push({ id: uid(), url: e.url, title: e.title || hostOf(e.url) || e.url, at: e.at || Date.now() });
+    added++;
+  }
+  if (fresh.length) {
+    siteHistory = siteHistory.concat(fresh).sort((a, b) => (b.at || 0) - (a.at || 0));
+    if (siteHistory.length > MAX_SITE_HISTORY) siteHistory.length = MAX_SITE_HISTORY;
+    if (els.libraryDrawer.classList.contains('open')) renderDrawer();
+    scheduleSave();
+  }
+  return { added, skipped };
+}
+
+async function importHistoryFromBrowser() {
+  if (!window.chervil.importListHistorySources) return;
+  if (els.importHistoryBtn) els.importHistoryBtn.disabled = true;
+  let res;
+  try { res = await window.chervil.importListHistorySources(); } catch { res = null; }
+  if (els.importHistoryBtn) els.importHistoryBtn.disabled = false;
+  const sources = (res && res.ok && Array.isArray(res.sources)) ? res.sources : [];
+  if (!sources.length) { toast('No browser history found to import.'); return; }
+
+  const doImport = async (src) => {
+    if (els.importHistoryBtn) els.importHistoryBtn.disabled = true;
+    let r;
+    try { r = await window.chervil.importHistory(src.path); } catch { r = null; }
+    if (els.importHistoryBtn) els.importHistoryBtn.disabled = false;
+    if (!r || !r.ok || !Array.isArray(r.entries)) { toast('Couldn’t read that history.'); return; }
+    const { added, skipped } = mergeImportedHistory(r.entries);
+    let msg = `Imported ${added} histor${added === 1 ? 'y entry' : 'y entries'} from ${src.label}.`;
+    if (skipped) msg += ` ${skipped} were already there.`;
+    toast(msg);
+    if (els.importHistoryStatus) els.importHistoryStatus.textContent = `Last import: ${added} added, ${skipped} skipped from ${src.label}.`;
+  };
+
+  if (sources.length === 1) {
+    const s = sources[0];
+    showActionSheet('Import history', `Import your recent history from ${s.label} into Chervil?`, [
+      { label: 'Import', primary: true, onClick: () => doImport(s) },
+      { label: 'Cancel' },
+    ]);
+  } else {
+    const actions = sources.map((s) => ({ label: s.label, onClick: () => doImport(s) }));
+    showActionSheet('Import history', 'Choose which browser profile to import from:', actions);
+  }
+}
+
+// ---- Import passwords from a CSV export → encrypted vault ----
+// The vault must be set up + unlocked first; the actual parse/save happens in the
+// main process, so plaintext passwords never come back here — we only get counts.
+async function importPasswordsFromCsv() {
+  if (!window.chervil.importPasswordsCsv) return;
+  if (!(await ensureVaultUnlocked())) return; // prompts setup/unlock as needed
+  let r;
+  try { r = await window.chervil.importPasswordsCsv(); } catch { r = null; }
+  if (!r || r.canceled) return;
+  if (!r.ok) {
+    const msg = r.error === 'not-a-passwords-csv' ? 'That doesn’t look like a passwords CSV export.'
+      : r.error === 'locked' ? 'Unlock your vault first (Settings → Security).'
+      : r.error === 'needs-setup' ? 'Set up your password vault first (Settings → Security).'
+      : (r.error || 'Import failed.');
+    toast(msg);
+    return;
+  }
+  let msg = `Imported ${r.added} password${r.added === 1 ? '' : 's'} into your vault.`;
+  if (r.skipped) msg += ` ${r.skipped} skipped (already saved).`;
+  if (r.failed) msg += ` ${r.failed} failed.`;
+  toast(msg);
+  if (els.importPwStatus) els.importPwStatus.textContent = `Last import: ${r.added} added, ${r.skipped} skipped${r.failed ? `, ${r.failed} failed` : ''}.`;
+  updatePwFillButton();
+}
+
+// ---- Import a saved browser address → the autofill identity ----
+async function importAddressFromBrowser() {
+  if (!window.chervil.importListAddressSources) return;
+  if (els.importAddressBtn) els.importAddressBtn.disabled = true;
+  let res;
+  try { res = await window.chervil.importListAddressSources(); } catch { res = null; }
+  if (els.importAddressBtn) els.importAddressBtn.disabled = false;
+  const sources = (res && res.ok && Array.isArray(res.sources)) ? res.sources : [];
+  if (!sources.length) { toast('No saved addresses found in Chrome, Edge, Brave, or Vivaldi.'); return; }
+
+  const doImport = async (src) => {
+    let r;
+    try { r = await window.chervil.importAddress(src.path); } catch { r = null; }
+    const fields = (r && r.ok && r.fields) ? r.fields : null;
+    if (!fields || !Object.keys(fields).length) { toast('Couldn’t read an address from that profile.'); return; }
+    settings.autofill = settings.autofill || {};
+    let filled = 0;
+    for (const k of AUTOFILL_FIELDS) {
+      if (fields[k]) { settings.autofill[k] = fields[k]; filled++; }
+    }
+    for (const k of AUTOFILL_FIELDS) { const el = document.getElementById('af-' + k); if (el) el.value = settings.autofill[k] || ''; }
+    scheduleSave();
+    toast(`Imported your ${src.label} address (${filled} field${filled === 1 ? '' : 's'} filled).`);
+    if (els.importAddressStatus) els.importAddressStatus.textContent = `Filled ${filled} autofill field${filled === 1 ? '' : 's'} from ${src.label}.`;
+  };
+
+  if (sources.length === 1) { doImport(sources[0]); return; }
+  const actions = sources.map((s) => ({ label: s.label, onClick: () => doImport(s) }));
+  showActionSheet('Import address', 'Choose which browser profile to import your address from:', actions);
+}
+
+// One-time (idempotent) migration: websites saved in the old mixed Bookmarks list
+// belong in Favorites now. Move every kind:'site' entry across — carrying its
+// folder — tombstoning it in Saved Pages so sync doesn't drag it back. Runs on load
+// and after each sync reconcile, so a site arriving from another machine is relocated
+// too. Returns how many moved.
+function migrateSiteBookmarksToFavorites() {
+  const sites = bookmarks.filter((b) => b && b.kind === 'site');
+  if (!sites.length) return 0;
+  const favKeys = new Set(favorites.map((f) => f.key));
+  let moved = 0;
+  for (const b of sites) {
+    const key = b.key || ('site:' + (b.url || ''));
+    if (!favKeys.has(key)) {
+      favKeys.add(key);
+      // NB: do NOT clearFavoriteTombstone here. A migrated site carries its old `at`,
+      // so if the user deleted this favorite (newer tombstone), the merge should keep
+      // it deleted. Clearing the tombstone would resurrect an intentional deletion
+      // when an un-upgraded machine re-syncs its legacy site bookmark.
+      const folder = (b.folder || '').trim();
+      if (folder && !favoriteFolders.includes(folder)) favoriteFolders.push(folder);
+      favorites.push({ id: uid(), key, url: b.url, title: b.title || b.url, at: b.at || Date.now(), folder });
+    }
+    addBookmarkTombstone(key); // it must not resurrect in Saved Pages
+    moved++;
+  }
+  bookmarks = bookmarks.filter((b) => !(b && b.kind === 'site'));
+  return moved;
+}
+
 function removeSite(id) {
+  addTombstone('sites', id);
   siteHistory = siteHistory.filter((s) => s.id !== id);
   renderDrawer();
   scheduleSave();
@@ -5793,6 +6310,7 @@ function removeSite(id) {
 function clearSiteHistory() {
   if (!siteHistory.length) return;
   if (!confirm('Clear all browsing history?')) return;
+  for (const s of siteHistory) addTombstone('sites', s && s.id);
   siteHistory = [];
   renderDrawer();
   scheduleSave();
@@ -5850,15 +6368,6 @@ function createBookmarkFolder() {
   renderDrawer();
   renderBookmarksBar();
 }
-function moveBookmarkToFolder(id, folder) {
-  const b = bookmarks.find((x) => x.id === id);
-  if (!b) return;
-  b.folder = folder || '';
-  if (folder && !bookmarkFolders.includes(folder)) bookmarkFolders.push(folder);
-  scheduleSave();
-  renderDrawer();
-  renderBookmarksBar();
-}
 
 function applyBookmarksBar() {
   if (!els.bookmarksBar) return;
@@ -5901,7 +6410,7 @@ function renderBookmarksBar() {
   els.bookmarksBar.innerHTML = '';
   if (!bookmarks.length) {
     const hint = document.createElement('span'); hint.className = 'bmbar-empty';
-    hint.textContent = 'No bookmarks yet — click ☆ to add one.';
+    hint.textContent = 'No saved pages yet — click the bookmark button on a composed page.';
     els.bookmarksBar.appendChild(hint);
     return;
   }
@@ -5940,51 +6449,91 @@ function openBmFolderMenu(e, items) {
   menu.style.top = (r.bottom + 4) + 'px';
   setTimeout(() => document.addEventListener('mousedown', onBmMenuOutside, true), 0);
 }
-// A <select> for reassigning a bookmark's folder (used in the drawer rows).
-function bookmarkFolderSelect(item) {
-  const sel = document.createElement('select');
-  sel.className = 'lib-folder-select';
-  const optU = document.createElement('option'); optU.value = ''; optU.textContent = 'Unfiled';
-  sel.appendChild(optU);
-  for (const f of allBookmarkFolders()) {
-    const o = document.createElement('option'); o.value = f; o.textContent = f;
-    sel.appendChild(o);
+// Same dropdown, for a Favorites-bar folder (opens each site live).
+function openFavFolderMenu(e, items) {
+  closeBmFolderMenu();
+  const menu = document.createElement('div'); menu.className = 'bmbar-menu';
+  bmFolderMenuEl = menu;
+  for (const f of items) {
+    const row = document.createElement('button'); row.className = 'bmbar-menu-row';
+    const fav = faviconImg(f.url, 'bmbar-favicon'); if (fav) row.appendChild(fav);
+    const t = document.createElement('span'); t.textContent = f.title || f.url || 'Favorite';
+    row.appendChild(t);
+    row.addEventListener('click', () => { closeBmFolderMenu(); closeDrawer(); openUrlInTab(f.url); });
+    menu.appendChild(row);
   }
-  const optNew = document.createElement('option'); optNew.value = '__new__'; optNew.textContent = 'New folder…';
-  sel.appendChild(optNew);
-  sel.value = item.folder || '';
-  sel.addEventListener('click', (e) => e.stopPropagation());
-  sel.addEventListener('change', () => {
-    if (sel.value === '__new__') {
-      const name = (prompt('New folder name:') || '').trim();
-      if (!name) { sel.value = item.folder || ''; return; }
-      moveBookmarkToFolder(item.id, name);
-    } else {
-      moveBookmarkToFolder(item.id, sel.value);
-    }
-  });
-  return sel;
+  document.body.appendChild(menu);
+  const r = e.currentTarget.getBoundingClientRect();
+  menu.style.left = Math.max(6, Math.min(r.left, window.innerWidth - menu.offsetWidth - 8)) + 'px';
+  menu.style.top = (r.bottom + 4) + 'px';
+  setTimeout(() => document.addEventListener('mousedown', onBmMenuOutside, true), 0);
+}
+// Collapsed folder groups in the Library (per tab), persisted so a tidy view sticks.
+function folderCollapseKey(tab, folder) { return `${tab}:${folder || ''}`; }
+function isFolderCollapsed(tab, folder) {
+  return Array.isArray(settings.collapsedFolders) && settings.collapsedFolders.includes(folderCollapseKey(tab, folder));
+}
+function toggleFolderCollapsed(tab, folder) {
+  if (!Array.isArray(settings.collapsedFolders)) settings.collapsedFolders = [];
+  const key = folderCollapseKey(tab, folder);
+  const i = settings.collapsedFolders.indexOf(key);
+  if (i >= 0) settings.collapsedFolders.splice(i, 1); else settings.collapsedFolders.push(key);
+  scheduleSave();
+  renderDrawer();
+}
+// Distinct folder buckets present in a grouped tab (incl. '' = Unfiled).
+function foldersInTab(tab) {
+  const src = tab === 'favorites' ? favorites : tab === 'bookmarks' ? bookmarks : [];
+  const set = new Set();
+  for (const it of src) set.add(it.folder || '');
+  return [...set];
+}
+// One click to fold/unfold every folder in the current grouped tab.
+function toggleCollapseAll() {
+  const tab = drawerTab;
+  const folders = foldersInTab(tab);
+  if (!folders.length) return;
+  if (!Array.isArray(settings.collapsedFolders)) settings.collapsedFolders = [];
+  const anyExpanded = folders.some((f) => !isFolderCollapsed(tab, f));
+  const keys = new Set(settings.collapsedFolders);
+  for (const f of folders) {
+    const k = folderCollapseKey(tab, f);
+    if (anyExpanded) keys.add(k); else keys.delete(k); // open → collapse all; all closed → expand all
+  }
+  settings.collapsedFolders = [...keys];
+  scheduleSave();
+  renderDrawer();
 }
 
 function renderDrawer() {
   els.libTabHistory.classList.toggle('active', drawerTab === 'history');
   els.libTabTrash.classList.toggle('active', drawerTab === 'trash');
   if (els.libTabBookmarks) els.libTabBookmarks.classList.toggle('active', drawerTab === 'bookmarks');
+  if (els.libTabFavorites) els.libTabFavorites.classList.toggle('active', drawerTab === 'favorites');
   if (els.libTabSites) els.libTabSites.classList.toggle('active', drawerTab === 'sites');
   if (els.libTabDownloads) els.libTabDownloads.classList.toggle('active', drawerTab === 'downloads');
   els.emptyTrash.hidden = drawerTab !== 'trash';
   if (els.clearSites) els.clearSites.hidden = drawerTab !== 'sites' || !siteHistory.length;
   if (els.clearDownloads) els.clearDownloads.hidden = drawerTab !== 'downloads' || !downloads.length;
-  if (els.libNewFolder) els.libNewFolder.hidden = drawerTab !== 'bookmarks';
+  if (els.libNewFolder) els.libNewFolder.hidden = drawerTab !== 'favorites';
+  if (els.libCollapseAll) {
+    const grpTab = drawerTab === 'favorites' && !librarySearch.trim();
+    const folders = grpTab ? foldersInTab(drawerTab) : [];
+    els.libCollapseAll.hidden = !(grpTab && folders.length >= 2);
+    if (!els.libCollapseAll.hidden) {
+      els.libCollapseAll.textContent = folders.some((f) => !isFolderCollapsed(drawerTab, f)) ? 'Collapse all' : 'Expand all';
+    }
+  }
   // Select mode only applies to History; leaving History cancels it.
   if (drawerTab !== 'history' && librarySelectMode) { librarySelectMode = false; selectedLibraryIds.clear(); }
   renderSpaceBar();
 
-  let items = drawerTab === 'history' ? spaceItems()
-    : drawerTab === 'bookmarks' ? bookmarks
-      : drawerTab === 'sites' ? siteHistory
-        : drawerTab === 'downloads' ? downloads
-          : library.trash;
+  let items = drawerTab === 'history' ? library.history        // Activity: flat, newest-first
+    : drawerTab === 'bookmarks' ? savedSpaceItems()            // Saved Pages: the active Space
+      : drawerTab === 'favorites' ? favorites
+        : drawerTab === 'sites' ? siteHistory
+          : drawerTab === 'downloads' ? downloads
+            : library.trash;
 
   // Free-text filter across the visible list (title/url/query/filename).
   const q = librarySearch.trim().toLowerCase();
@@ -5992,9 +6541,9 @@ function renderDrawer() {
 
   // Bookmarks (unsearched): group by folder — sort so folder headers can be
   // inserted between groups, with Unfiled last.
-  const grouping = drawerTab === 'bookmarks' && !q;
+  const grouping = drawerTab === 'favorites' && !q; // only Favorites uses folder groups now
   if (grouping) {
-    const order = allBookmarkFolders();
+    const order = allFavoriteFolders();
     items = items.slice().sort((a, b) => {
       const fa = a.folder || '', fb = b.folder || '';
       if (fa === fb) return 0;
@@ -6022,29 +6571,42 @@ function renderDrawer() {
     empty.className = 'lib-empty';
     if (q) { empty.textContent = `No matches for “${librarySearch.trim()}”.`; els.libraryList.appendChild(empty); return; }
     empty.textContent = drawerTab === 'history'
-      ? 'No pages in this Space yet. Compose some, then synthesize.'
+      ? 'No composed pages yet. Pages you create show up here automatically.'
       : drawerTab === 'bookmarks'
-        ? 'No bookmarks yet. Click ☆ in the toolbar to save a page or site.'
-        : drawerTab === 'sites'
-          ? 'No browsing history yet. Open a website and it shows up here.'
-          : drawerTab === 'downloads'
-            ? 'No downloads yet. Files you download from sites show up here.'
-            : 'Trash is empty.';
+        ? 'No saved pages in this Space yet. Open a composed page and click the bookmark button to save it here.'
+        : drawerTab === 'favorites'
+          ? 'No favorites yet. Open a website and click ★ — or import your bookmarks in Settings.'
+          : drawerTab === 'sites'
+            ? 'No browsing history yet. Open a website and it shows up here.'
+            : drawerTab === 'downloads'
+              ? 'No downloads yet. Files you download from sites show up here.'
+              : 'Trash is empty.';
     els.libraryList.appendChild(empty);
     return;
   }
 
   const selecting = drawerTab === 'history' && librarySelectMode;
+  // Per-folder counts in one pass (avoids an O(n) filter per header → O(n²) render).
+  const folderCounts = grouping
+    ? items.reduce((m, it) => { const k = it.folder || ''; return m.set(k, (m.get(k) || 0) + 1); }, new Map())
+    : null;
+  let collapsedNow = false; // are we currently inside a collapsed folder group?
   for (const item of items) {
     if (grouping) {
       const f = item.folder || '';
       if (f !== lastFolder) {
         lastFolder = f;
+        collapsedNow = isFolderCollapsed(drawerTab, f);
+        const count = folderCounts.get(f) || 0;
         const head = document.createElement('div');
-        head.className = 'lib-folder-head';
-        head.textContent = f || 'Unfiled';
+        head.className = 'lib-folder-head' + (collapsedNow ? ' collapsed' : '');
+        head.textContent = `${collapsedNow ? '▸' : '▾'} ${f || 'Unfiled'} · ${count}`;
+        head.title = collapsedNow ? 'Expand folder' : 'Collapse folder';
+        head.style.cursor = 'pointer';
+        head.addEventListener('click', () => toggleFolderCollapsed(drawerTab, f));
         els.libraryList.appendChild(head);
       }
+      if (collapsedNow) continue; // rows under a collapsed folder are hidden
     }
     const row = document.createElement('div');
     row.className = 'lib-row'
@@ -6063,23 +6625,27 @@ function renderDrawer() {
     const title = document.createElement('div');
     title.className = 'lib-title';
     // Site-type rows show a real favicon (added below) instead of a leading emoji.
-    const isSiteRow = drawerTab === 'sites' || (drawerTab === 'bookmarks' && item.kind === 'site');
+    const isSiteRow = drawerTab === 'sites' || drawerTab === 'favorites' || (drawerTab === 'bookmarks' && item.kind === 'site');
     title.textContent = drawerTab === 'bookmarks'
       ? (item.kind === 'site' ? (item.title || item.url || 'Bookmark') : `📄 ${item.title || item.url || 'Bookmark'}`)
-      : drawerTab === 'sites'
+      : drawerTab === 'favorites'
         ? (item.title || item.url)
-        : drawerTab === 'downloads'
-          ? `${item.ok ? '⬇' : '⚠'} ${item.filename || 'file'}`
-          : (item.title || item.query || 'Untitled page');
+        : drawerTab === 'sites'
+          ? (item.title || item.url)
+          : drawerTab === 'downloads'
+            ? `${item.ok ? '⬇' : '⚠'} ${item.filename || 'file'}`
+            : (item.title || item.query || 'Untitled page');
     const meta = document.createElement('div');
     meta.className = 'lib-meta';
     meta.textContent = drawerTab === 'bookmarks'
       ? (item.kind === 'site' ? item.url : 'Composed page')
-      : drawerTab === 'sites'
-        ? `${item.url} · ${relTime(item.at)}`
-        : drawerTab === 'downloads'
-          ? (item.ok ? `${item.path} · ${relTime(item.at)}` : `${item.state || 'failed'} · ${relTime(item.at)}`)
-          : relTime(item.createdAt);
+      : drawerTab === 'favorites'
+        ? item.url
+        : drawerTab === 'sites'
+          ? `${item.url} · ${relTime(item.at)}`
+          : drawerTab === 'downloads'
+            ? (item.ok ? `${item.path} · ${relTime(item.at)}` : `${item.state || 'failed'} · ${relTime(item.at)}`)
+            : relTime(item.createdAt);
     main.appendChild(title);
     main.appendChild(meta);
     if (isSiteRow) { const fav = faviconImg(item.url, 'lib-favicon'); if (fav) row.appendChild(fav); }
@@ -6095,11 +6661,21 @@ function renderDrawer() {
       main.title = 'Open';
       main.style.cursor = 'pointer';
       main.addEventListener('click', () => openBookmark(item));
-      actions.appendChild(bookmarkFolderSelect(item));
+      actions.appendChild(savedSpaceSelect(item)); // move between Spaces (replaces folders)
       const del = document.createElement('button');
       del.className = 'lib-btn';
       del.textContent = 'Remove';
       del.addEventListener('click', () => removeBookmark(item.id));
+      actions.appendChild(del);
+    } else if (drawerTab === 'favorites') {
+      main.title = 'Open';
+      main.style.cursor = 'pointer';
+      main.addEventListener('click', () => { closeDrawer(); openUrlInTab(item.url); });
+      actions.appendChild(favoriteFolderSelect(item));
+      const del = document.createElement('button');
+      del.className = 'lib-btn';
+      del.textContent = 'Remove';
+      del.addEventListener('click', () => removeFavorite(item.id));
       actions.appendChild(del);
     } else if (drawerTab === 'sites') {
       main.title = 'Open';
@@ -6185,8 +6761,8 @@ function applySettingsToUI() {
   if (els.tabLayoutSelect) els.tabLayoutSelect.value = isVerticalTabs() ? 'vertical' : 'horizontal';
   if (els.remixDefaultSelect) els.remixDefaultSelect.value = settings.remixMinimized ? 'minimized' : 'expanded';
   if (els.menuBarToggle) els.menuBarToggle.checked = !!settings.showMenuBar;
-  if (els.pwFillToggle) els.pwFillToggle.checked = settings.showPwFill !== false;
-  if (els.cardFillToggle) els.cardFillToggle.checked = settings.showCardFill !== false;
+  if (els.pwFillToggle) els.pwFillToggle.checked = toolbarVisible('pwFill');
+  if (els.cardFillToggle) els.cardFillToggle.checked = toolbarVisible('cardFill');
   if (els.sttEndpoint) els.sttEndpoint.value = settings.sttEndpoint || '';
   if (els.sttModel) els.sttModel.value = settings.sttModel || '';
   if (els.publishToken) els.publishToken.value = settings.publishToken || '';
@@ -6678,7 +7254,10 @@ const TOOLBAR_BUTTONS = [
   { key: 'history', id: 'history-btn', label: 'Library' },
   { key: 'schedules', id: 'sched-btn', label: 'Schedules' },
   { key: 'agents', id: 'agents-btn', label: 'Agents' },
-  { key: 'bookmark', id: 'bookmark-btn', label: 'Bookmark (★)' },
+  { key: 'pwFill', id: 'autofill-pw-btn', label: 'Fill saved login (🔑)' },
+  { key: 'cardFill', id: 'autofill-card-btn', label: 'Fill saved card (💳)' },
+  { key: 'bookmark', id: 'bookmark-btn', label: 'Save page' },
+  { key: 'favorite', id: 'favorite-btn', label: 'Favorite (★)' },
   { key: 'save', id: 'save-btn', label: 'Save' },
   { key: 'reader', id: 'reader-btn', label: 'Reader view' },
   { key: 'pip', id: 'pip-btn', label: 'Picture-in-picture' },
@@ -6693,6 +7272,12 @@ function applyToolbar() {
     const el = document.getElementById(b.id);
     if (el) el.classList.toggle('btn-off', !toolbarVisible(b.key));
   }
+  // The 🔑/💳 fill buttons are also context-sensitive (only on live sites with
+  // saved creds), so re-evaluate them and keep the Security-tab checkboxes — a
+  // second entry point to the same toggle — in sync with the toolbar options.
+  if (els.pwFillToggle) els.pwFillToggle.checked = toolbarVisible('pwFill');
+  if (els.cardFillToggle) els.cardFillToggle.checked = toolbarVisible('cardFill');
+  if (typeof updatePwFillButton === 'function') updatePwFillButton();
 }
 
 function setToolbarVisible(key, visible) {
@@ -6750,7 +7335,8 @@ function showToolbarMenu(x, y) {
   }
   // The bookmarks bar isn't a toolbar button, but users look for it here too.
   const sep = document.createElement('div'); sep.className = 'toolbar-menu-sep'; menu.appendChild(sep);
-  toolbarMenuRow(menu, 'Bookmarks bar', !!settings.bookmarksBar, () => { settings.bookmarksBar = !settings.bookmarksBar; applyBookmarksBar(); scheduleSave(); closeToolbarMenu(); });
+  toolbarMenuRow(menu, 'Saved pages bar', !!settings.bookmarksBar, () => { settings.bookmarksBar = !settings.bookmarksBar; applyBookmarksBar(); scheduleSave(); closeToolbarMenu(); });
+  toolbarMenuRow(menu, 'Favorites bar', !!settings.favoritesBar, () => { settings.favoritesBar = !settings.favoritesBar; applyFavoritesBar(); scheduleSave(); closeToolbarMenu(); });
   document.body.appendChild(menu);
   menu.style.left = Math.min(x, window.innerWidth - menu.offsetWidth - 8) + 'px';
   menu.style.top = Math.min(y, window.innerHeight - menu.offsetHeight - 8) + 'px';
@@ -6904,7 +7490,7 @@ function scheduleSave() {
     const persistActiveId = persistTabs.some((t) => t.id === activeId)
       ? activeId
       : (persistTabs[0] && persistTabs[0].id) || null;
-    window.chervil.saveState({ tabs: persistTabs, activeId: persistActiveId, settings, library, bookmarks, bookmarkFolders, bookmarkTombstones, siteHistory, downloads, agentAudit, spaces, activeSpaceId, living, schedules, agents, activeAgentId, pipelines, pageStores })
+    window.chervil.saveState({ tabs: persistTabs, activeId: persistActiveId, settings, library, bookmarks, bookmarkFolders, bookmarkTombstones, favorites, favoriteFolders, favoriteTombstones, deletionTombstones, siteHistory, downloads, agentAudit, spaces, activeSpaceId, savedSpaces, activeSavedSpaceId, living, schedules, agents, activeAgentId, pipelines, pageStores })
       .then((r) => { if (r && r.mtimeMs) lastStateMtimeMs = r.mtimeMs; }) // our own write — keep baseline current
       .catch(() => {});
   }, 500);
@@ -6927,6 +7513,10 @@ async function reconcileNow() {
   if (Array.isArray(m.bookmarks)) bookmarks = m.bookmarks;
   if (Array.isArray(m.bookmarkFolders)) bookmarkFolders = m.bookmarkFolders.filter((f) => typeof f === 'string');
   if (Array.isArray(m.bookmarkTombstones)) bookmarkTombstones = m.bookmarkTombstones;
+  if (m.deletionTombstones && typeof m.deletionTombstones === 'object') deletionTombstones = { ...deletionTombstones, ...m.deletionTombstones };
+  if (Array.isArray(m.favorites)) favorites = m.favorites;
+  if (Array.isArray(m.favoriteFolders)) favoriteFolders = m.favoriteFolders.filter((f) => typeof f === 'string');
+  if (Array.isArray(m.favoriteTombstones)) favoriteTombstones = m.favoriteTombstones;
   if (Array.isArray(m.siteHistory)) siteHistory = m.siteHistory;
   if (m.library && Array.isArray(m.library.history)) {
     library = { history: m.library.history, trash: Array.isArray(m.library.trash) ? m.library.trash : [] };
@@ -6935,11 +7525,16 @@ async function reconcileNow() {
     spaces = m.spaces;
     if (!spaces.find((s) => s.id === activeSpaceId)) activeSpaceId = spaces[0].id;
   }
+  if (Array.isArray(m.savedSpaces)) savedSpaces = m.savedSpaces.filter((s) => s && s.id);
   if (Array.isArray(m.agents)) agents = m.agents;
+  if (Array.isArray(m.schedules)) schedules = m.schedules;
   if (r.mtimeMs) lastStateMtimeMs = r.mtimeMs;               // we just absorbed it — don't also prompt to reload
+  if (migrateSiteBookmarksToFavorites()) scheduleSave();     // relocate any sites that arrived from another machine
+  ensureSavedSpaces();                                       // file any saved pages that arrived from another machine
   updateBookmarkStar();
   if (els.libraryDrawer.classList.contains('open')) renderDrawer();
   renderBookmarksBar();
+  renderFavoritesBar();
   toast('Synced new items from another computer.');
 }
 
@@ -7005,6 +7600,16 @@ async function init() {
 
   if (restored && restored.settings) {
     settings = { ...settings, ...restored.settings };
+    // Legacy: the 🔑/💳 fill buttons used to carry their own showPwFill/showCardFill
+    // flags. They're now regular Toolbar Options — fold any old "hidden" choice into
+    // settings.toolbar so nobody's preference silently flips back on after upgrade.
+    if (settings.showPwFill === false || settings.showCardFill === false) {
+      if (!settings.toolbar) settings.toolbar = {};
+      if (settings.showPwFill === false && settings.toolbar.pwFill === undefined) settings.toolbar.pwFill = false;
+      if (settings.showCardFill === false && settings.toolbar.cardFill === undefined) settings.toolbar.cardFill = false;
+    }
+    delete settings.showPwFill;
+    delete settings.showCardFill;
     // xAI retired the grok-2/grok-3 families (and the early grok-4 *-fast aliases),
     // redirecting them to grok-4.3; the dead aliases also don't honor Live Search.
     // Migrate a saved stale model to the current default so web grounding works.
@@ -7027,6 +7632,12 @@ async function init() {
   if (restored && Array.isArray(restored.bookmarks)) bookmarks = restored.bookmarks;
   if (restored && Array.isArray(restored.bookmarkFolders)) bookmarkFolders = restored.bookmarkFolders.filter((f) => typeof f === 'string');
   if (restored && Array.isArray(restored.bookmarkTombstones)) bookmarkTombstones = restored.bookmarkTombstones;
+  if (restored && Array.isArray(restored.favorites)) favorites = restored.favorites;
+  if (restored && Array.isArray(restored.favoriteFolders)) favoriteFolders = restored.favoriteFolders.filter((f) => typeof f === 'string');
+  if (restored && Array.isArray(restored.favoriteTombstones)) favoriteTombstones = restored.favoriteTombstones;
+  if (restored && restored.deletionTombstones && typeof restored.deletionTombstones === 'object') {
+    deletionTombstones = { ...deletionTombstones, ...restored.deletionTombstones };
+  }
   if (restored && Array.isArray(restored.siteHistory)) siteHistory = restored.siteHistory;
   if (restored && Array.isArray(restored.downloads)) downloads = restored.downloads;
   if (restored && Array.isArray(restored.agentAudit)) agentAudit = restored.agentAudit;
@@ -7045,6 +7656,11 @@ async function init() {
     for (const it of library.history) if (!it.spaceId) it.spaceId = def.id;
     for (const it of library.trash) if (!it.spaceId) it.spaceId = def.id;
   }
+
+  // Saved-Pages Spaces: restore fresh, then guarantee a default + file every saved page.
+  if (restored && Array.isArray(restored.savedSpaces)) savedSpaces = restored.savedSpaces.filter((s) => s && s.id);
+  if (restored && restored.activeSavedSpaceId) activeSavedSpaceId = restored.activeSavedSpaceId;
+  ensureSavedSpaces();
 
   if (restored && Array.isArray(restored.living)) {
     living = restored.living.filter((r) => r && r.entryId && r.intervalMs);
@@ -7074,7 +7690,9 @@ async function init() {
   applyTabLayout();
   applySidebarCollapsed();
   applyToolbar(); // honor the user's chosen top-bar buttons
+  if (migrateSiteBookmarksToFavorites()) scheduleSave(); // websites belong in Favorites now, not Saved Pages
   applyBookmarksBar(); // restore the bookmarks bar (if enabled) + its contents
+  applyFavoritesBar(); // restore the favorites bar (if enabled) + its contents
   if (window.chervil.setAdblock) window.chervil.setAdblock(settings.adblock); // sync ad-block to main
   if (window.chervil.setMenuBarVisible) window.chervil.setMenuBarVisible(!!settings.showMenuBar); // this window's menu bar
   setChatMode(settings.chatMode); // reflect the persisted "Just a chatbot" toggle
@@ -7896,6 +8514,10 @@ if (els.makeDefaultBtn) els.makeDefaultBtn.addEventListener('click', async () =>
   }
   refreshPrivacyUI();
 });
+if (els.importBookmarksBtn) els.importBookmarksBtn.addEventListener('click', importFromBrowser);
+if (els.importHistoryBtn) els.importHistoryBtn.addEventListener('click', importHistoryFromBrowser);
+if (els.importPwBtn) els.importPwBtn.addEventListener('click', importPasswordsFromCsv);
+if (els.importAddressBtn) els.importAddressBtn.addEventListener('click', importAddressFromBrowser);
 // When the user comes back from the OS Default apps window, refresh the status
 // line so it flips to "Chervil is your default browser." without reopening Settings.
 window.addEventListener('focus', () => {
@@ -7944,19 +8566,23 @@ els.libraryDrawer.addEventListener('click', (e) => {
 });
 els.libTabHistory.addEventListener('click', () => { drawerTab = 'history'; renderDrawer(); });
 if (els.libTabBookmarks) els.libTabBookmarks.addEventListener('click', () => { drawerTab = 'bookmarks'; renderDrawer(); });
+if (els.libTabFavorites) els.libTabFavorites.addEventListener('click', () => { drawerTab = 'favorites'; renderDrawer(); });
 if (els.libTabSites) els.libTabSites.addEventListener('click', () => { drawerTab = 'sites'; renderDrawer(); });
 if (els.libTabDownloads) els.libTabDownloads.addEventListener('click', () => { drawerTab = 'downloads'; renderDrawer(); });
 els.libTabTrash.addEventListener('click', () => { drawerTab = 'trash'; renderDrawer(); });
 if (els.clearSites) els.clearSites.addEventListener('click', clearSiteHistory);
 if (els.clearDownloads) els.clearDownloads.addEventListener('click', clearDownloads);
 if (els.libSearch) els.libSearch.addEventListener('input', () => { librarySearch = els.libSearch.value; renderDrawer(); });
-if (els.libNewFolder) els.libNewFolder.addEventListener('click', createBookmarkFolder);
+if (els.libNewFolder) els.libNewFolder.addEventListener('click', () => (drawerTab === 'favorites' ? createFavoriteFolder() : createBookmarkFolder()));
+if (els.libCollapseAll) els.libCollapseAll.addEventListener('click', toggleCollapseAll);
 if (els.bookmarksBarToggle) els.bookmarksBarToggle.addEventListener('change', () => { settings.bookmarksBar = els.bookmarksBarToggle.checked; applyBookmarksBar(); scheduleSave(); });
+if (els.favoritesBarToggle) els.favoritesBarToggle.addEventListener('change', () => { settings.favoritesBar = els.favoritesBarToggle.checked; applyFavoritesBar(); scheduleSave(); });
 if (els.bookmarkBtn) els.bookmarkBtn.addEventListener('click', toggleBookmark);
+if (els.favoriteBtn) els.favoriteBtn.addEventListener('click', toggleFavorite);
 if (els.pwFillBtn) els.pwFillBtn.addEventListener('click', fillPasswordOnSite);
-if (els.pwFillToggle) els.pwFillToggle.addEventListener('change', () => { settings.showPwFill = els.pwFillToggle.checked; updatePwFillButton(); scheduleSave(); });
+if (els.pwFillToggle) els.pwFillToggle.addEventListener('change', () => { setToolbarVisible('pwFill', els.pwFillToggle.checked); renderToolbarPrefs(); });
 if (els.cardFillBtn) els.cardFillBtn.addEventListener('click', fillCardOnSite);
-if (els.cardFillToggle) els.cardFillToggle.addEventListener('change', () => { settings.showCardFill = els.cardFillToggle.checked; updateCardFillButton(); scheduleSave(); });
+if (els.cardFillToggle) els.cardFillToggle.addEventListener('change', () => { setToolbarVisible('cardFill', els.cardFillToggle.checked); renderToolbarPrefs(); });
 els.emptyTrash.addEventListener('click', emptyTrash);
 if (els.libImportPage) els.libImportPage.addEventListener('click', importPageFile);
 if (els.libSelectToggle) els.libSelectToggle.addEventListener('click', enterLibrarySelect);
@@ -7964,8 +8590,8 @@ if (els.libSelectAll) els.libSelectAll.addEventListener('click', selectAllLibrar
 if (els.libSelectDelete) els.libSelectDelete.addEventListener('click', deleteSelectedLibrary);
 if (els.libSelectDone) els.libSelectDone.addEventListener('click', exitLibrarySelect);
 
-// Spaces
-els.spaceSelect.addEventListener('change', (e) => setActiveSpace(e.target.value));
+// Spaces (now organizing Saved Pages)
+els.spaceSelect.addEventListener('change', (e) => setActiveSavedSpace(e.target.value));
 els.newSpaceBtn.addEventListener('click', () => {
   els.synthRow.hidden = true;
   els.newSpaceRow.hidden = !els.newSpaceRow.hidden;
@@ -7974,7 +8600,7 @@ els.newSpaceBtn.addEventListener('click', () => {
 function commitNewSpace() {
   const name = els.newSpaceName.value.trim();
   if (!name) { els.newSpaceRow.hidden = true; return; }
-  createSpace(name);
+  createSavedSpace(name);
   els.newSpaceRow.hidden = true;
 }
 els.createSpaceBtn.addEventListener('click', commitNewSpace);
@@ -7987,10 +8613,10 @@ els.synthesizeBtn.addEventListener('click', () => {
   els.synthRow.hidden = !els.synthRow.hidden;
   if (!els.synthRow.hidden) { els.synthInput.value = ''; els.synthInput.focus(); }
 });
-els.synthGo.addEventListener('click', () => { els.synthRow.hidden = true; synthesizeSpace(els.synthInput.value); });
-if (els.publishSpaceBtn) els.publishSpaceBtn.addEventListener('click', publishCurrentSpace);
+els.synthGo.addEventListener('click', () => { els.synthRow.hidden = true; synthesizeSavedSpace(els.synthInput.value); });
+if (els.publishSpaceBtn) els.publishSpaceBtn.addEventListener('click', publishCurrentSavedSpace);
 els.synthInput.addEventListener('keydown', (e) => {
-  if (e.key === 'Enter') { e.preventDefault(); els.synthRow.hidden = true; synthesizeSpace(els.synthInput.value); }
+  if (e.key === 'Enter') { e.preventDefault(); els.synthRow.hidden = true; synthesizeSavedSpace(els.synthInput.value); }
   else if (e.key === 'Escape') { els.synthRow.hidden = true; }
 });
 
@@ -8193,9 +8819,9 @@ if (window.chervil.onOpenTabUrl) {
 
 // Prompts fired from the floating quick-ask bar (global hotkey) open a fresh tab.
 if (window.chervil.onQuickPrompt) {
-  window.chervil.onQuickPrompt((prompt) => {
+  window.chervil.onQuickPrompt((prompt, opts) => {
     newTab(true);
-    handleComposerSubmit(String(prompt || ''));
+    handleComposerSubmit(String(prompt || ''), { forceChat: !!(opts && opts.chat) });
   });
 }
 

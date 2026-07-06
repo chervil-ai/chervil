@@ -315,6 +315,15 @@ html, body {
   cursor: pointer;
 }
 .chat-source-link:hover { text-decoration: underline; }
+/* Inline links auto-detected in chat replies — open in a new Chervil tab. */
+.msg a.chat-link {
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+  word-break: break-all;
+}
+.msg a.chat-link:hover { opacity: 0.85; }
 
 .dot-pulse {
   width: 8px; height: 8px; border-radius: 50%;
@@ -399,8 +408,10 @@ html, body {
 #send:disabled { opacity: 0.45; cursor: default; transform: none; }
 /* While composing, #send becomes a Stop button. */
 #send.stop { background: linear-gradient(135deg, #ff6b6b, #c0392b); font-size: 15px; }
-/* Bookmark star: gold when the current page is bookmarked. */
-#bookmark-btn.on { color: #f4c542; }
+/* Bookmark ribbon: accent-colored (and filled) when the page is bookmarked. */
+#bookmark-btn.on { color: var(--accent); }
+/* Favorite star: gold when the current site is a favorite. */
+#favorite-btn.on { color: #f4c542; }
 
 /* Composer icon button (attach) */
 .composer-icon {
@@ -1449,12 +1460,16 @@ html, body {
 .tab-favicon { width: 15px; height: 15px; border-radius: 3px; flex: 0 0 auto; }
 .lib-favicon { width: 18px; height: 18px; border-radius: 4px; flex: 0 0 auto; }
 /* Library: bookmark folder headers + the per-row folder picker */
-.lib-folder-head { font-size: 11px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted); padding: 8px 2px 2px; }
+.lib-folder-head { font-size: 11px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted); padding: 8px 4px 2px; border-radius: 6px; user-select: none; }
+.lib-folder-head:hover { color: var(--text); background: var(--panel-2); }
+.lib-folder-head.collapsed { color: color-mix(in srgb, var(--muted) 80%, transparent); }
 .lib-folder-select { background: var(--panel-2); border: 1px solid var(--border); color: var(--text); border-radius: 7px; padding: 4px 6px; font-size: 12px; max-width: 120px; cursor: pointer; }
 
 /* Bookmarks bar (under the omnibar) */
-#bookmarks-bar { display: flex; align-items: center; gap: 4px; overflow-x: auto; padding: 6px 12px; border-bottom: 1px solid var(--border); background: var(--panel); white-space: nowrap; }
-#bookmarks-bar[hidden] { display: none; }
+#bookmarks-bar, #favorites-bar { display: flex; align-items: center; gap: 4px; overflow-x: auto; padding: 6px 12px; border-bottom: 1px solid var(--border); background: var(--panel); white-space: nowrap; }
+#bookmarks-bar[hidden], #favorites-bar[hidden] { display: none; }
+#favorites-bar::-webkit-scrollbar { height: 6px; }
+#favorites-bar::-webkit-scrollbar-thumb { background: var(--border); border-radius: 6px; }
 #bookmarks-bar::-webkit-scrollbar { height: 6px; }
 #bookmarks-bar::-webkit-scrollbar-thumb { background: var(--border); border-radius: 6px; }
 .bmbar-empty { color: var(--muted); font-size: 12px; padding: 2px 4px; }

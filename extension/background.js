@@ -2,9 +2,10 @@
 // app via the chervil:// deep link the app registers. An optional `action` param
 // shapes what Sprig does with it (summarize, key points, explain…).
 
-function deepLink({ url, title, text, action }) {
+function deepLink({ url, title, text, action, mode }) {
   const p = new URLSearchParams();
   if (action) p.set("action", action);
+  if (mode) p.set("mode", mode);
   if (text) p.set("text", text);
   if (url) p.set("url", url);
   if (title) p.set("title", title);
@@ -24,6 +25,9 @@ const MENU = {
   "explain-sel": (info, tab) => ({ action: "explain", text: info.selectionText, url: tab && tab.url, title: tab && tab.title }),
   "key-sel": (info, tab) => ({ action: "keypoints", text: info.selectionText, url: tab && tab.url, title: tab && tab.title }),
   "open-link": (info) => ({ action: "summarize", url: info.linkUrl, title: info.linkUrl }),
+  // "Chervil Chat": just ask — route to chat mode, no page composed. Sends the
+  // selection (or the page/link) as plain context for a conversational reply.
+  "chervil-chat": (info, tab) => ({ mode: "chat", text: info.selectionText, url: info.linkUrl || (tab && tab.url), title: tab && tab.title }),
 };
 
 chrome.runtime.onInstalled.addListener(() => {
@@ -40,6 +44,9 @@ chrome.runtime.onInstalled.addListener(() => {
     chrome.contextMenus.create({ id: "key-sel", parentId: "sprig", title: 'Key points from “%s”', contexts: ["selection"] });
     // Link
     chrome.contextMenus.create({ id: "open-link", parentId: "sprig", title: "Open this link in Chervil", contexts: ["link"] });
+    // "Just ask" — a top-level shortcut that opens Chervil in chat mode (no page
+    // composed), carrying the selection/link/page along as context.
+    chrome.contextMenus.create({ id: "chervil-chat", title: "Chervil Chat", contexts: ["page", "selection", "link"] });
   });
 });
 

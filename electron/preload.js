@@ -261,7 +261,7 @@ contextBridge.exposeInMainWorld('chervil', {
   },
 
   /** Subscribe to prompts sent from the floating quick-ask bar (global hotkey). */
-  onQuickPrompt: (cb) => ipcRenderer.on('chervil:quick-prompt', (_e, prompt) => cb(prompt)),
+  onQuickPrompt: (cb) => ipcRenderer.on('chervil:quick-prompt', (_e, prompt, opts) => cb(prompt, opts)),
 
   /** A shared .chervil page arrived via a chervil://import deep link → import it. */
   onImportPage: (cb) => ipcRenderer.on('chervil:import-page', (_e, doc) => cb(doc)),
@@ -281,4 +281,31 @@ contextBridge.exposeInMainWorld('chervil', {
   /** Absorb any sync-service conflict copies into canonical now.
    *  Resolves to { ok, changed, mtimeMs, state }. */
   reconcileState: () => ipcRenderer.invoke('chervil:reconcile-state'),
+
+  /** List importable bookmark sources from other browsers.
+   *  Resolves to { ok, sources: [{ id, browser, profileName, label, path, count }] }. */
+  importListSources: () => ipcRenderer.invoke('chervil:import-list-sources'),
+
+  /** Import bookmarks from a listed source path. Resolves to
+   *  { ok, entries: [{ url, title, folder, addedAt }] }. */
+  importBookmarks: (srcPath) => ipcRenderer.invoke('chervil:import-bookmarks', srcPath),
+
+  /** List importable browsing-history sources.
+   *  Resolves to { ok, sources: [{ id, browser, profileName, label, path, count }] }. */
+  importListHistorySources: () => ipcRenderer.invoke('chervil:import-list-history-sources'),
+
+  /** Import browsing history from a listed source path. Resolves to
+   *  { ok, entries: [{ url, title, at, visitCount }] }. */
+  importHistory: (srcPath) => ipcRenderer.invoke('chervil:import-history', srcPath),
+
+  /** Import passwords from a CSV export (opens a file picker). Parses + saves into
+   *  the vault in the main process; passwords never return here. Resolves to
+   *  { ok, added, skipped, failed, total } or { ok:true, canceled:true }. */
+  importPasswordsCsv: () => ipcRenderer.invoke('chervil:import-passwords-csv'),
+
+  /** List importable address-autofill sources. { ok, sources:[{...,count}] }. */
+  importListAddressSources: () => ipcRenderer.invoke('chervil:import-list-address-sources'),
+
+  /** Read the primary saved address from a source. { ok, fields:{...identity} }. */
+  importAddress: (srcPath) => ipcRenderer.invoke('chervil:import-address', srcPath),
 });

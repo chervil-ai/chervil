@@ -6,6 +6,57 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.13.0] — 2026-07-06
+
+The switch release. Moving to a new browser usually means leaving your life
+behind — this one is about bringing it with you. Chervil now **imports from
+Chrome, Edge, Brave, and Vivaldi**: your bookmarks, your history, your saved
+passwords, and your address autofill. It also reorganizes the Library around a
+cleaner idea — **Favorites** for the websites you love, **Saved Pages** for the
+Chervil pages you compose — and fixes a real sync bug where deleted items could
+quietly come back.
+
+### Added
+- **Import from another browser** (Settings → Browser → Import). Bring your data
+  over from Chrome, Edge, Brave, or Vivaldi — read-only, and with no new
+  dependencies (it uses the SQLite reader built into the app runtime):
+  - **Bookmarks → Favorites**, keeping their folder structure.
+  - **Browsing history** into the History tab (your most recent visits).
+  - **Passwords** from a browser CSV export, saved straight into your encrypted
+    vault. The file is parsed and stored **entirely in the main process** —
+    plaintext passwords never reach the UI — and it works regardless of Chrome's
+    newer app-bound encryption, because the browser decrypts them for the export.
+  - **Address & contact autofill**, filling your saved identity in one click.
+- **Favorites** — a ★ list of your favorite websites, with folders, collapsible
+  sections, a **Collapse/Expand-all** control, and an optional **favorites bar**
+  under the address bar.
+- **"Chervil Chat" in the browser extension** — a right-click option that just
+  *asks* Chervil about the page or your selection in chat, without composing a page.
+- **Clickable links in chat** — URLs in Sprig's replies now open in a new tab.
+- **Card 💳 and login 🔑 fill buttons** are now part of **Toolbar Options**, so you
+  can show or hide them like any other address-bar button.
+- **A dedicated Browser settings page** collecting Browsing & privacy and Import.
+
+### Changed
+- **The Library, reorganized around what things actually are:**
+  - **Bookmarks → "Saved Pages"** — the composed Chervil pages you save, now
+    organized by **Spaces**, with **Synthesize** and **Publish** right there.
+  - **Websites live in Favorites**, not mixed in with saved pages. Anything you'd
+    saved as a site (or just imported) moves to Favorites automatically.
+  - **"Sites" → "History"** — your web browsing history, named like every browser.
+  - The old composed-pages "History" tab is now **"Activity"** — a flat, automatic
+    timeline of everything you compose.
+- The bookmark button is now a proper bookmark icon; the ★ star belongs to Favorites.
+
+### Fixed
+- **Deletions now survive sync.** Deleting a page, site, agent, or schedule — or
+  emptying Trash — on one computer no longer reappears after your synced folder
+  updates from another machine (tombstone-based deletes, matching how bookmarks
+  already worked), including a handful of edge cases around re-adding a
+  just-deleted item.
+- Faster Library folder rendering with large collections, and lighter import
+  pickers (no longer copying whole databases just to show a count).
+
 ## [0.12.0] — 2026-07-03
 
 The wallet release. Chervil already kept your passwords in an encrypted,
@@ -613,6 +664,7 @@ First public, build-in-public alpha. Run from source; no packaged installer yet.
 - API keys encrypted at rest via OS-native storage; never round-tripped through
   the UI.
 
-[Unreleased]: https://github.com/chervil-ai/chervil/compare/v0.1.5...HEAD
+[Unreleased]: https://github.com/chervil-ai/chervil/compare/v0.13.0...HEAD
+[0.13.0]: https://github.com/chervil-ai/chervil/compare/v0.12.0...v0.13.0
 [0.1.5]: https://github.com/chervil-ai/chervil/compare/v0.1.4...v0.1.5
 [0.1.0]: https://github.com/chervil-ai/chervil/releases/tag/v0.1.0

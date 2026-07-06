@@ -18,6 +18,10 @@ const { getSkill } = require('../lib/skills');
 const { createVault } = require('../lib/vault');
 const { registrableDomain } = require('../lib/etld');
 const { mergeStates } = require('../lib/stateMerge');
+const importBookmarks = require('../lib/importBookmarks');
+const importHistory = require('../lib/importHistory');
+const importPasswordsCsv = require('../lib/importPasswordsCsv');
+const importAutofill = require('../lib/importAutofill');
 
 let mainWindow = null;
 let primaryWcId = null; // webContents id of the persisting window; secondary windows are ephemeral
@@ -575,16 +579,16 @@ function showMain() {
 // Deliver a prompt to the main window's composer. If the window is still
 // loading (cold start / just created), wait until its renderer is ready —
 // otherwise the message is sent before onQuickPrompt is registered and lost.
-function deliverPrompt(prompt) {
+function deliverPrompt(prompt, opts) {
   if (!mainWindow || mainWindow.isDestroyed()) createWindow();
   showMain();
   const wc = mainWindow.webContents;
   if (wc.isLoading()) {
     wc.once('did-finish-load', () => {
-      if (!wc.isDestroyed()) wc.send('chervil:quick-prompt', prompt);
+      if (!wc.isDestroyed()) wc.send('chervil:quick-prompt', prompt, opts);
     });
   } else {
-    wc.send('chervil:quick-prompt', prompt);
+    wc.send('chervil:quick-prompt', prompt, opts);
   }
 }
 
@@ -763,6 +767,7 @@ async function importAgentFromUrl(agentUrl) {
 //   chervil://import-agent?u=<agent JSON URL>
 function handleChervilUrl(raw) {
   let prompt = '';
+  let quickOpts;
   try {
     const u = new URL(raw);
     if (u.protocol !== 'chervil:') return;
@@ -782,6 +787,7 @@ function handleChervilUrl(raw) {
     const url = (u.searchParams.get('url') || '').trim();
     const title = (u.searchParams.get('title') || '').trim();
     const action = (u.searchParams.get('action') || '').trim().toLowerCase();
+    const mode = (u.searchParams.get('mode') || '').trim().toLowerCase();
     const where = title ? `${title} (${url})` : url;
     const from = url ? `\n\n— from ${where}` : '';
     if (text) {
@@ -791,11 +797,15 @@ function handleChervilUrl(raw) {
       else prompt = url ? `${text}${from}` : text;
     } else if (url) {
       // Page/link actions.
-      if (action === 'keypoints') prompt = `Pull out the key points / TL;DR of this web page as a tight bulleted list: ${where}`;
+      if (mode === 'chat') prompt = `About this web page: ${where}`;
+      else if (action === 'keypoints') prompt = `Pull out the key points / TL;DR of this web page as a tight bulleted list: ${where}`;
       else prompt = `Summarize this web page and pull out the key points: ${where}`;
     }
+    // mode=chat asks Chervil conversationally (no page composed) — flag it so the
+    // renderer routes this one turn to chat without flipping the global toggle.
+    if (mode === 'chat') quickOpts = { chat: true };
   } catch { /* malformed link */ }
-  if (prompt) deliverPrompt(prompt);
+  if (prompt) deliverPrompt(prompt, quickOpts);
 }
 
 function createQuickWindow() {
@@ -2527,6 +2537,82 @@ ipcMain.handle('chervil:reconcile-state', async () => {
   } catch (err) {
     return { ok: false, error: String(err && err.message ? err.message : err) };
   }
+});
+
+// Import from another browser (Phase 1: bookmarks). List the importable sources
+// (browser × profile that has a Bookmarks file) and read one on request. Read-only.
+ipcMain.handle('chervil:import-list-sources', async () => {
+  try { return { ok: true, sources: importBookmarks.listSources() }; }
+  catch (err) { return { ok: false, error: String(err && err.message ? err.message : err) }; }
+});
+ipcMain.handle('chervil:import-bookmarks', async (_event, srcPath) => {
+  try {
+    // Only ever read a path we ourselves enumerated — never an arbitrary path the
+    // renderer hands us (defense against a compromised renderer reading the disk).
+    // Cheap membership check (no re-parsing every Bookmarks file to validate one path).
+    if (!importBookmarks.isImportablePath('Bookmarks', srcPath)) return { ok: false, error: 'Unknown import source.' };
+    return { ok: true, entries: importBookmarks.readSource(srcPath) };
+  } catch (err) { return { ok: false, error: String(err && err.message ? err.message : err) }; }
+});
+// Import browsing history (SQLite via node:sqlite; copy-then-read). Read-only.
+ipcMain.handle('chervil:import-list-history-sources', async () => {
+  try { return { ok: true, sources: importHistory.listHistorySources() }; }
+  catch (err) { return { ok: false, error: String(err && err.message ? err.message : err) }; }
+});
+ipcMain.handle('chervil:import-history', async (_event, srcPath) => {
+  try {
+    // Validate cheaply (path membership) — don't re-copy every History DB here.
+    if (!importHistory.isImportablePath(srcPath)) return { ok: false, error: 'Unknown import source.' };
+    return { ok: true, entries: importHistory.readHistory(srcPath) };
+  } catch (err) { return { ok: false, error: String(err && err.message ? err.message : err) }; }
+});
+
+// Import passwords from a browser/password-manager CSV export. The user picks the
+// file; we parse + save into the encrypted vault ENTIRELY in the main process —
+// plaintext passwords never cross back to the renderer. Returns counts only.
+ipcMain.handle('chervil:import-passwords-csv', async (event) => {
+  try {
+    const v = vault();
+    if (!v.isConfigured()) return { ok: false, error: 'needs-setup' };
+    if (!v.isUnlocked()) return { ok: false, error: 'locked' };
+    const win = BrowserWindow.fromWebContents(event.sender) || mainWindow;
+    const { canceled, filePaths } = await dialog.showOpenDialog(win, {
+      title: 'Import passwords — choose your browser’s CSV export',
+      filters: [{ name: 'CSV files', extensions: ['csv'] }],
+      properties: ['openFile'],
+    });
+    if (canceled || !filePaths || !filePaths[0]) return { ok: true, canceled: true };
+    let text;
+    try { text = fs.readFileSync(filePaths[0], 'utf8'); } catch { return { ok: false, error: 'Couldn’t read that file.' }; }
+    const rows = importPasswordsCsv.parsePasswordsCsv(text);
+    if (!rows.length) return { ok: false, error: 'not-a-passwords-csv' };
+    let added = 0;
+    let skipped = 0;
+    let failed = 0;
+    for (const r of rows) {
+      const origin = registrableDomain(r.url || '');
+      if (!origin || !r.password) { skipped++; continue; }
+      try {
+        if (v.hasExact(origin, r.username || '', r.password)) { skipped++; continue; }
+        v.save({ origin, username: r.username || '', password: r.password });
+        added++;
+      } catch { failed++; }
+    }
+    return { ok: true, added, skipped, failed, total: rows.length };
+  } catch (err) { return { ok: false, error: String(err && err.message ? err.message : err) }; }
+});
+
+// Import contact/address autofill (unencrypted Web Data). Reads the most-used
+// address profile and returns Chervil's identity fields for the renderer to save.
+ipcMain.handle('chervil:import-list-address-sources', async () => {
+  try { return { ok: true, sources: importAutofill.listAddressSources() }; }
+  catch (err) { return { ok: false, error: String(err && err.message ? err.message : err) }; }
+});
+ipcMain.handle('chervil:import-address', async (_event, srcPath) => {
+  try {
+    if (!importAutofill.isImportablePath(srcPath)) return { ok: false, error: 'Unknown import source.' };
+    return { ok: true, fields: importAutofill.readPrimaryAddress(srcPath) || {} };
+  } catch (err) { return { ok: false, error: String(err && err.message ? err.message : err) }; }
 });
 
 // Info about the active state file: whether it's the synced location and its

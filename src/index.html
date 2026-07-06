@@ -101,12 +101,13 @@
                placeholder="Search, ask Sprig, or enter a URL…" />
         <div id="omni-actions">
           <button id="map-btn" class="omni-btn text" title="Thinking canvas — map of this tab's pages">⌗ <span class="lbl">Map</span></button>
-          <button id="history-btn" class="omni-btn text" title="Library — History, Bookmarks, Sites, Downloads &amp; Trash">🕘 <span class="lbl">Library</span></button>
+          <button id="history-btn" class="omni-btn text" title="Library — Saved Pages, Activity, Favorites, History, Downloads &amp; Trash">🕘 <span class="lbl">Library</span></button>
           <button id="sched-btn" class="omni-btn text" title="Scheduled agents">⏰ <span class="lbl">Schedules</span></button>
           <button id="agents-btn" class="omni-btn text" title="Agents — personas &amp; tools">👤 <span class="lbl">Agents</span></button>
           <button id="autofill-pw-btn" class="omni-btn" title="Fill a saved login" hidden>🔑</button>
           <button id="autofill-card-btn" class="omni-btn" title="Fill a saved payment card" hidden>💳</button>
-          <button id="bookmark-btn" class="omni-btn" title="Bookmark this page" disabled>☆</button>
+          <button id="bookmark-btn" class="omni-btn" title="Save this page" disabled><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><path d="M6 3h12a1 1 0 0 1 1 1v17l-7-4.5L5 21V4a1 1 0 0 1 1-1z"/></svg></button>
+          <button id="favorite-btn" class="omni-btn" title="Add to Favorites (websites only)" disabled>☆</button>
           <button id="reader-btn" class="omni-btn" title="Reader view — declutter this page" disabled>📖</button>
           <button id="pip-btn" class="omni-btn" title="Picture-in-picture (pop out the video)" disabled>📺</button>
           <button id="save-btn" class="omni-btn text" title="Save this page to disk" disabled>⤓ <span class="lbl">Save</span></button>
@@ -123,6 +124,9 @@
 
       <!-- Bookmarks bar (toggle: Settings → General, or Ctrl+Shift+B) -->
       <div id="bookmarks-bar" hidden></div>
+
+      <!-- Favorites bar (toggle: Settings → General) -->
+      <div id="favorites-bar" hidden></div>
 
       <div id="viewport">
         <!-- Generated pages render here -->
@@ -231,6 +235,7 @@
 
       <nav id="settings-tabs" class="settings-tabs">
         <button class="settings-tab active" data-sgroup="general">General</button>
+        <button class="settings-tab" data-sgroup="browser">Browser</button>
         <button class="settings-tab" data-sgroup="ai">AI</button>
         <button class="settings-tab" data-sgroup="voice">Voice</button>
         <button class="settings-tab" data-sgroup="publishing">Publishing &amp; Sync</button>
@@ -300,7 +305,7 @@
         <p class="group-hint">Chervil answers with Sprig by default. To do a plain web search instead, start the address bar with a <strong>bang</strong>: <code>g!</code> Google, <code>ddg!</code> DuckDuckGo, <code>b!</code> Bing, or <code>s!</code> for your default above — e.g. <code>g! best hiking boots</code>.</p>
       </section>
 
-      <section class="setting-group" data-sgroup="general">
+      <section class="setting-group" data-sgroup="browser">
         <h3>Browsing &amp; privacy</h3>
         <div class="opt-row">
           <span>Default browser<br><small id="default-browser-status" class="field-note">Open links from other apps in Chervil.</small></span>
@@ -317,11 +322,39 @@
       </section>
 
       <section class="setting-group" data-sgroup="general">
-        <h3>Bookmarks bar</h3>
+        <h3>Saved pages bar</h3>
         <label class="toggle-row">
           <input type="checkbox" id="bookmarks-bar-toggle" />
-          <span>Show the bookmarks bar under the address bar <small>(toggle anytime with Ctrl+Shift+B)</small></span>
+          <span>Show the saved-pages bar under the address bar <small>(toggle anytime with Ctrl+Shift+B)</small></span>
         </label>
+      </section>
+
+      <section class="setting-group" data-sgroup="general">
+        <h3>Favorites bar</h3>
+        <label class="toggle-row">
+          <input type="checkbox" id="favorites-bar-toggle" />
+          <span>Show the favorites bar under the address bar <small>(your ★ websites, for one-click access)</small></span>
+        </label>
+      </section>
+
+      <section class="setting-group" data-sgroup="browser">
+        <h3>Import from another browser</h3>
+        <div class="opt-row">
+          <span>Websites → Favorites<br><small id="import-status" class="field-note">Bring your bookmarks over from Chrome, Edge, Brave, or Vivaldi. They become Favorites, keeping their folders.</small></span>
+          <button id="import-bookmarks-btn" class="lib-btn">Import bookmarks…</button>
+        </div>
+        <div class="opt-row">
+          <span>Browsing history<br><small id="import-history-status" class="field-note">Bring your recent history into the History tab (most recent visits).</small></span>
+          <button id="import-history-btn" class="lib-btn">Import history…</button>
+        </div>
+        <div class="opt-row">
+          <span>Passwords<br><small id="import-pw-status" class="field-note">Export passwords from your browser (Settings → Passwords → Export), then import the CSV into your encrypted vault.</small></span>
+          <button id="import-pw-btn" class="lib-btn">Import passwords…</button>
+        </div>
+        <div class="opt-row">
+          <span>Address &amp; contact<br><small id="import-address-status" class="field-note">Fill your autofill identity from a saved browser address (name, email, phone, address).</small></span>
+          <button id="import-address-btn" class="lib-btn">Import address…</button>
+        </div>
       </section>
 
       <section class="setting-group" data-sgroup="general">
@@ -676,15 +709,17 @@
     <div class="drawer-panel">
       <header class="drawer-head">
         <div class="drawer-tabs">
-          <button id="lib-tab-history" class="drawer-tab active">History</button>
-          <button id="lib-tab-bookmarks" class="drawer-tab">Bookmarks</button>
-          <button id="lib-tab-sites" class="drawer-tab">Sites</button>
+          <button id="lib-tab-bookmarks" class="drawer-tab">Saved Pages</button>
+          <button id="lib-tab-history" class="drawer-tab active">Activity</button>
+          <button id="lib-tab-favorites" class="drawer-tab">Favorites</button>
           <button id="lib-tab-downloads" class="drawer-tab">Downloads</button>
+          <button id="lib-tab-sites" class="drawer-tab">History</button>
           <button id="lib-tab-trash" class="drawer-tab">Trash</button>
         </div>
         <div class="drawer-head-right">
           <button id="lib-import-page" class="lib-btn" title="Import a shared Chervil page (.chervil)">⤒ Import page</button>
-          <button id="lib-new-folder" class="lib-btn" title="Create a bookmark folder" hidden>+ Folder</button>
+          <button id="lib-new-folder" class="lib-btn" title="Create a folder" hidden>+ Folder</button>
+          <button id="lib-collapse-all" class="lib-btn" hidden>Collapse all</button>
           <button id="lib-select-toggle" class="lib-btn" hidden>Select</button>
           <button id="clear-sites" class="lib-btn danger" hidden>Clear history</button>
           <button id="clear-downloads" class="lib-btn danger" hidden>Clear list</button>
@@ -701,7 +736,7 @@
         <button id="lib-select-done">Done</button>
       </div>
 
-      <!-- Space bar (History tab only): pick a Space, create one, or synthesize across it -->
+      <!-- Space bar (Saved Pages tab): pick a Space, create one, synthesize or publish across it -->
       <div id="space-bar">
         <label class="space-label">Space</label>
         <select id="space-select" title="Switch Space"></select>
