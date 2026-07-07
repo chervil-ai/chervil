@@ -16,6 +16,7 @@ const { runAgent, runChat, runAgentTurn, runOrchestrator, runAppletAsk, runCompo
 const { generateHeroImage } = require('../lib/images');
 const { getSkill } = require('../lib/skills');
 const { createVault } = require('../lib/vault');
+const { createSitePermissions, MANAGED_PERMISSIONS } = require('../lib/sitePermissions');
 const { registrableDomain } = require('../lib/etld');
 const { mergeStates } = require('../lib/stateMerge');
 const importBookmarks = require('../lib/importBookmarks');
@@ -152,6 +153,45 @@ let credVault = null;
 function vault() {
   if (!credVault) credVault = createVault(path.join(app.getPath('userData'), 'chervil-creds.bin'), safeStorage);
   return credVault;
+}
+
+// Per-site permission decisions (camera/mic/location/notifications) for embedded
+// real sites — lazily created once app is ready.
+let sitePermsStore = null;
+function sitePerms() {
+  if (!sitePermsStore) sitePermsStore = createSitePermissions(path.join(app.getPath('userData'), 'chervil-permissions.json'));
+  return sitePermsStore;
+}
+
+// Human-readable label for a permission prompt.
+function permLabel(permission) {
+  if (permission === 'media') return 'use your camera and microphone';
+  if (permission === 'geolocation') return 'know your location';
+  if (permission === 'notifications') return 'send you notifications';
+  return `use ${permission}`;
+}
+
+// Ask the user to allow/block a sensitive permission for a site, once. The choice
+// is remembered (per origin) so we never re-prompt — matching browser behavior.
+// Returns true to allow.
+async function promptSitePermission(win, origin, permission) {
+  const parent = win && !win.isDestroyed() ? win : (mainWindow && !mainWindow.isDestroyed() ? mainWindow : null);
+  const opts = {
+    type: 'question',
+    buttons: ['Block', 'Allow'],
+    defaultId: 0,
+    cancelId: 0,
+    noLink: true,
+    title: 'Site permission',
+    message: `Allow ${origin} to ${permLabel(permission)}?`,
+    detail: 'Chervil will remember your choice for this site. You can change it later in Settings → Browser → Site permissions.',
+  };
+  try {
+    const { response } = parent ? await dialog.showMessageBox(parent, opts) : await dialog.showMessageBox(opts);
+    return response === 1;
+  } catch {
+    return false; // fail closed
+  }
 }
 
 // --- Bring-your-own API keys (per provider, encrypted at rest via safeStorage) ---
@@ -516,7 +556,8 @@ function createWindow(opts = {}) {
           width: 600,
           height: 720,
           autoHideMenuBar: true,
-          webPreferences: { contextIsolation: true, nodeIntegration: false },
+          // plugins: render PDFs inline in popups (OAuth flows sometimes surface docs).
+          webPreferences: { contextIsolation: true, nodeIntegration: false, plugins: true },
         },
       };
     });
@@ -531,21 +572,40 @@ function createWindow(opts = {}) {
     });
   });
 
-  // Allow microphone access for voice input, but ONLY for Chervil's own UI
-  // (the file:// origin) — never auto-grant mic/camera to remote sites embedded
-  // in the <webview>. Benign browsing permissions (fullscreen, pointer lock) stay
-  // allowed so embedded real sites still work; sensitive ones (geolocation,
-  // notifications, etc.) are denied.
+  // Permission model for the embedded <webview>:
+  //  • Chervil's own UI (file://) always gets the mic — that's voice input.
+  //  • Benign browsing permissions (fullscreen, pointer lock, …) stay allowed so
+  //    embedded real sites work.
+  //  • Sensitive permissions (camera/mic, location, notifications) on a REMOTE
+  //    site are decided PER SITE: honor a saved choice, otherwise prompt once and
+  //    remember it. This lets Chervil be someone's only browser without handing
+  //    every page the camera. Anything else is denied.
   const ses = win.webContents.session;
   const fromApp = (url) => (url || '').startsWith('file://');
   const BROWSING_OK = new Set(['fullscreen', 'pointerLock', 'keyboardLock', 'clipboard-sanitized-write']);
-  ses.setPermissionRequestHandler((wc, permission, callback, details) => {
-    if (permission === 'media') return callback(fromApp(details && details.requestingUrl));
-    return callback(BROWSING_OK.has(permission));
+  const managed = new Set(MANAGED_PERMISSIONS);
+  ses.setPermissionRequestHandler(async (wc, permission, callback, details) => {
+    if (permission === 'media' && fromApp(details && details.requestingUrl)) return callback(true);
+    if (BROWSING_OK.has(permission)) return callback(true);
+    if (managed.has(permission)) {
+      const origin = sitePerms().originKey(details && details.requestingUrl);
+      if (!origin) return callback(false);
+      const saved = sitePerms().get(origin, permission);
+      if (saved) return callback(saved === 'allow');
+      const allow = await promptSitePermission(win, origin, permission);
+      sitePerms().set(origin, permission, allow ? 'allow' : 'deny');
+      return callback(allow);
+    }
+    return callback(false);
   });
   ses.setPermissionCheckHandler((wc, permission, requestingOrigin) => {
-    if (permission === 'media') return fromApp(requestingOrigin);
-    return BROWSING_OK.has(permission);
+    if (permission === 'media' && fromApp(requestingOrigin)) return true;
+    if (BROWSING_OK.has(permission)) return true;
+    if (managed.has(permission)) {
+      const origin = sitePerms().originKey(requestingOrigin);
+      return origin ? sitePerms().get(origin, permission) === 'allow' : false;
+    }
+    return false;
   });
 
   if (secondary) {
@@ -1733,6 +1793,24 @@ ipcMain.handle('chervil:clear-browsing-data', async () => {
     const ses = session.defaultSession;
     await ses.clearCache();
     await ses.clearStorageData({ storages: ['cookies', 'localstorage', 'indexdb', 'websql', 'serviceworkers', 'cachestorage', 'filesystem', 'shadercache'] });
+    return { ok: true };
+  } catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
+});
+
+// Site permissions (camera/mic, location, notifications) — review & revoke from
+// Settings. The prompts themselves are handled inline in the request handler.
+ipcMain.handle('chervil:site-perms-list', async () => {
+  try { return { ok: true, items: sitePerms().list() }; }
+  catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
+});
+ipcMain.handle('chervil:site-perms-set', async (_event, { origin, permission, decision } = {}) => {
+  try { sitePerms().set(origin, permission, decision); return { ok: true }; }
+  catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
+});
+ipcMain.handle('chervil:site-perms-clear', async (_event, { origin, permission } = {}) => {
+  try {
+    if (origin) sitePerms().clear(origin, permission || undefined);
+    else sitePerms().clearAll();
     return { ok: true };
   } catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
 });

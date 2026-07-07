@@ -138,6 +138,11 @@ const els = {
   wakeKeywordNote: document.getElementById('wake-keyword-note'),
   wakeThreshold: document.getElementById('wake-threshold'),
   wakeThresholdVal: document.getElementById('wake-threshold-val'),
+  wakeConfirmToggle: document.getElementById('wake-confirm-toggle'),
+  wakeConfirm: document.getElementById('wake-confirm'),
+  wakeConfirmText: document.getElementById('wake-confirm-text'),
+  wakeConfirmGo: document.getElementById('wake-confirm-go'),
+  wakeConfirmCancel: document.getElementById('wake-confirm-cancel'),
   // Appearance
   tabLayoutSelect: document.getElementById('tab-layout-select'),
   remixDefaultSelect: document.getElementById('remix-default-select'),
@@ -200,6 +205,7 @@ const els = {
   cardFillBtn: document.getElementById('autofill-card-btn'),
   cardFillToggle: document.getElementById('card-fill-toggle'),
   cardsPanel: document.getElementById('cards-panel'),
+  sitePermsPanel: document.getElementById('site-perms-panel'),
   emptyTrash: document.getElementById('empty-trash'),
   libImportPage: document.getElementById('lib-import-page'),
   libSelectToggle: document.getElementById('lib-select-toggle'),
@@ -263,6 +269,7 @@ let settings = {
   wakeKeyword: 'hey_sprig', // built-in: hey_sprig | hey_jarvis | alexa | hey_mycroft, or 'custom' (.onnx in userData)
   wakeKeywordLabel: '',      // display label for a loaded custom model
   wakeThreshold: 0.6,        // detection score cutoff (0–1; higher = fewer false triggers). Tunable in Settings → Voice.
+  wakeConfirm: true,         // require an explicit confirm before composing from a wake trigger (guards against false triggers in a noisy room)
   // Publishing — Chervil Pro: publish a lesson to a shareable getchervil.com link.
   publishToken: '',          // from getchervil.com/me (stored locally)
   publishBase: 'https://getchervil.com',
@@ -2369,14 +2376,68 @@ async function onWakeDetected() {
     window.chervil.wakeDone && window.chervil.wakeDone();           // hide the listening bar
     if (text) {
       window.chervil.showMain && window.chervil.showMain();         // surface the result (only on a real request)
-      newTab(true);
-      handleComposerSubmit(text);
+      if (settings.wakeConfirm === false) {
+        // Power-user / quiet-room path: compose straight from the wake.
+        newTab(true);
+        handleComposerSubmit(text);
+      } else {
+        // Default: show what Sprig heard and wait for an explicit OK. A false
+        // trigger (e.g. TV audio) fills the bar but can never compose on its own.
+        showWakeConfirm(text);
+      }
     }
   } catch { /* ignore a failed capture */ }
   finally {
     wakeCapturing = false;
     try { if (settings.wakeEnabled && window.ChervilWake) await window.ChervilWake.resume(); } catch { /* ignore */ }
   }
+}
+
+// ---- Wake-word confirmation gate ----
+// Shows the captured request and waits for the user to confirm (Compose/Enter) or
+// cancel (Cancel/Esc/click-away). Auto-cancels after a timeout so an unattended
+// false trigger simply disappears. Nothing composes until the user says so.
+let wakeConfirmTimer = null;
+let wakeConfirmText = '';
+
+function showWakeConfirm(text) {
+  wakeConfirmText = text;
+  if (!els.wakeConfirm) { // fallback if the gate DOM is missing: just fill the composer
+    els.prompt.value = text; autoGrowPrompt(); els.prompt.focus();
+    return;
+  }
+  if (els.wakeConfirmText) els.wakeConfirmText.textContent = text;
+  els.wakeConfirm.hidden = false;
+  requestAnimationFrame(() => els.wakeConfirm.classList.add('show'));
+  if (els.wakeConfirmGo) els.wakeConfirmGo.focus();
+  clearTimeout(wakeConfirmTimer);
+  wakeConfirmTimer = setTimeout(() => hideWakeConfirm(), 8000); // auto-cancel
+}
+
+function hideWakeConfirm() {
+  clearTimeout(wakeConfirmTimer);
+  wakeConfirmTimer = null;
+  wakeConfirmText = '';
+  if (!els.wakeConfirm) return;
+  els.wakeConfirm.classList.remove('show');
+  els.wakeConfirm.hidden = true;
+}
+
+function acceptWakeConfirm() {
+  const text = wakeConfirmText;
+  hideWakeConfirm();
+  if (!text) return;
+  newTab(true);
+  handleComposerSubmit(text);
+}
+
+if (els.wakeConfirmGo) els.wakeConfirmGo.addEventListener('click', acceptWakeConfirm);
+if (els.wakeConfirmCancel) els.wakeConfirmCancel.addEventListener('click', hideWakeConfirm);
+if (els.wakeConfirm) {
+  els.wakeConfirm.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); acceptWakeConfirm(); }
+    else if (e.key === 'Escape') { e.preventDefault(); hideWakeConfirm(); }
+  });
 }
 
 // Record the spoken command and auto-stop on silence (energy-based VAD), then
@@ -6778,6 +6839,7 @@ function applySettingsToUI() {
     els.wakeThreshold.value = String(thr);
     if (els.wakeThresholdVal) els.wakeThresholdVal.textContent = thr.toFixed(2);
   }
+  if (els.wakeConfirmToggle) els.wakeConfirmToggle.checked = settings.wakeConfirm !== false;
   if (els.sttKeyInput) els.sttKeyInput.value = '';
   if (els.heroToggle) els.heroToggle.checked = !!settings.heroImages;
   { const ps = document.getElementById('page-style-select'); if (ps) ps.value = settings.pageStyle || 'balanced'; }
@@ -6787,6 +6849,7 @@ function applySettingsToUI() {
   refreshImageKeyStatus();
   renderCredsPanel();
   renderCardsPanel();
+  renderSitePermsPanel();
   renderMcpServers();
 }
 
@@ -6891,17 +6954,31 @@ async function renderCredsPanel() {
   panel.appendChild(credsEl('div', { class: 'mcp-add creds-add' }, [oInput, uInput, pInput, genBtn, addBtn]));
   panel.appendChild(addNote);
 
+  // Search box — filters the list by site or username (useful after importing many).
+  const search = credsEl('input', { type: 'search', class: 'mcp-field creds-search', placeholder: 'Search saved logins…', spellcheck: 'false', autocomplete: 'off' });
   const listWrap = credsEl('div', { class: 'creds-list' });
+  search.addEventListener('input', () => renderCredsList(listWrap, search.value));
+  panel.appendChild(search);
   panel.appendChild(listWrap);
-  renderCredsList(listWrap);
+  renderCredsList(listWrap, '');
   panel.appendChild(credsAutoLockRow());
 }
 
-async function renderCredsList(wrap) {
+// Copy text to the clipboard, tolerating older/edge Electron clipboard behavior.
+async function copyToClipboard(text) {
+  try { await navigator.clipboard.writeText(text); return true; }
+  catch { try { return !!(window.chervil.copyText && (await window.chervil.copyText(text))); } catch { return false; } }
+}
+
+async function renderCredsList(wrap, filter) {
   wrap.innerHTML = '';
   let items = [];
   try { const r = await window.chervil.creds.list(); items = (r && r.ok && r.items) || []; } catch { /* ignore */ }
-  if (!items.length) { wrap.appendChild(credsEl('div', { class: 'lib-empty', text: 'No saved logins yet.' })); return; }
+  const total = items.length;
+  const q = (filter || '').trim().toLowerCase();
+  if (q) items = items.filter((it) => (it.origin || '').toLowerCase().includes(q) || (it.username || '').toLowerCase().includes(q));
+  if (!total) { wrap.appendChild(credsEl('div', { class: 'lib-empty', text: 'No saved logins yet.' })); return; }
+  if (!items.length) { wrap.appendChild(credsEl('div', { class: 'lib-empty', text: `No logins match “${filter}”.` })); return; }
   items.sort((a, b) => (a.origin || '').localeCompare(b.origin || ''));
   for (const it of items) {
     const meta = credsEl('div', { class: 'creds-meta' }, [
@@ -6916,13 +6993,48 @@ async function renderCredsList(wrap) {
         else { e.target.textContent = '🙈 Hide'; e.target.dataset.shown = '1'; meta.appendChild(credsEl('div', { class: 'creds-pass', text: r.password })); }
       } else { toast((r && r.error) || 'Couldn’t reveal.'); }
     } });
+    const copyBtn = credsEl('button', { class: 'lib-btn', text: '📋 Copy', title: 'Copy password to clipboard', onclick: async () => {
+      const r = await window.chervil.creds.reveal(it.id);
+      if (r && r.ok && await copyToClipboard(r.password)) toast('Password copied to clipboard.');
+      else toast('Couldn’t copy the password.');
+    } });
+    const editBtn = credsEl('button', { class: 'lib-btn', text: '✎ Edit', title: 'Edit this login', onclick: () => editCredRow(wrap, it, filter) });
     const delBtn = credsEl('button', { class: 'lib-btn danger', text: 'Delete', onclick: async () => {
       if (!confirm(`Delete the saved login for ${it.origin}?`)) return;
       const r = await window.chervil.creds.remove(it.id);
-      if (r && r.ok) { toast('Login deleted.'); renderCredsList(wrap); } else { toast('Couldn’t delete.'); }
+      if (r && r.ok) { toast('Login deleted.'); renderCredsList(wrap, filter); } else { toast('Couldn’t delete.'); }
     } });
-    wrap.appendChild(credsEl('div', { class: 'creds-row' }, [meta, credsEl('div', { class: 'creds-actions' }, [revealBtn, delBtn])]));
+    wrap.appendChild(credsEl('div', { class: 'creds-row' }, [meta, credsEl('div', { class: 'creds-actions' }, [revealBtn, copyBtn, editBtn, delBtn])]));
   }
+}
+
+// Inline edit for a saved login — change the username and/or set a new password.
+// Leaving the password blank keeps the existing one (vault.save merges by id).
+async function editCredRow(wrap, it, filter) {
+  const uInput = credsEl('input', { type: 'text', class: 'mcp-field', placeholder: 'Username / email', spellcheck: 'false', autocomplete: 'off' });
+  uInput.value = it.username || '';
+  const pInput = credsEl('input', { type: 'password', class: 'mcp-field', placeholder: 'New password (blank = keep current)', autocomplete: 'new-password' });
+  const genBtn = credsEl('button', { class: 'lib-btn', text: '🎲', title: 'Generate a strong password', onclick: () => { pInput.value = generatePassword(20); pInput.type = 'text'; } });
+  const note = credsEl('small', { class: 'field-note' });
+  const saveBtn = credsEl('button', { class: 'lib-btn primary', text: 'Save', onclick: async () => {
+    const payload = { id: it.id, origin: it.origin, username: uInput.value.trim() };
+    if (pInput.value) payload.password = pInput.value;
+    const r = await window.chervil.creds.save(payload);
+    if (r && r.ok) { toast('Login updated.'); renderCredsList(wrap, filter); }
+    else { note.textContent = (r && r.error) || 'Couldn’t save.'; note.className = 'field-note warn'; }
+  } });
+  const cancelBtn = credsEl('button', { class: 'lib-btn', text: 'Cancel', onclick: () => renderCredsList(wrap, filter) });
+  const row = credsEl('div', { class: 'creds-row creds-row-edit' }, [
+    credsEl('div', { class: 'creds-meta' }, [
+      credsEl('div', { class: 'creds-origin', text: it.origin }),
+      credsEl('div', { class: 'mcp-add creds-add' }, [uInput, pInput, genBtn]),
+      note,
+    ]),
+    credsEl('div', { class: 'creds-actions' }, [saveBtn, cancelBtn]),
+  ]);
+  wrap.innerHTML = '';
+  wrap.appendChild(row);
+  uInput.focus();
 }
 
 // Format a stored expiry (month int, 4-digit year) as MM/YY for display.
@@ -7006,12 +7118,59 @@ async function renderCardsList(wrap) {
         meta.appendChild(credsEl('div', { class: 'creds-pass', text: grouped }));
       } else { toast((r && r.error) || 'Couldn’t reveal.'); }
     } });
+    const copyBtn = credsEl('button', { class: 'lib-btn', text: '📋 Copy', title: 'Copy card number to clipboard', onclick: async () => {
+      const r = await window.chervil.cards.reveal(it.id);
+      if (r && r.ok && await copyToClipboard(String(r.number))) toast('Card number copied to clipboard.');
+      else toast('Couldn’t copy the card number.');
+    } });
     const delBtn = credsEl('button', { class: 'lib-btn danger', text: 'Delete', onclick: async () => {
       if (!confirm(`Delete ${it.brand} ····${it.last4}?`)) return;
       const r = await window.chervil.cards.remove(it.id);
       if (r && r.ok) { toast('Card deleted.'); renderCardsList(wrap); updatePwFillButton(); } else { toast('Couldn’t delete.'); }
     } });
-    wrap.appendChild(credsEl('div', { class: 'creds-row' }, [meta, credsEl('div', { class: 'creds-actions' }, [revealBtn, delBtn])]));
+    wrap.appendChild(credsEl('div', { class: 'creds-row' }, [meta, credsEl('div', { class: 'creds-actions' }, [revealBtn, copyBtn, delBtn])]));
+  }
+}
+
+// Site-permission decisions (camera/mic, location, notifications) for embedded
+// sites. Read-only review + revoke; the grant prompts happen in the main process.
+const SITE_PERM_LABELS = { media: 'Camera & microphone', geolocation: 'Location', notifications: 'Notifications' };
+async function renderSitePermsPanel() {
+  const panel = els.sitePermsPanel;
+  if (!panel || !window.chervil.sitePerms) return;
+  panel.innerHTML = '';
+  let items = [];
+  try { const r = await window.chervil.sitePerms.list(); items = (r && r.ok && r.items) || []; } catch { /* ignore */ }
+  if (!items.length) { panel.appendChild(credsEl('small', { class: 'field-note', text: 'No site permissions saved yet. Chervil will ask the first time a site wants your camera, mic, location, or notifications.' })); return; }
+
+  const clearAllBtn = credsEl('button', { class: 'lib-btn', text: 'Reset all', title: 'Forget every saved site permission', onclick: async () => {
+    if (!confirm('Forget all saved site permissions? Sites will ask again next time.')) return;
+    await window.chervil.sitePerms.clear();
+    toast('Site permissions reset.'); renderSitePermsPanel();
+  } });
+  panel.appendChild(credsEl('div', { class: 'creds-toolbar' }, [credsEl('span', { class: 'field-note', text: `${items.length} site${items.length === 1 ? '' : 's'}` }), clearAllBtn]));
+
+  for (const it of items) {
+    const rows = Object.keys(it.permissions).map((perm) => {
+      const decision = it.permissions[perm];
+      const pill = credsEl('span', { class: 'perm-decision ' + (decision === 'allow' ? 'allow' : 'deny'), text: decision === 'allow' ? 'Allowed' : 'Blocked' });
+      // Toggle allow/deny in place.
+      const toggle = credsEl('button', { class: 'lib-btn', text: decision === 'allow' ? 'Block' : 'Allow', onclick: async () => {
+        await window.chervil.sitePerms.set(it.origin, perm, decision === 'allow' ? 'deny' : 'allow');
+        renderSitePermsPanel();
+      } });
+      const forget = credsEl('button', { class: 'lib-btn', text: '✕', title: 'Forget (ask again next time)', onclick: async () => {
+        await window.chervil.sitePerms.clear(it.origin, perm); renderSitePermsPanel();
+      } });
+      return credsEl('div', { class: 'perm-line' }, [
+        credsEl('span', { class: 'perm-name', text: SITE_PERM_LABELS[perm] || perm }),
+        pill,
+        credsEl('div', { class: 'creds-actions' }, [toggle, forget]),
+      ]);
+    });
+    panel.appendChild(credsEl('div', { class: 'creds-row perm-row' }, [
+      credsEl('div', { class: 'creds-meta' }, [credsEl('div', { class: 'creds-origin', text: it.origin }), ...rows]),
+    ]));
   }
 }
 
@@ -8406,6 +8565,9 @@ if (els.wakeToggle) els.wakeToggle.addEventListener('change', async () => {
 if (els.wakeKeyword) els.wakeKeyword.addEventListener('change', () => {
   settings.wakeKeyword = els.wakeKeyword.value; scheduleSave();
   if (settings.wakeEnabled) restartWake();
+});
+if (els.wakeConfirmToggle) els.wakeConfirmToggle.addEventListener('change', () => {
+  settings.wakeConfirm = els.wakeConfirmToggle.checked; scheduleSave();
 });
 if (els.wakeThreshold) {
   let wtTimer = null;

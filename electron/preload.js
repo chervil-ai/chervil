@@ -181,6 +181,12 @@ contextBridge.exposeInMainWorld('chervil', {
   adblockStats: () => ipcRenderer.invoke('chervil:adblock-stats'),
   /** Clear cookies/cache/site-storage for embedded sites. */
   clearBrowsingData: () => ipcRenderer.invoke('chervil:clear-browsing-data'),
+  /** Per-site permissions (camera/mic, location, notifications): review & revoke. */
+  sitePerms: {
+    list: () => ipcRenderer.invoke('chervil:site-perms-list'),
+    set: (origin, permission, decision) => ipcRenderer.invoke('chervil:site-perms-set', { origin, permission, decision }),
+    clear: (origin, permission) => ipcRenderer.invoke('chervil:site-perms-clear', { origin, permission }),
+  },
   /** Default browser: current status, and make Chervil eligible (opens the OS picker). */
   defaultBrowserStatus: () => ipcRenderer.invoke('chervil:default-browser-status'),
   makeDefaultBrowser: () => ipcRenderer.invoke('chervil:make-default-browser'),

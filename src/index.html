@@ -63,6 +63,17 @@
 
       <div id="attach-chips" hidden></div>
       <div id="agent-chip" hidden></div>
+      <!-- Wake-word confirmation gate: a wake trigger fills this bar with what Sprig
+           heard and waits for an explicit Compose/Cancel (never auto-composes). -->
+      <div id="wake-confirm" hidden role="alertdialog" aria-label="Confirm voice request">
+        <span class="wake-confirm-icon" aria-hidden="true">🎙️</span>
+        <div class="wake-confirm-body">
+          <span class="wake-confirm-label">Sprig heard</span>
+          <span id="wake-confirm-text" class="wake-confirm-text"></span>
+        </div>
+        <button id="wake-confirm-go" type="button" class="wake-confirm-go">Compose ↵</button>
+        <button id="wake-confirm-cancel" type="button" class="wake-confirm-cancel" title="Cancel (Esc)">Cancel</button>
+      </div>
       <form id="composer" autocomplete="off">
         <textarea id="prompt" rows="1"
                   placeholder="Hey Sprig, ask…"
@@ -133,8 +144,9 @@
         <iframe id="page-frame" sandbox="allow-scripts allow-popups"
                 referrerpolicy="no-referrer"></iframe>
 
-        <!-- Real sites embed here -->
-        <webview id="web-view" allowpopups hidden></webview>
+        <!-- Real sites embed here. `plugins` enables Chromium's built-in PDF
+             viewer so PDFs render inline instead of downloading. -->
+        <webview id="web-view" allowpopups plugins hidden></webview>
 
         <!-- Find in page (Ctrl+F) -->
         <div id="find-bar" hidden>
@@ -319,6 +331,12 @@
           <span>Clear browsing data<br><small class="field-note">Cookies, cache &amp; site data for embedded sites, plus your Sites history and Downloads list. Won't touch bookmarks or saved logins.</small></span>
           <button id="clear-data-btn" class="lib-btn danger">Clear…</button>
         </div>
+      </section>
+
+      <section class="setting-group" data-sgroup="browser">
+        <h3>Site permissions</h3>
+        <p class="group-hint">Chervil asks per site before a page can use your <strong>camera &amp; microphone</strong>, <strong>location</strong>, or <strong>notifications</strong>, and remembers your answer. Review or revoke those choices here.</p>
+        <div id="site-perms-panel" class="site-perms-panel"><small class="field-note">No site permissions saved yet.</small></div>
       </section>
 
       <section class="setting-group" data-sgroup="general">
@@ -589,6 +607,10 @@
             <input id="wake-threshold" type="range" min="0.3" max="0.95" step="0.05" />
             <small class="field-note">How clear a match Chervil needs before it wakes. <strong>Higher = fewer accidental triggers — raise this if background noise or a TV keeps setting it off.</strong> Lower = easier to trigger.</small>
           </div>
+          <label class="toggle-row">
+            <input id="wake-confirm-toggle" type="checkbox" />
+            <span>Confirm before composing from a wake word — shows what Sprig heard and waits for your OK (auto-cancels after a few seconds). <strong>Recommended in a noisy room</strong> so a false trigger can’t compose a page on its own.</span>
+          </label>
         </div>
       </section>
 

@@ -6,6 +6,35 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.14.0] — 2026-07-07
+
+The settle-in release. After 0.13.0 made it easy to *switch* to Chervil, this one
+is about the everyday details that decide whether you *stay* — sites that can ask
+for your camera the way a real browser does, PDFs that just open, a wake word that
+won't run off and compose a page from the TV, and a password vault that finally
+feels like a manager. Quieter than a headline feature, but this is the stuff you'd
+miss in an hour.
+
+### Added
+- **Site permissions** (Settings → Browser). Embedded real sites now ask, per site,
+  before using your **camera & microphone**, **location**, or **notifications** —
+  and Chervil remembers your answer. Previously these were blanket-denied to every
+  site, which broke video calls and maps; now you can allow the sites you trust and
+  review or revoke any choice later.
+- **Built-in PDF viewer** — PDFs now open inline in the browser instead of silently
+  downloading (explicit "download" links still download).
+- **Wake-word confirmation gate** — when "Hey Sprig" is triggered, Chervil shows
+  what it heard and waits for you to confirm before composing (auto-cancels after a
+  few seconds). On by default; turn it off in Settings → Voice for a quiet room.
+  Stops a false trigger (e.g. TV audio) from composing a page on its own.
+- **Password & card manager upgrades** — search your saved logins, **copy** a
+  password or card number to the clipboard, and **edit** a saved login in place
+  (change the username or set a new password without deleting and re-adding).
+
+### Changed
+- The Library drawer picked up the remaining Fluent polish (rounded panel, elevated
+  tab bar, consistent thin scrollbar).
+
 ## [0.13.0] — 2026-07-06
 
 The switch release. Moving to a new browser usually means leaving your life
