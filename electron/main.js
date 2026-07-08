@@ -12,7 +12,7 @@ const { app, BrowserWindow, ipcMain, dialog, safeStorage, Notification, Tray, Me
 require('dotenv').config({ path: path.join(__dirname, '..', '.env'), quiet: true });
 
 const QRCode = require('qrcode');
-const { runAgent, runChat, runAgentTurn, runOrchestrator, runAppletAsk, runComposeApplet, runListModels, runAgentStep, runAgentPlan, runExtractSlides, runExtractDoc, runExtractSheets, runSynthesizeAgent } = require('../lib/agent');
+const { runAgent, runChat, runTranslate, runAgentTurn, runOrchestrator, runAppletAsk, runComposeApplet, runListModels, runAgentStep, runAgentPlan, runExtractSlides, runExtractDoc, runExtractSheets, runSynthesizeAgent } = require('../lib/agent');
 const { generateHeroImage } = require('../lib/images');
 const { getSkill } = require('../lib/skills');
 const { createVault } = require('../lib/vault');
@@ -60,8 +60,22 @@ function isAdHost(hostname) {
   for (const d of AD_HOSTS) if (h === d || h.endsWith('.' + d)) return true;
   return false;
 }
-function setupAdblock() {
-  session.defaultSession.webRequest.onBeforeRequest((details, cb) => {
+// Spell-check languages: Chromium's checker is on by default, but on Windows/
+// Linux (Hunspell) it needs a dictionary language that actually exists — pin it
+// to the OS locale, falling back to the base language (e.g. "de" for "de-AT").
+// macOS uses the native spellchecker and ignores language lists.
+function setupSpellcheck(ses = session.defaultSession) {
+  if (process.platform === 'darwin') return;
+  try {
+    const langs = ses.availableSpellCheckerLanguages || [];
+    const locale = app.getLocale() || 'en-US';
+    const pick = langs.includes(locale) ? locale : langs.find((l) => l === locale.split('-')[0] || l.startsWith(locale.split('-')[0] + '-'));
+    if (pick) ses.setSpellCheckerLanguages([pick]);
+  } catch { /* keep Chromium defaults */ }
+}
+
+function setupAdblock(ses = session.defaultSession) {
+  ses.webRequest.onBeforeRequest((details, cb) => {
     if (!adblockEnabled) return cb({});
     try {
       if (isAdHost(new URL(details.url).hostname)) { adblockCount++; return cb({ cancel: true }); }
@@ -301,6 +315,55 @@ function providerConfigFrom(payload) {
   return { ...cfg, provider, apiKey: savedKeys[provider] || '' };
 }
 
+// Permission model for embedded sites (and the app UI), applied per session:
+//  • Chervil's own UI (file://) always gets the mic — that's voice input.
+//  • Benign browsing permissions (fullscreen, pointer lock, …) stay allowed so
+//    embedded real sites work.
+//  • Sensitive permissions (camera/mic, location, notifications) on a REMOTE
+//    site are decided PER SITE: honor a saved choice, otherwise prompt once and
+//    remember it. Anything else is denied.
+function attachPermissionHandlers(ses, win) {
+  const fromApp = (url) => (url || '').startsWith('file://');
+  const BROWSING_OK = new Set(['fullscreen', 'pointerLock', 'keyboardLock', 'clipboard-sanitized-write']);
+  const managed = new Set(MANAGED_PERMISSIONS);
+  ses.setPermissionRequestHandler(async (wc, permission, callback, details) => {
+    if (permission === 'media' && fromApp(details && details.requestingUrl)) return callback(true);
+    if (BROWSING_OK.has(permission)) return callback(true);
+    if (managed.has(permission)) {
+      const origin = sitePerms().originKey(details && details.requestingUrl);
+      if (!origin) return callback(false);
+      const saved = sitePerms().get(origin, permission);
+      if (saved) return callback(saved === 'allow');
+      const allow = await promptSitePermission(win, origin, permission);
+      sitePerms().set(origin, permission, allow ? 'allow' : 'deny');
+      return callback(allow);
+    }
+    return callback(false);
+  });
+  ses.setPermissionCheckHandler((wc, permission, requestingOrigin) => {
+    if (permission === 'media' && fromApp(requestingOrigin)) return true;
+    if (BROWSING_OK.has(permission)) return true;
+    if (managed.has(permission)) {
+      const origin = sitePerms().originKey(requestingOrigin);
+      return origin ? sitePerms().get(origin, permission) === 'allow' : false;
+    }
+    return false;
+  });
+}
+
+// A guest webview's session may be a brand-new one (private tabs use per-tab
+// in-memory partitions). Give any session we haven't seen the same protections
+// as the default: downloads, permission gating, ad-block, spell-check.
+const _guestSessions = new WeakSet();
+function setupGuestSession(ses, win) {
+  attachDownloadHandler(ses); // self-guarded per session
+  if (ses === session.defaultSession || _guestSessions.has(ses)) return;
+  _guestSessions.add(ses);
+  attachPermissionHandlers(ses, win);
+  setupAdblock(ses);
+  setupSpellcheck(ses);
+}
+
 // Build a native right-click menu from the page's context-menu params. Used for
 // the app UI and for any embedded real sites (<webview>).
 function attachContextMenu(wc, opts = {}) {
@@ -536,7 +599,7 @@ function createWindow(opts = {}) {
   });
   win.webContents.on('did-attach-webview', (_e, wc) => {
     attachContextMenu(wc, { isMainUI: false });
-    attachDownloadHandler(wc.session);
+    setupGuestSession(wc.session, win);
     // Popups / new windows from embedded real sites (RFC 0011 A1). Without this,
     // window.open() and target="_blank" silently do nothing — which breaks
     // Google/Microsoft OAuth sign-in. Two cases:
@@ -580,33 +643,7 @@ function createWindow(opts = {}) {
   //    site are decided PER SITE: honor a saved choice, otherwise prompt once and
   //    remember it. This lets Chervil be someone's only browser without handing
   //    every page the camera. Anything else is denied.
-  const ses = win.webContents.session;
-  const fromApp = (url) => (url || '').startsWith('file://');
-  const BROWSING_OK = new Set(['fullscreen', 'pointerLock', 'keyboardLock', 'clipboard-sanitized-write']);
-  const managed = new Set(MANAGED_PERMISSIONS);
-  ses.setPermissionRequestHandler(async (wc, permission, callback, details) => {
-    if (permission === 'media' && fromApp(details && details.requestingUrl)) return callback(true);
-    if (BROWSING_OK.has(permission)) return callback(true);
-    if (managed.has(permission)) {
-      const origin = sitePerms().originKey(details && details.requestingUrl);
-      if (!origin) return callback(false);
-      const saved = sitePerms().get(origin, permission);
-      if (saved) return callback(saved === 'allow');
-      const allow = await promptSitePermission(win, origin, permission);
-      sitePerms().set(origin, permission, allow ? 'allow' : 'deny');
-      return callback(allow);
-    }
-    return callback(false);
-  });
-  ses.setPermissionCheckHandler((wc, permission, requestingOrigin) => {
-    if (permission === 'media' && fromApp(requestingOrigin)) return true;
-    if (BROWSING_OK.has(permission)) return true;
-    if (managed.has(permission)) {
-      const origin = sitePerms().originKey(requestingOrigin);
-      return origin ? sitePerms().get(origin, permission) === 'allow' : false;
-    }
-    return false;
-  });
+  attachPermissionHandlers(win.webContents.session, win);
 
   if (secondary) {
     // Ephemeral: no session persistence (see the primary gate in load/save-state),
@@ -1050,6 +1087,7 @@ app.whenReady().then(() => {
   }
   loadSavedKeys();
   setupAdblock(); // install the (opt-in) ad/tracker request filter on the default session
+  setupSpellcheck(); // pin the spell-check dictionary to the OS locale (renderer syncs the on/off toggle)
   applyFirstRunProvisioning(); // import installer wizard choices on first launch
   // Silent startup: when Windows launches Chervil at sign-in (registry Run key
   // adds "--hidden"; the tray toggle does the same), start minimized to the tray
@@ -1310,9 +1348,20 @@ ipcMain.handle('chervil:cards-for-fill', async (_e, payload) => {
 // --- Plain chat ("Just a chatbot" mode): a text reply, no page composed ----
 ipcMain.handle('chervil:chat', async (_event, payload) => {
   try {
-    const { query, history, profile, pageContext } = payload || {};
-    const res = await runChat({ query, history: history || [], profile: profile || null, pageContext: pageContext || null, config: providerConfigFrom(payload) });
+    const { query, history, profile, pageContext, pageMeta, tabsContext } = payload || {};
+    const res = await runChat({ query, history: history || [], profile: profile || null, pageContext: pageContext || null, pageMeta: pageMeta || null, tabsContext: tabsContext || null, config: providerConfigFrom(payload) });
     return { ok: true, text: res.text, sources: res.sources || [] };
+  } catch (err) {
+    return { ok: false, error: String(err && err.message ? err.message : err) };
+  }
+});
+
+// --- Inline page translation: translate one batch of text segments ---------
+ipcMain.handle('chervil:translate', async (_event, payload) => {
+  try {
+    const { segments, targetLang } = payload || {};
+    const out = await runTranslate({ segments: Array.isArray(segments) ? segments : [], targetLang: targetLang || 'English', config: providerConfigFrom(payload) });
+    return { ok: true, segments: out };
   } catch (err) {
     return { ok: false, error: String(err && err.message ? err.message : err) };
   }
@@ -1785,6 +1834,29 @@ ipcMain.handle('chervil:show-in-folder', async (_event, p) => {
 // Settings readout.
 ipcMain.handle('chervil:set-adblock', async (_event, enabled) => { adblockEnabled = !!enabled; return { ok: true }; });
 ipcMain.handle('chervil:adblock-stats', async () => ({ enabled: adblockEnabled, blocked: adblockCount }));
+
+// Region screenshot (✂ snip): capture a rect of this window's content (DIP
+// coordinates from the renderer's drag overlay). The webview path is handled
+// renderer-side via webview.capturePage; this covers composed pages + app UI.
+ipcMain.handle('chervil:capture-window', async (event, rect) => {
+  try {
+    const r = rect && rect.width >= 1 && rect.height >= 1
+      ? { x: Math.max(0, Math.round(rect.x)), y: Math.max(0, Math.round(rect.y)), width: Math.round(rect.width), height: Math.round(rect.height) }
+      : undefined;
+    const img = await event.sender.capturePage(r);
+    return { ok: true, dataUrl: img.toDataURL() };
+  } catch (err) {
+    return { ok: false, error: String(err && err.message ? err.message : err) };
+  }
+});
+
+// Spell-check: red squiggles + right-click suggestions in text fields (the
+// context menu already offers replaceMisspelling / Add to Dictionary — this is
+// the switch that turns the underlying checker on/off for the shared session).
+ipcMain.handle('chervil:set-spellcheck', async (_event, enabled) => {
+  try { session.defaultSession.setSpellCheckerEnabled(!!enabled); return { ok: true }; }
+  catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
+});
 
 // Clear browsing data: cookies, cache, and site storage for embedded sites. This
 // does NOT touch Chervil's own session/library (state file) or the password vault.

@@ -136,6 +136,29 @@ html, body {
 .tab.private { border-color: #6d5ab8; background: rgba(109, 90, 184, 0.12); }
 .tab.private.active { background: rgba(109, 90, 184, 0.22); }
 
+/* Tab groups: colored header chip + a color stripe on member tabs. */
+.tab-group-head {
+  display: flex;
+  align-items: center;
+  align-self: center;
+  flex: none;
+  padding: 3px 10px;
+  margin-bottom: 4px;
+  border-radius: 8px;
+  font-size: 11.5px;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+  user-select: none;
+  color: var(--group-color);
+  background: color-mix(in srgb, var(--group-color) 18%, transparent);
+  border: 1px solid color-mix(in srgb, var(--group-color) 45%, transparent);
+}
+.tab-group-head.collapsed { opacity: 0.85; }
+.tab.grouped { box-shadow: inset 0 2.5px 0 var(--group-color); }
+#app.vtabs .tab.grouped { box-shadow: inset 3px 0 0 var(--group-color); }
+#app.vtabs .tab-group-head { align-self: stretch; justify-content: flex-start; margin: 2px 4px; }
+
 #new-tab {
   align-self: center;
   width: 30px; height: 30px;
@@ -412,6 +435,28 @@ html, body {
 #bookmark-btn.on { color: var(--accent); }
 /* Favorite star: gold when the current site is a favorite. */
 #favorite-btn.on { color: #f4c542; }
+/* Ask-about-page: accent while armed (next message chats about the live site). */
+#ask-page-btn.on { color: var(--accent); }
+/* Translate: accent while the page is showing a translation. */
+#translate-btn.on { color: var(--accent); }
+
+/* First-run welcome (switcher onboarding). */
+.onboard-sheet { max-width: 540px; width: min(540px, calc(100vw - 48px)); }
+.onboard-step { margin: 16px 0 0; text-align: left; }
+.onboard-step-title { font-weight: 600; font-size: 14px; margin-bottom: 2px; }
+.onboard-step-desc { font-size: 12.5px; opacity: 0.75; margin-bottom: 8px; line-height: 1.45; }
+.onboard-step-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.onboard-foot { margin-top: 20px; }
+.onboard-tip { font-size: 12.5px; opacity: 0.75; margin-bottom: 12px; text-align: left; line-height: 1.45; }
+
+/* Region screenshot (✂ snip): drag overlay + selection box. */
+.snip-overlay { position: fixed; inset: 0; z-index: 5000; cursor: crosshair; background: rgba(0, 0, 0, 0.10); }
+.snip-box { position: absolute; border: 1.5px dashed var(--accent); background: rgba(93, 176, 130, 0.12); pointer-events: none; }
+.snip-hint {
+  position: absolute; top: 14px; left: 50%; transform: translateX(-50%);
+  background: var(--panel, #232323); color: var(--text, #eee);
+  padding: 6px 12px; border-radius: 8px; font-size: 12.5px; opacity: 0.92; pointer-events: none;
+}
 
 /* Composer icon button (attach) */
 .composer-icon {
@@ -864,14 +909,17 @@ html, body {
   background: #fff;
 }
 
-#page-frame, #web-view {
+/* The pool container contributes no box of its own — each tab's webview lays
+   out exactly like the old single #web-view did. */
+#web-views { display: contents; }
+#page-frame, #web-views webview {
   position: absolute;
   inset: 0;
   width: 100%;
   height: 100%;
   border: 0;
 }
-#web-view[hidden], #page-frame[hidden] { display: none; }
+#web-views webview[hidden], #page-frame[hidden] { display: none; }
 
 /* ---------- Remix bar + Audio player (float over the page) ---------- */
 #remix-bar {

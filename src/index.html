@@ -30,6 +30,7 @@
       <button data-act="new-private">New private tab</button>
       <button data-act="new-window">New window</button>
       <button data-act="pin">Pin tab</button>
+      <button data-act="group">Add to group…</button>
       <button data-act="close">Close tab</button>
       <button data-act="others">Close other tabs</button>
       <button data-act="right">Close tabs to the right</button>
@@ -119,6 +120,11 @@
           <button id="autofill-card-btn" class="omni-btn" title="Fill a saved payment card" hidden>💳</button>
           <button id="bookmark-btn" class="omni-btn" title="Save this page" disabled><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><path d="M6 3h12a1 1 0 0 1 1 1v17l-7-4.5L5 21V4a1 1 0 0 1 1-1z"/></svg></button>
           <button id="favorite-btn" class="omni-btn" title="Add to Favorites (websites only)" disabled>☆</button>
+          <button id="ask-page-btn" class="omni-btn" title="Ask Sprig about this page" disabled>💬</button>
+          <button id="translate-btn" class="omni-btn" title="Translate this page" disabled>🌐</button>
+          <button id="read-aloud-btn" class="omni-btn" title="Read this page aloud (select text to read just that)" disabled>🔊</button>
+          <button id="snip-btn" class="omni-btn" title="Snip a screenshot — ask Sprig, copy, or save">✂</button>
+          <button id="send-phone-btn" class="omni-btn" title="Send this page to your phone (QR)" disabled>📱</button>
           <button id="reader-btn" class="omni-btn" title="Reader view — declutter this page" disabled>📖</button>
           <button id="pip-btn" class="omni-btn" title="Picture-in-picture (pop out the video)" disabled>📺</button>
           <button id="save-btn" class="omni-btn text" title="Save this page to disk" disabled>⤓ <span class="lbl">Save</span></button>
@@ -144,9 +150,11 @@
         <iframe id="page-frame" sandbox="allow-scripts allow-popups"
                 referrerpolicy="no-referrer"></iframe>
 
-        <!-- Real sites embed here. `plugins` enables Chromium's built-in PDF
-             viewer so PDFs render inline instead of downloading. -->
-        <webview id="web-view" allowpopups plugins hidden></webview>
+        <!-- Real sites embed here — one <webview> per live tab (created on first
+             navigation), so background tabs keep running: audio continues and
+             switching back is instant. `plugins` (set per webview) enables
+             Chromium's built-in PDF viewer so PDFs render inline. -->
+        <div id="web-views"></div>
 
         <!-- Find in page (Ctrl+F) -->
         <div id="find-bar" hidden>
@@ -327,6 +335,10 @@
           <input type="checkbox" id="adblock-toggle" />
           <span>Block ads &amp; trackers on embedded sites <small id="adblock-stat"></small></span>
         </label>
+        <label class="toggle-row">
+          <input type="checkbox" id="spellcheck-toggle" checked />
+          <span>Spell-check in text fields <small>— right-click a squiggled word for suggestions</small></span>
+        </label>
         <div class="opt-row">
           <span>Clear browsing data<br><small class="field-note">Cookies, cache &amp; site data for embedded sites, plus your Sites history and Downloads list. Won't touch bookmarks or saved logins.</small></span>
           <button id="clear-data-btn" class="lib-btn danger">Clear…</button>
@@ -372,6 +384,10 @@
         <div class="opt-row">
           <span>Address &amp; contact<br><small id="import-address-status" class="field-note">Fill your autofill identity from a saved browser address (name, email, phone, address).</small></span>
           <button id="import-address-btn" class="lib-btn">Import address…</button>
+        </div>
+        <div class="opt-row">
+          <span>Welcome setup<br><small class="field-note">The first-run walkthrough: import, search engine, default browser.</small></span>
+          <button id="rerun-onboarding-btn" class="lib-btn">Open…</button>
         </div>
       </section>
 

@@ -6,6 +6,57 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.15.0] — 2026-07-08
+
+The big one: a real multi-tab engine, and Sprig on every page. Until today,
+only the tab you were looking at was actually *running* — switch away and your
+video stopped, your page state vanished, everything reloaded on return. Now
+every tab is alive, private tabs are genuinely private, and tabs organize into
+colored groups. On top of that, Sprig learned to work with the page you're
+*on*: ask about it, translate it, have it read aloud, snip it, compare it with
+your other tabs.
+
+### Added — Sprig on every page
+- **Ask about this page (💬)** — chat with Sprig about the live site you're
+  viewing: "summarize this", "what does it say about X". Works in chat mode
+  automatically, or click 💬 to route a single question there without leaving
+  normal mode. If you've selected text on the page, Sprig knows that's what
+  "this" refers to.
+- **Translate this page (🌐)** — translate any live site in place (layout,
+  links, and images stay put), to any language, with one-click "Show original".
+- **Read aloud (🔊)** — Sprig narrates the article on a live site (or a
+  composed page). Select a passage to hear just that part; click again to stop.
+- **Compare your open tabs** — ask in chat: "compare my open tabs", "which tab
+  mentions…". Sprig reads your other tabs' actual content, not just titles.
+- **Snip (✂)** — drag-select any region of the screen and hand it straight to
+  Sprig ("what's this chart?"), copy it, or save it to Downloads.
+
+### Added — a browser you can organize
+- **Tab groups** — name them, color them, collapse them. Right-click a tab →
+  "Add to group…"; groups survive restarts.
+- **Tab search** — start typing in the address bar and your open tabs appear
+  first as "Switch to tab", so you stop re-opening pages you already have.
+- **Send this page to your phone (📱)** — a QR code your phone camera opens.
+- **Per-site zoom memory** — the site you always bump to 125% stays at 125%.
+- **Spell-check** — red squiggles + right-click suggestions in every text
+  field, tuned to your system language (Settings → Browser to turn off).
+- **Welcome setup** — a first-run walkthrough for switchers: import your
+  bookmarks/history/address, pick a search engine, make Chervil your default.
+  Re-run it anytime from Settings → Browser.
+
+### Changed — the engine under the tabs
+- **Every tab is alive now.** Each live-site tab runs in its own view instead
+  of sharing one: background tabs keep playing (music keeps going — the tab
+  shows 🔊, click it to mute without switching), tab switching is instant, and
+  scroll position + page state survive. The most recent handful of background
+  sites stay warm; older ones simply reload when you return.
+- **Private tabs are now truly private** — each gets its own isolated,
+  in-memory session: separate cookies and storage that vanish when the tab
+  closes. Sites in a private tab can't see your logged-in sessions (previously
+  "private" only meant "not recorded"). Private sessions keep the same
+  protections as normal ones: per-site permission prompts, ad-blocking, and
+  safe downloads.
+
 ## [0.14.0] — 2026-07-07
 
 The settle-in release. After 0.13.0 made it easy to *switch* to Chervil, this one

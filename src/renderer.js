@@ -31,7 +31,11 @@ const els = {
   pageTitle: document.getElementById('page-title'),
   badge: document.getElementById('mode-badge'),
   frame: document.getElementById('page-frame'),
-  webview: document.getElementById('web-view'),
+  // The ACTIVE tab's webview (or null if it never navigated). A getter so the
+  // dozens of "the site showing right now" call sites survived the move from a
+  // single shared <webview> to one per live tab.
+  get webview() { return webviews.get(activeId) || null; },
+  webviewsBox: document.getElementById('web-views'),
   overlay: document.getElementById('overlay'),
   remixBar: document.getElementById('remix-bar'),
   remixMin: document.getElementById('remix-min'),
@@ -189,6 +193,7 @@ const els = {
   importAddressStatus: document.getElementById('import-address-status'),
   adblockToggle: document.getElementById('adblock-toggle'),
   adblockStat: document.getElementById('adblock-stat'),
+  spellcheckToggle: document.getElementById('spellcheck-toggle'),
   clearDataBtn: document.getElementById('clear-data-btn'),
   menuBarToggle: document.getElementById('menu-bar-toggle'),
   zoomControls: document.getElementById('zoom-controls'),
@@ -197,6 +202,11 @@ const els = {
   zoomOut: document.getElementById('zoom-out'),
   printBtn: document.getElementById('print-btn'),
   readerBtn: document.getElementById('reader-btn'),
+  askPageBtn: document.getElementById('ask-page-btn'),
+  translateBtn: document.getElementById('translate-btn'),
+  readAloudBtn: document.getElementById('read-aloud-btn'),
+  snipBtn: document.getElementById('snip-btn'),
+  sendPhoneBtn: document.getElementById('send-phone-btn'),
   pipBtn: document.getElementById('pip-btn'),
   bookmarkBtn: document.getElementById('bookmark-btn'),
   favoriteBtn: document.getElementById('favorite-btn'),
@@ -235,8 +245,87 @@ const els = {
 //   entry = { kind:'page'|'navigate', html?, title, url?, query, sources? }
 let tabs = [];
 let activeId = null;
+let tabGroups = []; // [{ id, name, color, collapsed }] — tabs carry a groupId; persisted with the session
 let closedTabs = []; // recently-closed tab snapshots for Ctrl+Shift+T (in-memory)
 const MAX_CLOSED_TABS = 12;
+
+// ---- Per-tab webview pool ----
+// Each live-site tab owns its own <webview>, created on its first navigation and
+// kept until the tab closes (or the LRU cap evicts it). Background tabs keep
+// running — audio continues, switching back is instant — and private tabs get
+// REAL isolation via a per-tab in-memory partition (cookies/storage never touch
+// disk and vanish with the tab).
+const webviews = new Map();            // tabId → <webview>
+const webviewAudibleTabs = new Set();  // tabIds whose site is currently making sound
+const MAX_LIVE_WEBVIEWS = 8;           // background sites kept alive; LRU beyond this reloads on revisit
+
+function ensureWebview(tab) {
+  let wv = webviews.get(tab.id);
+  if (wv) return wv;
+  wv = document.createElement('webview');
+  wv.setAttribute('allowpopups', '');
+  wv.setAttribute('plugins', ''); // inline PDF viewer
+  // True private browsing: an unprefixed partition is an in-memory session.
+  if (tab.private) wv.setAttribute('partition', `private-${tab.id}`);
+  wv.hidden = true; // revealed by renderSite
+  attachWebviewEvents(wv, tab.id);
+  els.webviewsBox.appendChild(wv);
+  webviews.set(tab.id, wv);
+  return wv;
+}
+
+function destroyWebview(tabId) {
+  const wv = webviews.get(tabId);
+  if (!wv) return;
+  webviews.delete(tabId);
+  webviewAudibleTabs.delete(tabId);
+  try { wv.remove(); } catch { /* already gone */ }
+}
+
+// Bump a webview's recency and evict the least-recently-shown background one
+// past the cap. Never evicts the active tab or anything playing sound; evicted
+// tabs simply reload when revisited (the pre-pool behavior for every tab).
+function touchWebview(tabId) {
+  const wv = webviews.get(tabId);
+  if (wv) wv.__lastShown = Date.now();
+  if (webviews.size <= MAX_LIVE_WEBVIEWS) return;
+  let oldest = null;
+  for (const [tid, w] of webviews) {
+    if (tid === activeId || webviewAudibleTabs.has(tid)) continue;
+    if (!oldest || (w.__lastShown || 0) < (webviews.get(oldest).__lastShown || 0)) oldest = tid;
+  }
+  if (oldest) destroyWebview(oldest);
+}
+
+// Per-webview events, with the owning tab bound in the closure — a background
+// site that redirects must update ITS tab, never whichever tab is active.
+function attachWebviewEvents(wv, tabId) {
+  const tabOf = () => tabs.find((t) => t.id === tabId) || null;
+  wv.addEventListener('did-navigate', (e) => onWebviewNavigated(tabId, e.url));
+  wv.addEventListener('did-navigate-in-page', (e) => { if (e.isMainFrame) onWebviewNavigated(tabId, e.url); });
+  // Chromium resets zoom on each navigation — re-apply this tab's level + mute.
+  wv.addEventListener('dom-ready', () => {
+    const t = tabOf();
+    try { wv.setZoomFactor(zoomForTab(t)); } catch { /* not ready */ }
+    try { wv.setAudioMuted(!!(t && t.muted)); } catch { /* not ready */ }
+  });
+  // Audio badge: any tab (active or background) shows 🔊 while its site plays.
+  wv.addEventListener('media-started-playing', () => {
+    try { if (wv.isCurrentlyAudible && !wv.isCurrentlyAudible()) return; } catch { /* assume audible */ }
+    webviewAudibleTabs.add(tabId);
+    renderTabs();
+  });
+  wv.addEventListener('media-paused', () => { webviewAudibleTabs.delete(tabId); renderTabs(); });
+  wv.addEventListener('found-in-page', (e) => {
+    if (tabId !== activeId) return;
+    const r = (e && e.result) || {};
+    if (typeof r.matches === 'number') els.findCount.textContent = r.matches ? `${r.activeMatchOrdinal || 1}/${r.matches}` : 'No matches';
+  });
+  // Login-capture messages from the webview preload (RFC 0008 8.3).
+  wv.addEventListener('ipc-message', (e) => {
+    if (e.channel === 'chervil:login-submit') onCapturedLogin(e.args && e.args[0]);
+  });
+}
 
 // Global, persisted settings (non-secret). The API key is handled separately by
 // the main process (encrypted), never stored here.
@@ -286,13 +375,17 @@ let settings = {
   spaceFilesMode: 'synthesize', // pinned Space files feed the model: 'synthesize' | 'always' | 'off'
   toolbar: {},               // which top-bar buttons to show — { key: false } hides one (missing = shown)
   credsAutoLock: 'hide',     // password vault auto-lock: 'hide' | '5' | '15' | '30' (min idle) | 'never'
-  pageZoom: 1,               // viewport zoom for the page/site (Ctrl +/−/0), applied to the frame + webview
+  pageZoom: 1,               // default viewport zoom (Ctrl +/−/0) — composed pages, and sites with no remembered level
+  siteZoom: {},              // per-site zoom memory: { hostname: factor } — zooming on a live site remembers it for that site
   searchEngine: 'google',    // engine used by omnibox search escapes (g!/ddg!/b!/s!) — 'google' | 'duckduckgo' | 'bing'
   bookmarksBar: false,       // show the bookmarks strip under the omnibar (Ctrl+Shift+B)
   favoritesBar: false,       // show the favorites strip (★ sites) under the omnibar
   collapsedFolders: [],      // ["favorites:Name" | "bookmarks:Name"] folder groups the user collapsed in the Library
   adblock: false,            // block common ad/tracker hosts in embedded sites (main-process filter)
+  spellcheck: true,          // red squiggles + right-click suggestions in text fields (app + embedded sites)
+  translateLang: 'English',  // target language for 🌐 inline page translation (free text — any language)
   showMenuBar: false,        // always show the native menu bar (File/Edit/View); else Alt reveals it
+  onboarded: false,          // first-run welcome shown (fresh profiles) / suppressed (upgrades)
 };
 
 // Per-provider metadata for the Settings UI.
@@ -725,6 +818,8 @@ function closeTab(id) {
   recordClosedTab(tabs[idx]);
   tabs.splice(idx, 1);
   runState.delete(id);
+  destroyWebview(id); // tear down the tab's live site (private partitions vanish with it)
+  pruneEmptyGroups(); // a group dies with its last tab
   living = living.filter((r) => r.tabId !== id); // drop this tab's living pages
   if (tabs.length === 0) {
     newTab(true);
@@ -743,6 +838,11 @@ function switchTab(id) {
   if (id === activeId) return;
   if (previewTimer) { clearTimeout(previewTimer); previewTimer = null; }
   activeId = id;
+  { // switching into a collapsed group (omnibox tab-search, Ctrl+K) expands it
+    const t = tabs.find((x) => x.id === id);
+    const g = t && t.groupId ? tabGroups.find((x) => x.id === t.groupId) : null;
+    if (g && g.collapsed) g.collapsed = false;
+  }
   renderTabs();
   renderConversation();
   showActiveTabView();
@@ -776,7 +876,9 @@ function closeTabs(ids) {
     const idx = tabs.findIndex((t) => t.id === id);
     if (idx !== -1) { recordClosedTab(tabs[idx]); tabs.splice(idx, 1); }
     runState.delete(id);
+    destroyWebview(id); // tear down each closed tab's live site
   }
+  pruneEmptyGroups(); // groups die with their last tab
   living = living.filter((r) => !idSet.has(r.tabId));
   if (tabs.length === 0) {
     newTab(true);
@@ -933,6 +1035,7 @@ function onTabMenuClick(act) {
   else if (act === 'new-private') newTab(true, { private: true });
   else if (act === 'new-window') { if (window.chervil.newWindow) window.chervil.newWindow(); }
   else if (act === 'pin') toggleTabPin(id);
+  else if (act === 'group') openGroupPicker(id);
   else if (act === 'close') closeTab(id);
   else if (act === 'others') closeOtherTabs(id);
   else if (act === 'right') closeTabsToRight(id);
@@ -979,6 +1082,126 @@ function updateTabSelectBar() {
   els.tabSelectAll.textContent = (tabs.length && selectedTabIds.size === tabs.length) ? 'Select none' : 'Select all';
 }
 
+// ---- Tab groups ----
+// Chrome-style: named, colored, collapsible. Group members stay contiguous in
+// the strip (enforced after drags); assignment is via the tab context menu.
+const TAB_GROUP_COLORS = ['#5a9ce8', '#e8735a', '#5db082', '#f4c542', '#a06ee8', '#e86ea8'];
+
+function nextGroupColor() {
+  const used = new Set(tabGroups.map((g) => g.color));
+  return TAB_GROUP_COLORS.find((c) => !used.has(c)) || TAB_GROUP_COLORS[tabGroups.length % TAB_GROUP_COLORS.length];
+}
+
+function createTabGroup(name) {
+  const g = { id: uid(), name: (name || '').trim(), color: nextGroupColor(), collapsed: false };
+  tabGroups.push(g);
+  return g;
+}
+
+function pruneEmptyGroups() {
+  tabGroups = tabGroups.filter((g) => tabs.some((t) => t.groupId === g.id));
+}
+
+// Assign a tab to a group, parking it right after the group's current members
+// so groups stay contiguous. Passing a falsy groupId removes it from its group.
+function moveTabToGroup(tabId, groupId) {
+  const idx = tabs.findIndex((t) => t.id === tabId);
+  if (idx === -1) return;
+  const tab = tabs[idx];
+  if (!groupId) {
+    delete tab.groupId;
+  } else {
+    const hasMembers = tabs.some((t) => t.id !== tabId && t.groupId === groupId);
+    tab.groupId = groupId;
+    if (hasMembers) {
+      tabs.splice(idx, 1);
+      let insertAt = tabs.length;
+      for (let i = tabs.length - 1; i >= 0; i--) if (tabs[i].groupId === groupId) { insertAt = i + 1; break; }
+      tabs.splice(insertAt, 0, tab);
+    }
+  }
+  pruneEmptyGroups();
+  renderTabs();
+  scheduleSave();
+}
+
+// After a drag, pull each group's members back together (anchored where the
+// group first appears). Dragging a tab into a group's span doesn't adopt it —
+// grouping stays an explicit menu action.
+function normalizeGroups() {
+  const out = [];
+  const emitted = new Set();
+  for (const t of tabs) {
+    if (emitted.has(t.id)) continue;
+    if (t.groupId) {
+      for (const m of tabs) if (m.groupId === t.groupId && !emitted.has(m.id)) { out.push(m); emitted.add(m.id); }
+    } else {
+      out.push(t);
+      emitted.add(t.id);
+    }
+  }
+  tabs = out;
+}
+
+function toggleGroupCollapsed(groupId) {
+  const g = tabGroups.find((x) => x.id === groupId);
+  if (!g) return;
+  if (!g.collapsed) {
+    // Collapsing the active tab's group: hop to the nearest tab outside it.
+    const active = activeTab();
+    if (active && active.groupId === groupId) {
+      const outside = tabs.find((t) => t.groupId !== groupId);
+      if (outside) switchTab(outside.id);
+      else newTab(true);
+    }
+  }
+  g.collapsed = !g.collapsed;
+  renderTabs();
+  scheduleSave();
+}
+
+function openGroupMenu(groupId) {
+  const g = tabGroups.find((x) => x.id === groupId);
+  if (!g) return;
+  showActionSheet(g.name || 'Tab group', null, [
+    { label: 'Rename…', onClick: async () => {
+      const v = await showInputSheet({ title: 'Group name', placeholder: g.name || 'e.g. Work', okLabel: 'Rename' });
+      if (v && v.trim()) { g.name = v.trim(); renderTabs(); scheduleSave(); }
+    } },
+    { label: 'Change color', onClick: () => {
+      g.color = TAB_GROUP_COLORS[(TAB_GROUP_COLORS.indexOf(g.color) + 1) % TAB_GROUP_COLORS.length];
+      renderTabs();
+      scheduleSave();
+    } },
+    { label: 'Ungroup tabs', onClick: () => {
+      for (const t of tabs) if (t.groupId === groupId) delete t.groupId;
+      pruneEmptyGroups();
+      renderTabs();
+      scheduleSave();
+    } },
+    { label: 'Close group', onClick: () => {
+      closeTabs(tabs.filter((t) => t.groupId === groupId).map((t) => t.id));
+    } },
+  ]);
+}
+
+// The tab context menu's "Add to group…": existing groups, a new one, or out.
+function openGroupPicker(tabId) {
+  const tab = tabs.find((t) => t.id === tabId);
+  if (!tab) return;
+  const actions = tabGroups.map((g) => ({
+    label: `${tab.groupId === g.id ? '✓ ' : ''}${g.name || 'Group'}`,
+    onClick: () => moveTabToGroup(tabId, g.id),
+  }));
+  actions.push({ label: '+ New group…', primary: !tabGroups.length, onClick: async () => {
+    const v = await showInputSheet({ title: 'New tab group', placeholder: 'e.g. Work, Research', okLabel: 'Create' });
+    if (v == null || !v.trim()) return;
+    moveTabToGroup(tabId, createTabGroup(v).id);
+  } });
+  if (tab.groupId) actions.push({ label: 'Remove from group', onClick: () => moveTabToGroup(tabId, null) });
+  showActionSheet('Add to group', null, actions);
+}
+
 function tabLabel(tab) {
   if (tab.title && tab.title !== 'New Tab') return tab.title;
   const firstUser = tab.conversation.find((m) => m.role === 'user');
@@ -987,16 +1210,37 @@ function tabLabel(tab) {
 }
 
 // ---- Rendering: tab strip ----
+// A group's header renders before its first member; collapsed groups hide their
+// tabs (except the active one, which always stays reachable).
+function renderGroupHeader(g) {
+  const count = tabs.filter((t) => t.groupId === g.id).length;
+  const el = document.createElement('div');
+  el.className = 'tab-group-head' + (g.collapsed ? ' collapsed' : '');
+  el.style.setProperty('--group-color', g.color || TAB_GROUP_COLORS[0]);
+  el.textContent = g.collapsed ? `${g.name || 'Group'} (${count})` : (g.name || 'Group');
+  el.title = g.collapsed ? 'Click to expand' : 'Click to collapse — right-click for options';
+  el.addEventListener('click', () => toggleGroupCollapsed(g.id));
+  el.addEventListener('contextmenu', (e) => { e.preventDefault(); e.stopPropagation(); openGroupMenu(g.id); });
+  els.tabs.appendChild(el);
+}
+
 function renderTabs() {
   els.tabs.innerHTML = '';
+  let prevGroupId = null;
   for (const tab of tabs) {
+    const group = tab.groupId ? tabGroups.find((g) => g.id === tab.groupId) : null;
+    if (group && tab.groupId !== prevGroupId) renderGroupHeader(group);
+    prevGroupId = tab.groupId || null;
+    if (group && group.collapsed && tab.id !== activeId && !tabSelectMode) continue;
     const el = document.createElement('div');
     el.className = 'tab'
       + (tab.id === activeId ? ' active' : '')
       + (tab.pinned ? ' pinned' : '')
       + (tab.private ? ' private' : '')
+      + (group ? ' grouped' : '')
       + (tabSelectMode ? ' selecting' : '')
       + (selectedTabIds.has(tab.id) ? ' sel' : '');
+    if (group) el.style.setProperty('--group-color', group.color || TAB_GROUP_COLORS[0]);
     el.title = tabLabel(tab);
     el.dataset.tabId = tab.id;
     el.draggable = !tabSelectMode; // click-hold-drag to reorder (off in select mode)
@@ -1019,13 +1263,15 @@ function renderTabs() {
       const mask = document.createElement('span');
       mask.className = 'tab-private';
       mask.textContent = '🕶';
-      mask.title = 'Private tab — not saved to your history or library';
+      mask.title = 'Private tab — isolated cookies & storage (nothing saved to disk), and never in your history or library';
       el.appendChild(mask);
     }
 
     // Audio badge: on the active live-site tab when it's audible or muted. Click to
     // mute/unmute. (Background tabs are parked, so only the active site plays.)
-    if (!tabSelectMode && tab.id === activeId && (webviewAudible || tab.muted)) {
+    // Any tab — active or background — shows 🔊 while its site plays (background
+    // sites keep running now); click to mute that tab without switching to it.
+    if (!tabSelectMode && (webviewAudibleTabs.has(tab.id) || tab.muted)) {
       const spk = document.createElement('span');
       spk.className = 'tab-audio' + (tab.muted ? ' muted' : '');
       spk.textContent = tab.muted ? '🔇' : '🔊';
@@ -1161,14 +1407,13 @@ function onTabsDragOver(e) {
 // Read the DOM order back into the tabs array and persist it.
 function commitTabOrder() {
   const order = [...els.tabs.querySelectorAll('.tab')].map((el) => el.dataset.tabId);
-  if (order.length !== tabs.length) return;
+  if (order.length !== tabs.length) return; // e.g. a collapsed group hides tabs — skip reorder
   tabs.sort((a, b) => order.indexOf(a.id) - order.indexOf(b.id));
-  // Enforce the pinned-first invariant (stable within each group), then re-sync
-  // the DOM in case a drag crossed the pinned boundary.
-  const reordered = tabs.filter((t) => t.pinned).concat(tabs.filter((t) => !t.pinned));
-  const changed = reordered.some((t, i) => t !== tabs[i]);
-  tabs = reordered;
-  if (changed) renderTabs();
+  // Enforce the pinned-first invariant (stable within each group), then pull
+  // group members back together, then re-sync the DOM.
+  tabs = tabs.filter((t) => t.pinned).concat(tabs.filter((t) => !t.pinned));
+  normalizeGroups();
+  renderTabs();
   scheduleSave();
 }
 
@@ -1397,29 +1642,24 @@ function renderSuggestions() {
   }
 }
 
-// Park the shared <webview> on about:blank so a previously loaded site stops
-// running. Merely hiding the element or clearing the src attribute leaves the
-// prior page alive in its webContents, so a playing video (e.g. YouTube) keeps
-// decoding audio until the app quits. Navigating to about:blank tears it down.
-// Idempotent: setting the same src again is a no-op (no re-navigation).
-function parkWebview() {
-  if (!els.webview) return;
-  if ((els.webview.getAttribute('src') || '') !== 'about:blank') {
-    els.webview.setAttribute('src', 'about:blank');
-  }
-  els.webview.hidden = true;
+// Hide every tab's webview (a composed page or the welcome overlay is taking
+// the stage). Background sites deliberately stay ALIVE — audio keeps playing
+// (the tab shows a 🔊 badge; click it to mute) and switching back is instant.
+// Sites are only torn down when their tab closes or the LRU cap evicts them.
+function hideWebviews() {
+  for (const wv of webviews.values()) wv.hidden = true;
 }
 
 function showOverlay() {
   els.frame.hidden = false;
   els.frame.removeAttribute('srcdoc');
-  parkWebview();
+  hideWebviews();
   els.overlay.hidden = false;
   renderSuggestions();
 }
 
 function renderPageHtml(html, scrollY = 0) {
-  parkWebview();
+  hideWebviews();
   els.frame.hidden = false;
   els.overlay.hidden = true;
   // Append the Chervil runtime (link routing + applet bridge), plus an optional
@@ -1453,8 +1693,16 @@ function renderSite(url) {
   els.frame.hidden = true;
   els.frame.removeAttribute('srcdoc');
   els.overlay.hidden = true;
-  els.webview.hidden = false;
-  els.webview.setAttribute('src', url);
+  const tab = activeTab();
+  if (!tab) return;
+  const wv = ensureWebview(tab);
+  touchWebview(tab.id);
+  for (const [tid, w] of webviews) w.hidden = tid !== tab.id;
+  // Don't reload a site the webview is already on — tab switches land here with
+  // entry.url matching getURL() (onWebviewNavigated keeps them in sync).
+  let liveUrl = '';
+  try { liveUrl = wv.getURL() || ''; } catch { /* not attached yet */ }
+  if (liveUrl !== url && (wv.getAttribute('src') || '') !== url) wv.setAttribute('src', url);
 }
 
 // Lessons/quizzes store the HTML rendered at build time. When the renderer changes
@@ -1510,19 +1758,45 @@ function renderCurrentPage() {
   applyZoom();
   const onLiveSite = !!(entry && entry.kind === 'navigate');
   if (els.readerBtn) els.readerBtn.disabled = !onLiveSite; // reader = live sites only
+  if (els.askPageBtn) els.askPageBtn.disabled = !onLiveSite; // ask-about-page = live sites only
+  if (!onLiveSite && askPageArmed) setAskPageArmed(false); // disarm when leaving the site
+  if (els.translateBtn) {
+    els.translateBtn.disabled = !onLiveSite; // translate = live sites only
+    if (!onLiveSite && !translateRunning) els.translateBtn.classList.remove('on');
+  }
+  if (els.readAloudBtn) els.readAloudBtn.disabled = !entry; // read-aloud = any page or site
+  if (els.sendPhoneBtn) els.sendPhoneBtn.disabled = !onLiveSite; // send-to-phone = live sites (they have a URL)
   if (els.pipBtn) els.pipBtn.disabled = !onLiveSite;       // PiP = live-site video only
   if (onLiveSite) applyTabMute();
-  else webviewAudible = false;
 }
 
 // ---- Page zoom (Ctrl +/−/0) ----
 // One zoom level for whatever's showing — a composed page (iframe) or an embedded
 // site (webview). Discrete steps like a real browser. Persisted in settings.
+// Live sites remember their own level (settings.siteZoom, keyed by hostname, like
+// Chrome's per-origin zoom); settings.pageZoom is composed pages + the default.
 const ZOOM_STEPS = [0.5, 0.67, 0.75, 0.8, 0.9, 1, 1.1, 1.25, 1.5, 1.75, 2, 2.5, 3];
+
+// Hostname key for per-site zoom (www. collapsed so m.example ≠ example but
+// www.example === example — matches how people think of "this site").
+function zoomHostFor(entry) {
+  if (!entry || entry.kind !== 'navigate' || !entry.url) return null;
+  try { return new URL(entry.url).hostname.replace(/^www\./i, '') || null; } catch { return null; }
+}
+
+// The zoom that applies to a given tab's current entry (per-site memory wins).
+function zoomForTab(tab) {
+  const host = zoomHostFor(tab ? currentEntry(tab) : null);
+  if (host && settings.siteZoom && typeof settings.siteZoom[host] === 'number') return settings.siteZoom[host];
+  return settings.pageZoom || 1;
+}
+
+// The zoom that applies to what's showing right now.
+function currentZoom() { return zoomForTab(activeTab()); }
 
 // Push the current zoom to whichever view is visible and refresh the indicator.
 function applyZoom() {
-  const z = settings.pageZoom || 1;
+  const z = currentZoom();
   try { if (els.webview && !els.webview.hidden) els.webview.setZoomFactor(z); } catch { /* webview not ready */ }
   try {
     if (els.frame && !els.frame.hidden && els.frame.contentWindow) {
@@ -1535,7 +1809,17 @@ function applyZoom() {
 }
 
 function setZoom(z) {
-  settings.pageZoom = Math.min(3, Math.max(0.5, Math.round(z * 100) / 100));
+  const level = Math.min(3, Math.max(0.5, Math.round(z * 100) / 100));
+  const host = zoomHostFor(currentEntry(activeTab()));
+  if (host) {
+    // On a live site, remember the level for THAT site; matching the default
+    // again forgets it (so the site follows the default from then on).
+    if (!settings.siteZoom) settings.siteZoom = {};
+    if (level === (settings.pageZoom || 1)) delete settings.siteZoom[host];
+    else settings.siteZoom[host] = level;
+  } else {
+    settings.pageZoom = level;
+  }
   applyZoom();
   scheduleSave();
   // No toast — it lands bottom-right on top of the minimized remix handle. The
@@ -1544,7 +1828,7 @@ function setZoom(z) {
 
 // Step to the next/previous zoom level relative to the closest current step.
 function nudgeZoom(dir) {
-  const cur = settings.pageZoom || 1;
+  const cur = currentZoom();
   let nearest = 0;
   for (let i = 1; i < ZOOM_STEPS.length; i++) {
     if (Math.abs(ZOOM_STEPS[i] - cur) < Math.abs(ZOOM_STEPS[nearest] - cur)) nearest = i;
@@ -1640,6 +1924,268 @@ async function openReaderView() {
   scheduleSave();
 }
 
+// ---- "Ask about this page" (chat grounded in the live site) ----
+// A light text extraction for chat context: prefers the main content root, falls
+// back to the whole body, and carries the user's selection (likely what "this"
+// refers to). Cheaper than READER_EXTRACT_JS — chat needs text, not clean HTML.
+const PAGE_TEXT_EXTRACT_JS = `(function(){
+  try {
+    function txt(el){ return ((el&&el.innerText)||'').replace(/\\s+/g,' ').trim(); }
+    var root = document.querySelector('article') || document.querySelector('[role=main]') || document.querySelector('main');
+    var text = txt(root);
+    if (text.length < 200) text = txt(document.body);
+    var sel = ''; try { sel = String(window.getSelection() || '').replace(/\\s+/g,' ').trim(); } catch(e){}
+    return { ok:true, title: document.title || '', url: location.href, text: text.slice(0, 60000), selection: sel.slice(0, 4000) };
+  } catch(e){ return { ok:false }; }
+})()`;
+
+// Text + metadata of the live site showing in the webview, or null. Only valid
+// for the active tab (the single shared webview shows the active tab's site).
+async function extractLivePageContext(tab) {
+  const entry = currentEntry(tab);
+  if (!entry || entry.kind !== 'navigate' || tab.id !== activeId || !els.webview || els.webview.hidden) return null;
+  try {
+    const r = await els.webview.executeJavaScript(PAGE_TEXT_EXTRACT_JS, true);
+    if (!r || !r.ok || !r.text) return null;
+    return { text: r.text, meta: { kind: 'site', title: r.title || entry.title || '', url: r.url || entry.url || '', selection: r.selection || '' } };
+  } catch { return null; }
+}
+
+// One-shot "Ask about this page": arms the composer so the NEXT submit routes to
+// chat (with the live page as context) without flipping the sticky chat-mode
+// toggle — mirrors how forceChat works for the extension's "Chervil Chat".
+let askPageArmed = false;
+
+function setAskPageArmed(on) {
+  askPageArmed = !!on;
+  if (els.askPageBtn) {
+    els.askPageBtn.classList.toggle('on', askPageArmed);
+    els.askPageBtn.setAttribute('aria-pressed', String(askPageArmed));
+  }
+  updatePlaceholder();
+}
+
+function toggleAskPage() {
+  const entry = currentEntry(activeTab());
+  if (!entry || entry.kind !== 'navigate') { toast('Ask about a page works on a live website.'); return; }
+  setAskPageArmed(!askPageArmed);
+  if (askPageArmed) els.prompt.focus();
+}
+
+// ---- Inline page translation (🌐) ----
+// Sprig translates the live site in place: collect the page's visible text
+// nodes once (kept alive in the page as window.__chervilTranslate so later
+// calls can address them), send them to the model in bounded batches, and
+// write the translations back into the same nodes. "Show original" restores
+// the saved node values — no reload needed.
+const TRANSLATE_COLLECT_JS = `(function(){
+  try {
+    var body = document.body; if (!body) return { ok:false };
+    var walker = document.createTreeWalker(body, NodeFilter.SHOW_TEXT, { acceptNode: function(n){
+      var v = n.nodeValue; if (!v || v.trim().length < 2) return NodeFilter.FILTER_REJECT;
+      var p = n.parentElement; if (!p) return NodeFilter.FILTER_REJECT;
+      if (/^(SCRIPT|STYLE|NOSCRIPT|TEXTAREA|CODE|PRE|SVG)$/i.test(p.tagName)) return NodeFilter.FILTER_REJECT;
+      try { if (p.closest('[contenteditable="true"], input, select')) return NodeFilter.FILTER_REJECT; } catch(e){}
+      var cs; try { cs = getComputedStyle(p); } catch(e){ return NodeFilter.FILTER_REJECT; }
+      if (cs && (cs.display === 'none' || cs.visibility === 'hidden')) return NodeFilter.FILTER_REJECT;
+      return NodeFilter.FILTER_ACCEPT;
+    }});
+    var nodes = [], texts = [], total = 0, n;
+    while ((n = walker.nextNode())) {
+      nodes.push(n); texts.push(n.nodeValue); total += n.nodeValue.length;
+      if (nodes.length >= 800 || total > 120000) break; // bound huge pages
+    }
+    if (!nodes.length) return { ok:false };
+    window.__chervilTranslate = { nodes: nodes, orig: texts.slice(), translated: false };
+    return { ok:true, texts: texts };
+  } catch(e) { return { ok:false, error: String((e && e.message) || e) }; }
+})()`;
+
+const TRANSLATE_RESTORE_JS = `(function(){
+  try {
+    var st = window.__chervilTranslate;
+    if (!st || !st.nodes || !st.translated) return false;
+    for (var i = 0; i < st.nodes.length; i++) { try { st.nodes[i].nodeValue = st.orig[i]; } catch(e){} }
+    st.translated = false;
+    return true;
+  } catch(e) { return false; }
+})()`;
+
+// Write one translated batch back into the collected nodes, starting at index s.
+function translateApplyJs(startIndex, batchJson) {
+  return `(function(){
+    try {
+      var st = window.__chervilTranslate; if (!st || !st.nodes) return false;
+      var out = ${batchJson}, s = ${Number(startIndex) || 0};
+      for (var i = 0; i < out.length; i++) { var node = st.nodes[s + i]; if (node) try { node.nodeValue = out[i]; } catch(e){} }
+      st.translated = true;
+      return true;
+    } catch(e) { return false; }
+  })()`;
+}
+
+let translateRunning = false;
+
+async function translatePageTo(lang) {
+  const tab = activeTab();
+  const entry = currentEntry(tab);
+  if (!entry || entry.kind !== 'navigate' || !els.webview || els.webview.hidden) { toast('Translate works on a live website.'); return; }
+  if (translateRunning) { toast('Already translating this page…'); return; }
+  translateRunning = true;
+  if (els.translateBtn) els.translateBtn.classList.add('on');
+  try {
+    let col;
+    try { col = await els.webview.executeJavaScript(TRANSLATE_COLLECT_JS, true); } catch { col = null; }
+    if (!col || !col.ok || !Array.isArray(col.texts) || !col.texts.length) { toast('Couldn’t find translatable text on this page.'); return; }
+    // Batch by segment count AND character budget so each model call stays reliable.
+    const texts = col.texts;
+    const batches = [];
+    let cur = [], curChars = 0, curStart = 0;
+    for (let i = 0; i < texts.length; i++) {
+      cur.push(texts[i]); curChars += texts[i].length;
+      if (cur.length >= 80 || curChars >= 6000) { batches.push({ start: curStart, items: cur }); curStart = i + 1; cur = []; curChars = 0; }
+    }
+    if (cur.length) batches.push({ start: curStart, items: cur });
+    toast(`Translating to ${lang}…`);
+    let failed = 0;
+    for (let bi = 0; bi < batches.length; bi++) {
+      // Stop if the user navigated away — the collected nodes died with the page.
+      if (currentEntry(activeTab()) !== entry) { toast('Translation stopped — you left the page.'); return; }
+      const b = batches[bi];
+      try {
+        const resp = await window.chervil.translate({ segments: b.items, targetLang: lang, config: providerConfig() });
+        if (resp && resp.ok && Array.isArray(resp.segments) && resp.segments.length === b.items.length) {
+          await els.webview.executeJavaScript(translateApplyJs(b.start, JSON.stringify(resp.segments)), true);
+        } else failed++;
+      } catch { failed++; }
+      if (batches.length > 1 && els.translateBtn) els.translateBtn.title = `Translating… ${bi + 1}/${batches.length}`;
+    }
+    if (failed === batches.length) toast('Translation failed — check your provider key in Settings.');
+    else toast(failed ? `Translated to ${lang} (${failed} section${failed > 1 ? 's' : ''} skipped).` : `Translated to ${lang}. 🌐 → Show original to switch back.`);
+  } finally {
+    translateRunning = false;
+    if (els.translateBtn) els.translateBtn.title = 'Translate this page';
+  }
+}
+
+async function restoreTranslation() {
+  let ok = false;
+  try { ok = await els.webview.executeJavaScript(TRANSLATE_RESTORE_JS, true); } catch { ok = false; }
+  if (els.translateBtn) els.translateBtn.classList.remove('on');
+  toast(ok ? 'Original restored.' : 'Nothing to restore on this page.');
+}
+
+function openTranslateSheet() {
+  const entry = currentEntry(activeTab());
+  if (!entry || entry.kind !== 'navigate') { toast('Translate works on a live website.'); return; }
+  const lang = settings.translateLang || 'English';
+  showActionSheet('Translate this page', 'Sprig translates the page in place — layout and links stay put.', [
+    { label: `Translate to ${lang}`, primary: true, onClick: () => translatePageTo(lang) },
+    { label: 'Translate to another language…', onClick: async () => {
+      const v = await showInputSheet({ title: 'Translate to…', subtitle: 'Any language — e.g. Spanish, French, Japanese.', placeholder: lang, okLabel: 'Translate' });
+      const chosen = (v || '').trim();
+      if (!chosen) return;
+      settings.translateLang = chosen;
+      scheduleSave();
+      translatePageTo(chosen);
+    } },
+    { label: 'Show original', onClick: restoreTranslation },
+  ]);
+}
+
+// ---- Region screenshot (✂ snip → ask Sprig) ----
+// Drag a rect over anything on screen; the capture happens AFTER the overlay is
+// removed (so the dim/box never appears in the shot). Live-site rects fully
+// inside the webview capture via webview.capturePage (embedder captures of
+// guest content are unreliable); everything else captures via the main process.
+let snipActive = false;
+
+function startSnip() {
+  if (snipActive) return;
+  snipActive = true;
+  const ov = document.createElement('div');
+  ov.className = 'snip-overlay';
+  const box = document.createElement('div');
+  box.className = 'snip-box';
+  box.hidden = true;
+  ov.appendChild(box);
+  const hint = document.createElement('div');
+  hint.className = 'snip-hint';
+  hint.textContent = 'Drag to snip — Esc to cancel';
+  ov.appendChild(hint);
+  let sx = 0, sy = 0, dragging = false;
+  const done = () => { snipActive = false; ov.remove(); document.removeEventListener('keydown', onKey, true); };
+  const onKey = (e) => { if (e.key === 'Escape') { e.preventDefault(); done(); } };
+  document.addEventListener('keydown', onKey, true);
+  ov.addEventListener('mousedown', (e) => {
+    dragging = true; sx = e.clientX; sy = e.clientY;
+    Object.assign(box.style, { left: `${sx}px`, top: `${sy}px`, width: '0px', height: '0px' });
+    box.hidden = false;
+    hint.hidden = true;
+  });
+  ov.addEventListener('mousemove', (e) => {
+    if (!dragging) return;
+    Object.assign(box.style, {
+      left: `${Math.min(sx, e.clientX)}px`, top: `${Math.min(sy, e.clientY)}px`,
+      width: `${Math.abs(e.clientX - sx)}px`, height: `${Math.abs(e.clientY - sy)}px`,
+    });
+  });
+  ov.addEventListener('mouseup', (e) => {
+    if (!dragging) return;
+    const x = Math.min(sx, e.clientX), y = Math.min(sy, e.clientY);
+    const w = Math.abs(e.clientX - sx), h = Math.abs(e.clientY - sy);
+    done();
+    if (w >= 8 && h >= 8) captureSnip(x, y, w, h); // smaller = a stray click
+  });
+  document.body.appendChild(ov);
+}
+
+async function captureSnip(x, y, w, h) {
+  // Two frames so the overlay's removal has actually painted before we shoot.
+  await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+  let dataUrl = null;
+  try {
+    const wv = els.webview;
+    const entry = currentEntry(activeTab());
+    const wvRect = (entry && entry.kind === 'navigate' && wv && !wv.hidden) ? wv.getBoundingClientRect() : null;
+    if (wvRect && x >= wvRect.left && y >= wvRect.top && x + w <= wvRect.right && y + h <= wvRect.bottom) {
+      // Rect fully inside the live site → let the guest capture itself.
+      const img = await wv.capturePage({ x: Math.round(x - wvRect.left), y: Math.round(y - wvRect.top), width: Math.round(w), height: Math.round(h) });
+      dataUrl = img && img.toDataURL ? img.toDataURL() : null;
+    }
+    if (!dataUrl) {
+      const shot = await window.chervil.captureWindow({ x, y, width: w, height: h });
+      dataUrl = (shot && shot.ok && shot.dataUrl) || null;
+    }
+  } catch { dataUrl = null; }
+  if (!dataUrl) { toast('Couldn’t capture that region.'); return; }
+  const m = /^data:([^;]+);base64,(.*)$/.exec(dataUrl);
+  if (!m || !m[2]) { toast('Couldn’t capture that region.'); return; }
+  const now = new Date();
+  const name = `snip-${String(now.getHours()).padStart(2, '0')}${String(now.getMinutes()).padStart(2, '0')}${String(now.getSeconds()).padStart(2, '0')}.png`;
+  showActionSheet('Got your snip', 'What do you want to do with it?', [
+    { label: 'Ask Sprig about it', primary: true, onClick: () => {
+      if (pendingAttachments.length >= MAX_ATTACH) { toast(`Up to ${MAX_ATTACH} files at a time.`); return; }
+      pendingAttachments.push({ id: uid(), name, kind: 'image', data: m[2], mediaType: m[1] || 'image/png' });
+      renderAttachChips();
+      els.prompt.focus();
+      toast('Snip attached — ask away.');
+    } },
+    { label: 'Copy to clipboard', onClick: async () => {
+      try {
+        const blob = await (await fetch(dataUrl)).blob();
+        await navigator.clipboard.write([new ClipboardItem({ [blob.type || 'image/png']: blob })]);
+        toast('Snip copied.');
+      } catch { toast('Couldn’t copy the snip.'); }
+    } },
+    { label: 'Save to Downloads', onClick: () => {
+      const a = document.createElement('a');
+      a.href = dataUrl; a.download = name;
+      document.body.appendChild(a); a.click(); a.remove();
+    } },
+  ]);
+}
+
 // ---- Picture-in-picture (live-site video) ----
 async function togglePictureInPicture() {
   if (!els.webview || els.webview.hidden) { toast('Open a site with a video first.'); return; }
@@ -1655,16 +2201,17 @@ async function togglePictureInPicture() {
 }
 
 // ---- Per-tab audio: mute + audible badge ----
-let webviewAudible = false; // whether the active live site is currently making sound
-function applyTabMute() {
-  const tab = activeTab();
-  try { if (els.webview) els.webview.setAudioMuted(!!(tab && tab.muted)); } catch { /* not ready */ }
+// (Audible state lives in webviewAudibleTabs, per tab — see the webview pool.)
+function applyTabMute(tabId = activeId) {
+  const tab = tabs.find((t) => t.id === tabId);
+  const wv = webviews.get(tabId);
+  try { if (wv) wv.setAudioMuted(!!(tab && tab.muted)); } catch { /* not ready */ }
 }
 function toggleTabMute(id) {
   const tab = tabs.find((t) => t.id === id) || activeTab();
   if (!tab) return;
   tab.muted = !tab.muted;
-  if (tab.id === activeId) applyTabMute();
+  applyTabMute(tab.id); // works for background tabs too — their webviews are live
   renderTabs();
   scheduleSave();
 }
@@ -1981,6 +2528,23 @@ function playPageAudio() {
   const cur = currentEntry(tab);
   if (!cur || cur.kind !== 'page') return;
   startAudio(stripText(cur.html), cur.title);
+}
+
+// ---- Read this page aloud (🔊 in the omnibar) ----
+// The remix bar's Audio covers composed pages; this brings the same narration
+// to live websites. Clicking while narrating stops. If the user highlighted a
+// passage, read just that (natural "read me this part").
+async function readPageAloud() {
+  if (audioPlaying) { stopAudio(); return; }
+  const tab = activeTab();
+  const cur = currentEntry(tab);
+  if (!cur) { toast('Open a page first.'); return; }
+  if (cur.kind === 'page') { startAudio(stripText(cur.html), cur.title); return; }
+  let r = null;
+  try { r = await els.webview.executeJavaScript(PAGE_TEXT_EXTRACT_JS, true); } catch { r = null; }
+  if (!r || !r.ok || !r.text || r.text.length < 40) { toast('Couldn’t find readable text on this page.'); return; }
+  const sel = (r.selection || '').trim();
+  startAudio(sel || r.text, r.title || cur.title || 'this page');
 }
 
 // ---- Living pages (scheduled auto-refresh) ----
@@ -3083,8 +3647,12 @@ async function startAgent(task) {
 function updatePlaceholder() {
   const tab = activeTab();
   const cur = currentEntry(tab);
-  if (cur && cur.kind === 'navigate') els.prompt.placeholder = 'Hey Sprig, act here…';
-  else if (settings.chatMode) els.prompt.placeholder = 'Chat with Sprig…';
+  const onLiveSite = !!(cur && cur.kind === 'navigate');
+  // Chat wins over the live-site agent at submit time (see handleComposerSubmit),
+  // so the placeholder must reflect that same precedence.
+  if (onLiveSite && askPageArmed) els.prompt.placeholder = 'Ask about this page…';
+  else if (settings.chatMode) els.prompt.placeholder = onLiveSite ? 'Chat about this page, or anything…' : 'Chat with Sprig…';
+  else if (onLiveSite) els.prompt.placeholder = 'Hey Sprig, act here…';
   else els.prompt.placeholder = skillMode === 'learn' ? 'What do you want to learn?' : skillMode === 'quiz' ? 'Quiz me on…' : deepMode ? 'Hey Sprig, research…' : 'Hey Sprig, ask…';
 }
 
@@ -4686,6 +5254,18 @@ function buildOmniSuggestions(text) {
   const out = [];
   const seen = new Set();
   const add = (url, title) => { if (!url || seen.has(url)) return; seen.add(url); out.push({ type: 'url', url, title: title || url }); };
+  // Open tabs first — "Switch to tab" beats re-opening a page you already have.
+  for (const t of tabs) {
+    if (out.length >= 3) break;
+    if (t.id === activeId) continue;
+    const e = currentEntry(t);
+    const title = (e && e.title) || t.title || '';
+    const url = (e && e.kind === 'navigate' && e.url) || '';
+    if (`${title} ${url}`.toLowerCase().includes(q)) {
+      out.push({ type: 'tab', tabId: t.id, title: title || 'Untitled tab', url });
+      if (url) seen.add(url); // don't re-suggest the same page from history/bookmarks
+    }
+  }
   for (const b of bookmarks) { if (out.length >= 6) break; if (b.kind === 'site' && b.url && `${b.title || ''} ${b.url}`.toLowerCase().includes(q)) add(b.url, b.title); }
   for (const s of siteHistory) { if (out.length >= 6) break; if (s.url && `${s.title || ''} ${s.url}`.toLowerCase().includes(q)) add(s.url, s.title); }
   // Action rows when the text isn't already a bare URL or a search bang.
@@ -4707,7 +5287,8 @@ function moveOmniSel(d) {
 function pickOmniSuggestion(it) {
   closeOmniSuggest();
   els.pageTitle.blur();
-  if (it.type === 'url') openUrlInTab(it.url);
+  if (it.type === 'tab') switchTab(it.tabId); // switchTab repaints the omnibox for the target tab
+  else if (it.type === 'url') openUrlInTab(it.url);
   else if (it.type === 'search') openUrlInTab(searchUrlFor(settings.searchEngine || 'google', it.text));
   else handleComposerSubmit(it.text);
 }
@@ -4724,7 +5305,12 @@ function renderOmniSuggest() {
     row.className = 'omni-suggest-row';
     let label = '';
     let sub = '';
-    if (it.type === 'url') {
+    if (it.type === 'tab') {
+      const fi = it.url ? faviconImg(it.url, 'omni-sg-fav') : null;
+      if (fi) row.appendChild(fi);
+      else { const ic = document.createElement('span'); ic.className = 'omni-sg-icon'; ic.textContent = '⧉'; row.appendChild(ic); }
+      label = it.title; sub = it.url ? `Switch to tab · ${it.url}` : 'Switch to tab';
+    } else if (it.type === 'url') {
       const fi = faviconImg(it.url, 'omni-sg-fav'); if (fi) row.appendChild(fi);
       label = it.title; sub = it.url;
     } else {
@@ -4801,8 +5387,13 @@ function handleComposerSubmit(text, opts = {}) {
 
   // "Just a chatbot" mode: a plain conversational reply, no page composed.
   // forceChat routes a single turn to chat (e.g. the extension's "Chervil Chat")
-  // without flipping the sticky global toggle.
-  if (settings.chatMode || opts.forceChat) { chatSubmit(tab, query); return; }
+  // without flipping the sticky global toggle; the armed 💬 "Ask about this page"
+  // button does the same for one turn grounded in the live site.
+  if (settings.chatMode || opts.forceChat || askPageArmed) {
+    if (askPageArmed) setAskPageArmed(false);
+    chatSubmit(tab, query);
+    return;
+  }
 
   // On a live site, the composer drives the web agent instead of composing a page.
   const cur = currentEntry(tab);
@@ -5054,6 +5645,39 @@ async function maybeAddHeroImage(tab, entry, title, topic) {
   }
 }
 
+// Cross-tab context for chat ("compare my open tabs", "which tab has…").
+// Included only when the question sounds tab-related — it ships tab titles/URLs
+// (and content snippets) to the provider, so don't send it on every turn.
+// Background live-site tabs keep a running webview now, so their actual text is
+// extracted too; tabs whose webview was LRU-evicted fall back to title + URL
+// (search-capable providers can fetch those).
+const TABS_INTENT_RE = /\btabs?\b|\bhave open\b|\bopen (pages|sites|windows)\b|\b(these|those|my) (pages|sites|articles|products|listings)\b|\bcompare\b|\bacross (them|these|those|all)\b/i;
+
+async function tabsChatContext(query, activeTabRef) {
+  if (!TABS_INTENT_RE.test(String(query || ''))) return null;
+  const items = [];
+  for (const t of tabs) {
+    if (activeTabRef && t.id === activeTabRef.id) continue; // the active page is sent fully already
+    const e = currentEntry(t);
+    if (!e) continue;
+    if (e.kind === 'navigate') {
+      const item = { kind: 'site', title: e.title || t.title || '', url: e.url || '' };
+      const wv = webviews.get(t.id);
+      if (wv) {
+        try {
+          const r = await wv.executeJavaScript(PAGE_TEXT_EXTRACT_JS, true);
+          if (r && r.ok && r.text) item.text = r.text.slice(0, 1200);
+        } catch { /* still loading or evicted — title+URL is fine */ }
+      }
+      items.push(item);
+    } else if (e.kind === 'page') {
+      items.push({ kind: 'page', title: e.title || t.title || '', text: stripText(e.html).slice(0, 1200) });
+    }
+    if (items.length >= 12) break; // keep the prompt bounded
+  }
+  return items.length ? items : null;
+}
+
 // "Just a chatbot" mode: send a plain conversational turn and append Sprig's
 // text reply to the chat panel — no page composed. Reuses the tab's single-flight
 // run state so it can't collide with a composing request.
@@ -5079,10 +5703,20 @@ async function chatSubmit(tab, text) {
   const isActive = () => tab.id === activeId;
   if (isActive()) { setStatus(rs.statusText); setBadge('working', 'working'); setSendBusy(true); }
 
-  // If a Chervil-composed page is showing in this tab, send it as context so chat
-  // mode can answer questions about the page the user is looking at.
-  const composed = currentEntry(tab);
-  const pageContext = (composed && composed.kind === 'page') ? composed.html : null;
+  // Send what the user is looking at as context — a Chervil-composed page's HTML,
+  // or the extracted text of the live site in the webview — so chat can answer
+  // questions about "this page" without leaving the conversation.
+  const cur = currentEntry(tab);
+  const tabsContext = await tabsChatContext(query, tab);
+  let pageContext = null;
+  let pageMeta = null;
+  if (cur && cur.kind === 'page') {
+    pageContext = cur.html;
+    pageMeta = { kind: 'page', title: cur.title || '' };
+  } else if (cur && cur.kind === 'navigate') {
+    const live = await extractLivePageContext(tab);
+    if (live) { pageContext = live.text; pageMeta = live.meta; }
+  }
 
   try {
     const resp = await window.chervil.chat({
@@ -5090,6 +5724,8 @@ async function chatSubmit(tab, text) {
       history: sentHistory,
       profile: settings.profile || null,
       pageContext,
+      pageMeta,
+      tabsContext,
       config: providerConfig(),
     });
     rs.genId = null; rs.statusText = '';
@@ -5468,6 +6104,13 @@ function showActionSheet(title, subtitle, actions, onClose, extra) {
   overlay.appendChild(sheet);
   document.body.appendChild(overlay);
   document.addEventListener('keydown', onEsc);
+}
+
+// Send the current live site to the phone — scan the QR with the phone camera.
+function sendTabToPhone() {
+  const entry = currentEntry(activeTab());
+  if (!entry || entry.kind !== 'navigate' || !entry.url) { toast('Send to phone works on a live website.'); return; }
+  showQrModal('Scan to open on your phone', entry.url, entry.title || entry.url);
 }
 
 // "Send to phone" — show a QR the user scans with their phone camera.
@@ -6280,6 +6923,75 @@ async function importHistoryFromBrowser() {
 // ---- Import passwords from a CSV export → encrypted vault ----
 // The vault must be set up + unlocked first; the actual parse/save happens in the
 // main process, so plaintext passwords never come back here — we only get counts.
+// ---- First-run welcome (switcher onboarding) ----
+// Shown once on a fresh profile; re-runnable from Settings → Browser. Every step
+// reuses the real flows (import pickers, default-browser handoff), so this is
+// just a friendly front door — skipping it loses nothing.
+function showOnboarding() {
+  const overlay = document.createElement('div');
+  overlay.className = 'chervil-sheet-overlay';
+  const close = () => { overlay.remove(); document.removeEventListener('keydown', onEsc); };
+  const onEsc = (e) => { if (e.key === 'Escape') close(); };
+  document.addEventListener('keydown', onEsc);
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+
+  const sheet = document.createElement('div');
+  sheet.className = 'chervil-sheet onboard-sheet';
+  const h = document.createElement('div'); h.className = 'chervil-sheet-title'; h.textContent = '🌿 Welcome to Chervil';
+  const sub = document.createElement('div'); sub.className = 'chervil-sheet-sub';
+  sub.textContent = 'A few quick steps to make yourself at home. Everything here is optional — it all lives in Settings too.';
+  sheet.appendChild(h); sheet.appendChild(sub);
+
+  const step = (title, desc) => {
+    const row = document.createElement('div'); row.className = 'onboard-step';
+    const t = document.createElement('div'); t.className = 'onboard-step-title'; t.textContent = title; row.appendChild(t);
+    if (desc) { const d = document.createElement('div'); d.className = 'onboard-step-desc'; d.textContent = desc; row.appendChild(d); }
+    const acts = document.createElement('div'); acts.className = 'onboard-step-actions'; row.appendChild(acts);
+    sheet.appendChild(row);
+    return acts;
+  };
+  const btn = (label, fn) => {
+    const b = document.createElement('button'); b.className = 'lib-btn'; b.textContent = label;
+    b.addEventListener('click', fn);
+    return b;
+  };
+
+  const imp = step('1 · Bring your stuff', 'Import from Chrome, Edge, Brave, Vivaldi, or Opera. Bookmarks land in Favorites. Passwords import from a CSV in Settings → Security.');
+  imp.appendChild(btn('Bookmarks…', importFromBrowser));
+  imp.appendChild(btn('History…', importHistoryFromBrowser));
+  imp.appendChild(btn('Address…', importAddressFromBrowser));
+
+  const se = step('2 · Web-search engine', 'Sprig answers by default; bangs (g!, ddg!, b!) do a plain search with this engine.');
+  const sel = document.createElement('select');
+  for (const [v, label] of [['google', 'Google'], ['duckduckgo', 'DuckDuckGo'], ['bing', 'Bing']]) {
+    const o = document.createElement('option'); o.value = v; o.textContent = label; sel.appendChild(o);
+  }
+  sel.value = settings.searchEngine || 'google';
+  sel.addEventListener('change', () => {
+    settings.searchEngine = sel.value;
+    scheduleSave();
+    const s2 = document.getElementById('search-engine-select'); if (s2) s2.value = sel.value; // keep Settings in sync
+  });
+  se.appendChild(sel);
+
+  const def = step('3 · Make Chervil your default browser', 'Links from other apps open here. Windows asks you to confirm the switch.');
+  def.appendChild(btn('Make default…', makeDefaultBrowserFlow));
+
+  const foot = document.createElement('div'); foot.className = 'onboard-foot';
+  const tip = document.createElement('div'); tip.className = 'onboard-tip';
+  tip.textContent = 'Tip: on any website, try 💬 ask about the page, 🌐 translate, 🔊 read aloud, and ✂ snip — all in the toolbar.';
+  foot.appendChild(tip);
+  const go = document.createElement('button');
+  go.className = 'chervil-sheet-btn primary';
+  go.textContent = 'Get started';
+  go.addEventListener('click', close);
+  foot.appendChild(go);
+  sheet.appendChild(foot);
+
+  overlay.appendChild(sheet);
+  document.body.appendChild(overlay);
+}
+
 async function importPasswordsFromCsv() {
   if (!window.chervil.importPasswordsCsv) return;
   if (!(await ensureVaultUnlocked())) return; // prompts setup/unlock as needed
@@ -6441,6 +7153,7 @@ function applyBookmarksBar() {
 // + session count) when Settings opens.
 async function refreshPrivacyUI() {
   if (els.adblockToggle) els.adblockToggle.checked = !!settings.adblock;
+  if (els.spellcheckToggle) els.spellcheckToggle.checked = settings.spellcheck !== false;
   if (els.adblockStat && window.chervil.adblockStats) {
     try { const s = await window.chervil.adblockStats(); els.adblockStat.textContent = (s && s.enabled) ? `· ${s.blocked} blocked this session` : ''; }
     catch { /* ignore */ }
@@ -7418,6 +8131,11 @@ const TOOLBAR_BUTTONS = [
   { key: 'bookmark', id: 'bookmark-btn', label: 'Save page' },
   { key: 'favorite', id: 'favorite-btn', label: 'Favorite (★)' },
   { key: 'save', id: 'save-btn', label: 'Save' },
+  { key: 'askPage', id: 'ask-page-btn', label: 'Ask about this page (💬)' },
+  { key: 'translate', id: 'translate-btn', label: 'Translate page (🌐)' },
+  { key: 'readAloud', id: 'read-aloud-btn', label: 'Read aloud (🔊)' },
+  { key: 'snip', id: 'snip-btn', label: 'Snip screenshot (✂)' },
+  { key: 'sendPhone', id: 'send-phone-btn', label: 'Send to phone (📱)' },
   { key: 'reader', id: 'reader-btn', label: 'Reader view' },
   { key: 'pip', id: 'pip-btn', label: 'Picture-in-picture' },
   { key: 'zoom', id: 'zoom-controls', label: 'Zoom controls' },
@@ -7649,7 +8367,7 @@ function scheduleSave() {
     const persistActiveId = persistTabs.some((t) => t.id === activeId)
       ? activeId
       : (persistTabs[0] && persistTabs[0].id) || null;
-    window.chervil.saveState({ tabs: persistTabs, activeId: persistActiveId, settings, library, bookmarks, bookmarkFolders, bookmarkTombstones, favorites, favoriteFolders, favoriteTombstones, deletionTombstones, siteHistory, downloads, agentAudit, spaces, activeSpaceId, savedSpaces, activeSavedSpaceId, living, schedules, agents, activeAgentId, pipelines, pageStores })
+    window.chervil.saveState({ tabs: persistTabs, activeId: persistActiveId, tabGroups, settings, library, bookmarks, bookmarkFolders, bookmarkTombstones, favorites, favoriteFolders, favoriteTombstones, deletionTombstones, siteHistory, downloads, agentAudit, spaces, activeSpaceId, savedSpaces, activeSavedSpaceId, living, schedules, agents, activeAgentId, pipelines, pageStores })
       .then((r) => { if (r && r.mtimeMs) lastStateMtimeMs = r.mtimeMs; }) // our own write — keep baseline current
       .catch(() => {});
   }, 500);
@@ -7740,6 +8458,7 @@ function sanitizeTab(t) {
     pages,
     currentId,
     pinned: !!t.pinned,
+    ...(t.groupId ? { groupId: t.groupId } : {}), // tab-group membership survives restarts
   };
 }
 
@@ -7755,6 +8474,14 @@ async function init() {
   } else {
     newTab(false);
     activeId = tabs[0].id;
+  }
+  if (restored && Array.isArray(restored.tabGroups)) {
+    tabGroups = restored.tabGroups.filter((g) => g && g.id);
+    pruneEmptyGroups(); // drop groups whose tabs didn't survive (e.g. private-only)
+    // Never restore with the active tab trapped in a collapsed group.
+    const at = tabs.find((t) => t.id === activeId);
+    const ag = at && at.groupId ? tabGroups.find((g) => g.id === at.groupId) : null;
+    if (ag) ag.collapsed = false;
   }
 
   if (restored && restored.settings) {
@@ -7853,6 +8580,7 @@ async function init() {
   applyBookmarksBar(); // restore the bookmarks bar (if enabled) + its contents
   applyFavoritesBar(); // restore the favorites bar (if enabled) + its contents
   if (window.chervil.setAdblock) window.chervil.setAdblock(settings.adblock); // sync ad-block to main
+  if (window.chervil.setSpellcheck) window.chervil.setSpellcheck(settings.spellcheck !== false); // sync spell-check to main
   if (window.chervil.setMenuBarVisible) window.chervil.setMenuBarVisible(!!settings.showMenuBar); // this window's menu bar
   setChatMode(settings.chatMode); // reflect the persisted "Just a chatbot" toggle
   renderTabs();
@@ -7863,6 +8591,15 @@ async function init() {
 
   // Resume "Hey Sprig" listening if it was on last session.
   if (settings.wakeEnabled) startWake();
+
+  // First-run welcome: a fresh profile (no saved state) gets the switcher
+  // onboarding once. Existing profiles are marked done silently so an upgrade
+  // never nags. Re-run any time from Settings → Browser.
+  if (!settings.onboarded) {
+    settings.onboarded = true;
+    scheduleSave();
+    if (!restored) setTimeout(showOnboarding, 400);
+  }
 
   // Baseline for folder-sync conflict detection (RFC 0005, decision 3).
   refreshStateMtime();
@@ -8263,51 +9000,40 @@ if (els.findInput) {
 if (els.findNext) els.findNext.addEventListener('click', () => runFind(true));
 if (els.findPrev) els.findPrev.addEventListener('click', () => runFind(false));
 if (els.findClose) els.findClose.addEventListener('click', closeFind);
-if (els.webview) els.webview.addEventListener('found-in-page', (e) => {
-  const r = (e && e.result) || {};
-  if (typeof r.matches === 'number') els.findCount.textContent = r.matches ? `${r.activeMatchOrdinal || 1}/${r.matches}` : 'No matches';
-});
+// (found-in-page attaches per-webview in attachWebviewEvents — see the pool.)
 
-// Keep the omnibox, tab title, and back/forward in sync as the user browses
-// inside an embedded real site (the webview's own navigation).
-function onWebviewNavigated(url) {
-  const tab = activeTab();
+// Keep a tab's entry, title — and, when it's the active tab, the omnibox and
+// nav buttons — in sync as its site navigates. Fires for BACKGROUND tabs too
+// (their webviews stay alive now), so everything keys off the owning tab.
+function onWebviewNavigated(tabId, url) {
+  const tab = tabs.find((t) => t.id === tabId);
+  if (!tab) return;
   const e = currentEntry(tab);
-  if (!e || e.kind !== 'navigate') return;          // only while a live site is showing
+  if (!e || e.kind !== 'navigate') return;          // only while that tab is on a live site
   if (url && /^https?:\/\//i.test(url)) {
-    e.url = url;                                      // the entry now reflects where you are
+    e.url = url;                                      // the entry now reflects where that tab is
     tab.title = hostOf(url);
-    setOmnibox(url);
-    recordSiteVisit(url);
+    recordSiteVisit(url, null, tab);
+    if (tabId === activeId) setOmnibox(url);
     renderTabs();
     scheduleSave();
   }
-  updateNavButtons();
-  updatePwFillButton();
+  if (tabId === activeId) {
+    updateNavButtons();
+    updatePwFillButton();
+  }
 }
 
 // Log a visited real site into browsing history (newest-first, deduped, capped).
-function recordSiteVisit(url, title) {
+function recordSiteVisit(url, title, tab) {
   if (!url || !/^https?:\/\//i.test(url)) return;
-  { const at = activeTab(); if (at && at.private) return; } // private tabs leave no history
+  const t = tab || activeTab();
+  if (t && t.private) return; // private tabs leave no history
   if (siteHistory[0] && siteHistory[0].url === url) { siteHistory[0].at = Date.now(); return; }
   siteHistory.unshift({ id: uid(), url, title: title || hostOf(url), at: Date.now() });
   if (siteHistory.length > MAX_SITE_HISTORY) siteHistory.length = MAX_SITE_HISTORY;
 }
-if (els.webview) {
-  els.webview.addEventListener('did-navigate', (e) => onWebviewNavigated(e.url));
-  els.webview.addEventListener('did-navigate-in-page', (e) => { if (e.isMainFrame) onWebviewNavigated(e.url); });
-  // Chromium resets a webview's zoom on each navigation — re-apply the user's level
-  // and the tab's mute state.
-  els.webview.addEventListener('dom-ready', () => { applyZoom(); applyTabMute(); });
-  // Audio badge: reflect when the embedded site starts/stops making sound.
-  els.webview.addEventListener('media-started-playing', () => { if (els.webview.isCurrentlyAudible && els.webview.isCurrentlyAudible()) { webviewAudible = true; renderTabs(); } });
-  els.webview.addEventListener('media-paused', () => { webviewAudible = false; renderTabs(); });
-  // Login-capture messages from the webview preload (RFC 0008 8.3).
-  els.webview.addEventListener('ipc-message', (e) => {
-    if (e.channel === 'chervil:login-submit') onCapturedLogin(e.args && e.args[0]);
-  });
-}
+// (Webview events attach per-webview in attachWebviewEvents — see the pool.)
 
 els.deepToggle.addEventListener('click', () => setDeepMode(!deepMode));
 els.learnToggle.addEventListener('click', () => setSkillMode('learn'));
@@ -8661,7 +9387,8 @@ if (els.heroToggle) els.heroToggle.addEventListener('change', () => {
 }
 
 // Browsing & privacy controls (default browser, ad-block, clear data).
-if (els.makeDefaultBtn) els.makeDefaultBtn.addEventListener('click', async () => {
+// Shared by the Settings button and the first-run welcome.
+async function makeDefaultBrowserFlow() {
   let r; try { r = await window.chervil.makeDefaultBrowser(); } catch { r = null; }
   if (r && r.dev) {
     // In `electron .` dev, execPath is electron.exe so we can't register a real
@@ -8675,8 +9402,13 @@ if (els.makeDefaultBtn) els.makeDefaultBtn.addEventListener('click', async () =>
     toast('In the window that opened, pick Chervil as your web browser to finish.');
   }
   refreshPrivacyUI();
-});
+}
+if (els.makeDefaultBtn) els.makeDefaultBtn.addEventListener('click', makeDefaultBrowserFlow);
 if (els.importBookmarksBtn) els.importBookmarksBtn.addEventListener('click', importFromBrowser);
+{
+  const rb = document.getElementById('rerun-onboarding-btn');
+  if (rb) rb.addEventListener('click', () => { closeSettings(); showOnboarding(); });
+}
 if (els.importHistoryBtn) els.importHistoryBtn.addEventListener('click', importHistoryFromBrowser);
 if (els.importPwBtn) els.importPwBtn.addEventListener('click', importPasswordsFromCsv);
 if (els.importAddressBtn) els.importAddressBtn.addEventListener('click', importAddressFromBrowser);
@@ -8690,6 +9422,11 @@ if (els.adblockToggle) els.adblockToggle.addEventListener('change', async () => 
   try { await window.chervil.setAdblock(settings.adblock); } catch { /* ignore */ }
   scheduleSave();
   refreshPrivacyUI();
+});
+if (els.spellcheckToggle) els.spellcheckToggle.addEventListener('change', async () => {
+  settings.spellcheck = els.spellcheckToggle.checked;
+  try { await window.chervil.setSpellcheck(settings.spellcheck); } catch { /* ignore */ }
+  scheduleSave();
 });
 if (els.clearDataBtn) els.clearDataBtn.addEventListener('click', async () => {
   if (!confirm('Clear cookies, cache, and site data for embedded sites — plus your Sites history and Downloads list? Bookmarks and saved logins are kept.')) return;
@@ -9027,6 +9764,11 @@ if (els.zoomIn) els.zoomIn.addEventListener('click', () => nudgeZoom(1));
 if (els.zoomOut) els.zoomOut.addEventListener('click', () => nudgeZoom(-1));
 if (els.printBtn) els.printBtn.addEventListener('click', () => printCurrentView());
 if (els.readerBtn) els.readerBtn.addEventListener('click', () => openReaderView());
+if (els.askPageBtn) els.askPageBtn.addEventListener('click', toggleAskPage);
+if (els.translateBtn) els.translateBtn.addEventListener('click', openTranslateSheet);
+if (els.readAloudBtn) els.readAloudBtn.addEventListener('click', readPageAloud);
+if (els.snipBtn) els.snipBtn.addEventListener('click', startSnip);
+if (els.sendPhoneBtn) els.sendPhoneBtn.addEventListener('click', sendTabToPhone);
 if (els.pipBtn) els.pipBtn.addEventListener('click', () => togglePictureInPicture());
 
 // Show the running app version in Settings (from the preload bridge), and wire

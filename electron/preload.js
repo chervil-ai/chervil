@@ -54,6 +54,9 @@ contextBridge.exposeInMainWorld('chervil', {
   /** Plain chat ("Just a chatbot" mode): a conversational text reply, no page. */
   chat: (payload) => ipcRenderer.invoke('chervil:chat', payload),
 
+  /** Inline page translation: translate a batch of text segments in place. */
+  translate: (payload) => ipcRenderer.invoke('chervil:translate', payload),
+
   /** Generate an AI hero image (data: URL) for a composed page — opt-in, BYO key. */
   generateHero: (payload) => ipcRenderer.invoke('chervil:generate-hero', payload),
   /** Whether an image-capable key (OpenAI/Gemini) is configured. */
@@ -179,6 +182,10 @@ contextBridge.exposeInMainWorld('chervil', {
   /** Ad/tracker blocking: enable/disable + session stats. */
   setAdblock: (enabled) => ipcRenderer.invoke('chervil:set-adblock', enabled),
   adblockStats: () => ipcRenderer.invoke('chervil:adblock-stats'),
+  /** Spell-check in text fields (app + embedded sites). */
+  setSpellcheck: (enabled) => ipcRenderer.invoke('chervil:set-spellcheck', enabled),
+  /** Region screenshot: capture a rect of this window (renderer crops/attaches). */
+  captureWindow: (rect) => ipcRenderer.invoke('chervil:capture-window', rect),
   /** Clear cookies/cache/site-storage for embedded sites. */
   clearBrowsingData: () => ipcRenderer.invoke('chervil:clear-browsing-data'),
   /** Per-site permissions (camera/mic, location, notifications): review & revoke. */
