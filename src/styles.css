@@ -177,6 +177,28 @@ html, body {
 .tab.dragging { opacity: 0.55; cursor: grabbing; }
 .tab { transition: background 0.12s ease; }
 
+/* ---------- Hidden tab strip (Ctrl+Shift+\) ---------- */
+/* The strip's grid track is auto, so display:none reclaims the space in both
+   layouts. Bumping the screen edge adds .tabs-peek, which floats the strip
+   back over the page until the pointer leaves it. */
+#app.tabs-hidden #tabstrip { display: none; }
+#app.tabs-hidden.tabs-peek #tabstrip {
+  display: flex;
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 500;
+  background: #080a0e;
+  padding-bottom: 6px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+}
+#app.vtabs.tabs-hidden.tabs-peek #tabstrip {
+  right: auto;
+  bottom: 0;
+  box-shadow: 8px 0 24px rgba(0, 0, 0, 0.5);
+}
+
 /* ---------- Vertical tabs (side rail) ---------- */
 #app.vtabs {
   grid-template-rows: 1fr auto;
@@ -919,7 +941,15 @@ html, body {
   height: 100%;
   border: 0;
 }
-#web-views webview[hidden], #page-frame[hidden] { display: none; }
+#page-frame[hidden] { display: none; }
+/* Never display:none a webview — Electron detaches the guest page, so every tab
+   switch forced a full reload (and killed background audio). Keep hidden ones
+   laid out but invisible; display:flex beats the UA's [hidden]{display:none}. */
+#web-views webview[hidden] {
+  display: flex;
+  visibility: hidden;
+  pointer-events: none;
+}
 
 /* ---------- Remix bar + Audio player (float over the page) ---------- */
 #remix-bar {
@@ -1607,6 +1637,49 @@ html, body {
 .autofill-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 .autofill-grid input { background: var(--panel-2); border: 1px solid var(--border); color: var(--text); border-radius: 8px; padding: 8px 10px; font-size: 13px; outline: none; }
 .autofill-grid input:focus { border-color: var(--accent); }
+
+/* Library → Collections */
+.coll-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.coll-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.coll-actions { display: flex; gap: 6px; flex: none; }
+.coll-item {
+  display: flex; align-items: center; gap: 10px;
+  padding: 8px 12px; border-bottom: 1px solid var(--border);
+}
+.coll-item:hover { background: rgba(255, 255, 255, 0.04); }
+.coll-favicon { width: 16px; height: 16px; border-radius: 3px; flex: none; }
+.coll-item-meta { flex: 1; min-width: 0; cursor: pointer; }
+.coll-item-title { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.coll-item-url { font-size: 11px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.coll-item-empty { padding: 10px 14px; font-size: 12px; color: var(--muted); font-style: italic; }
+
+/* Your places (Settings → You) — same field styling as the autofill grid. */
+.places-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.places-grid input, .place-extra-row input, #pl-email-url {
+  background: var(--panel-2); border: 1px solid var(--border); color: var(--text);
+  border-radius: 8px; padding: 8px 10px; font-size: 13px; outline: none;
+}
+.places-grid input:focus, .place-extra-row input:focus { border-color: var(--accent); }
+.place-email-row { grid-column: 1 / -1; display: flex; align-items: center; gap: 8px; }
+.place-email-row label { font-size: 13px; color: var(--muted); }
+.place-email-row select {
+  background: var(--panel-2); border: 1px solid var(--border); color: var(--text);
+  border-radius: 8px; padding: 8px 10px; font-size: 13px; outline: none;
+}
+.place-email-row input { flex: 1; }
+.place-email-row input[hidden] { display: none; }
+.place-extra-row { display: flex; gap: 8px; margin-top: 8px; }
+.place-extra-row input:first-child { width: 180px; }
+.place-extra-row input:nth-child(2) { flex: 1; }
+#pl-add-extra { margin-top: 8px; }
+
+/* Your-places tiles on the welcome overlay. */
+.places-row { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; width: 100%; margin-bottom: 10px; }
+.place-tile {
+  background: var(--panel-2); border: 1px solid var(--border); color: var(--text);
+  border-radius: 999px; padding: 7px 14px; font-size: 13px; cursor: pointer;
+}
+.place-tile:hover { border-color: var(--accent); }
 
 /* Find in page (Ctrl+F) */
 #find-bar { position: absolute; top: 12px; right: 16px; z-index: 30; display: flex; align-items: center; gap: 6px; padding: 6px 8px; background: var(--panel); border: 1px solid var(--border); border-radius: 10px; box-shadow: 0 8px 28px rgba(0, 0, 0, 0.45); }

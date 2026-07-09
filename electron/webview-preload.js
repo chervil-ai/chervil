@@ -60,6 +60,20 @@ const { ipcRenderer } = require('electron');
     } catch (e2) { /* ignore */ }
   }, true);
 
+  // 4) mailto: links — hand them to the host so Chervil can open the user's
+  // registered webmail compose (Your places) instead of dropping the click.
+  document.addEventListener('click', function (e) {
+    try {
+      if (e.button !== 0) return;
+      const t = e.target;
+      const a = t && t.closest && t.closest('a[href^="mailto:" i]');
+      if (!a) return;
+      e.preventDefault();
+      e.stopPropagation();
+      ipcRenderer.sendToHost('chervil:mailto', { href: a.href });
+    } catch (e2) { /* never break the page */ }
+  }, true);
+
   // 3) Click on a likely login/submit button while a password field is filled.
   document.addEventListener('click', function (e) {
     try {

@@ -63,6 +63,7 @@ const els = {
   suggestions: document.getElementById('suggestions'),
   main: document.getElementById('main'),
   sidebarToggle: document.getElementById('sidebar-toggle'),
+  tabsToggle: document.getElementById('tabsbar-toggle'),
   tabs: document.getElementById('tabs'),
   newTab: document.getElementById('new-tab'),
   tabActions: document.getElementById('tab-actions'),
@@ -83,6 +84,7 @@ const els = {
   findClose: document.getElementById('find-close'),
   back: document.getElementById('back-btn'),
   fwd: document.getElementById('fwd-btn'),
+  reload: document.getElementById('reload-btn'),
   navTip: document.getElementById('nav-tip'),
   mapBtn: document.getElementById('map-btn'),
   mapView: document.getElementById('map-view'),
@@ -143,6 +145,7 @@ const els = {
   wakeThreshold: document.getElementById('wake-threshold'),
   wakeThresholdVal: document.getElementById('wake-threshold-val'),
   wakeConfirmToggle: document.getElementById('wake-confirm-toggle'),
+  noisyModeToggle: document.getElementById('noisy-mode-toggle'),
   wakeConfirm: document.getElementById('wake-confirm'),
   wakeConfirmText: document.getElementById('wake-confirm-text'),
   wakeConfirmGo: document.getElementById('wake-confirm-go'),
@@ -169,6 +172,8 @@ const els = {
   libTabHistory: document.getElementById('lib-tab-history'),
   libTabBookmarks: document.getElementById('lib-tab-bookmarks'),
   libTabFavorites: document.getElementById('lib-tab-favorites'),
+  libTabCollections: document.getElementById('lib-tab-collections'),
+  libNewCollection: document.getElementById('lib-new-collection'),
   libTabSites: document.getElementById('lib-tab-sites'),
   libTabDownloads: document.getElementById('lib-tab-downloads'),
   libTabTrash: document.getElementById('lib-tab-trash'),
@@ -207,6 +212,7 @@ const els = {
   readAloudBtn: document.getElementById('read-aloud-btn'),
   snipBtn: document.getElementById('snip-btn'),
   sendPhoneBtn: document.getElementById('send-phone-btn'),
+  emailPageBtn: document.getElementById('email-page-btn'),
   pipBtn: document.getElementById('pip-btn'),
   bookmarkBtn: document.getElementById('bookmark-btn'),
   favoriteBtn: document.getElementById('favorite-btn'),
@@ -324,6 +330,8 @@ function attachWebviewEvents(wv, tabId) {
   // Login-capture messages from the webview preload (RFC 0008 8.3).
   wv.addEventListener('ipc-message', (e) => {
     if (e.channel === 'chervil:login-submit') onCapturedLogin(e.args && e.args[0]);
+    // mailto: clicked on a real site → webmail compose (Your places) / OS mail.
+    if (e.channel === 'chervil:mailto') openMailto(e.args && e.args[0] && e.args[0].href);
   });
 }
 
@@ -358,6 +366,7 @@ let settings = {
   wakeKeyword: 'hey_sprig', // built-in: hey_sprig | hey_jarvis | alexa | hey_mycroft, or 'custom' (.onnx in userData)
   wakeKeywordLabel: '',      // display label for a loaded custom model
   wakeThreshold: 0.6,        // detection score cutoff (0–1; higher = fewer false triggers). Tunable in Settings → Voice.
+  noisyMode: false,          // "Noisy room" — TV/music always on: stricter wake (higher floor threshold, 3 consecutive hits, long cooldown), stricter capture VAD, and the confirm gate always applies
   wakeConfirm: true,         // require an explicit confirm before composing from a wake trigger (guards against false triggers in a noisy room)
   // Publishing — Chervil Pro: publish a lesson to a shareable getchervil.com link.
   publishToken: '',          // from getchervil.com/me (stored locally)
@@ -368,7 +377,9 @@ let settings = {
   // Autofill identity (non-sensitive only — never passwords/cards). Filled into
   // forms on real sites on request.
   autofill: {},              // { fullName, givenName, familyName, email, phone, address, city, postal, country, organization }
+  places: {},                // Your places (URLs only, never credentials): { email: 'gmail'|'outlook'|'custom', emailUrl, blog, x, bluesky, facebook, instagram, tiktok, extras: [{name,url}] }
   sidebarCollapsed: false,   // hide the left chat sidebar for a full-width page (Ctrl+\)
+  tabsBarHidden: false,      // hide the tab strip for full-height pages (Ctrl+Shift+\); top/left edge peeks it
   chatMode: false,           // "Just a chatbot" — plain conversational replies, no page composed
   heroImages: false,         // generate an AI hero image for composed pages (opt-in; BYO image key, costs money)
   pageStyle: 'balanced',     // composed-page richness: 'balanced' | 'rich' | 'minimal'
@@ -456,6 +467,7 @@ let bookmarkFolders = []; // ordered folder names; also holds empty folders (pag
 // Favorites: your websites, on the ★ star — like a standard browser's favorites/
 // bookmarks. Folders + the browser-import target. [{ id, key, url, title, at, folder? }]
 let favorites = [];
+let collections = []; // named URL groups: [{ id, name, items: [{id,url,title,addedAt}], createdAt, updatedAt }]
 let favoriteFolders = []; // ordered folder names (favorites carry `folder`)
 let favoriteTombstones = []; // [{ key, at }] — same delete-survives-sync trick as bookmarks
 // Tombstones for removed bookmarks, so a delete propagates across synced machines
@@ -790,6 +802,28 @@ function newTab(activate = true, opts = {}) {
   return tab;
 }
 
+// Reload a tab's live site. A pooled webview reloads in place (even in the
+// background); a tab without one (evicted) loads fresh on its next switch anyway.
+function reloadTab(tabId) {
+  const tab = tabs.find((t) => t.id === tabId) || null;
+  const entry = currentEntry(tab);
+  if (!entry || entry.kind !== 'navigate') return;
+  const wv = webviews.get(tabId);
+  if (wv) { try { wv.reload(); return; } catch { /* fall through */ } }
+  if (tabId === activeId) renderSite(entry.url);
+}
+
+// "Duplicate tab" — clone the whole tab (conversation + page tree) next to the
+// original via the bookmark snapshot-restore, which remaps page ids. The clone
+// keeps the original's group; a private clone gets its own fresh partition.
+function duplicateTab(tabId) {
+  const tab = tabs.find((t) => t.id === tabId);
+  if (!tab) return;
+  const snap = JSON.parse(JSON.stringify(tab));
+  const dup = restoreTabSnapshot(snap, { afterId: tabId });
+  if (dup && tab.groupId) { dup.groupId = tab.groupId; renderTabs(); scheduleSave(); }
+}
+
 // Remember a closed tab so Ctrl+Shift+T can reopen it (keeps its full state).
 function recordClosedTab(tab) {
   if (!tab) return;
@@ -1012,6 +1046,15 @@ function openTabMenu(e, tabId) {
   const target = tabs[i];
   const pinBtn = menu.querySelector('[data-act="pin"]');
   if (pinBtn) pinBtn.textContent = (target && target.pinned) ? 'Unpin tab' : 'Pin tab';
+  const reloadBtn = menu.querySelector('[data-act="reload"]');
+  if (reloadBtn) {
+    const cur = currentEntry(target);
+    reloadBtn.disabled = !(cur && cur.kind === 'navigate'); // live sites only
+  }
+  const dupBtn = menu.querySelector('[data-act="duplicate"]');
+  if (dupBtn) dupBtn.disabled = !target;
+  const collectBtn = menu.querySelector('[data-act="collect"]');
+  if (collectBtn) collectBtn.disabled = !(target && collectionPageForTab(target)); // needs a URL (live site / published page)
   menu.querySelector('[data-act="others"]').disabled = tabs.length <= 1;
   menu.querySelector('[data-act="right"]').disabled = i < 0 || i >= tabs.length - 1;
   const layoutBtn = menu.querySelector('[data-act="layout"]');
@@ -1034,12 +1077,16 @@ function onTabMenuClick(act) {
   if (act === 'new') newTab(true);
   else if (act === 'new-private') newTab(true, { private: true });
   else if (act === 'new-window') { if (window.chervil.newWindow) window.chervil.newWindow(); }
+  else if (act === 'reload') reloadTab(id);
+  else if (act === 'duplicate') duplicateTab(id);
+  else if (act === 'collect') { const t = tabs.find((x) => x.id === id); chooseCollectionFor(collectionPageForTab(t)); }
   else if (act === 'pin') toggleTabPin(id);
   else if (act === 'group') openGroupPicker(id);
   else if (act === 'close') closeTab(id);
   else if (act === 'others') closeOtherTabs(id);
   else if (act === 'right') closeTabsToRight(id);
   else if (act === 'select') enterTabSelect(id);
+  else if (act === 'hidebar') toggleTabsBar();
   else if (act === 'layout') toggleTabLayout();
   else if (act === 'all') closeAllTabs();
 }
@@ -1375,6 +1422,46 @@ function toggleSidebar() {
   scheduleSave();
 }
 
+// Tabs-bar toggle mirrors the sidebar glyph, but with the TOP row filled —
+// HIDE = strip currently shown (top filled); SHOW = hidden (outline + top line).
+const TABSBAR_ICON_HIDE = '<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="M3 9 V6.5 A2.5 2.5 0 0 1 5.5 4 H18.5 A2.5 2.5 0 0 1 21 6.5 V9 Z" fill="currentColor" stroke="none"/><path d="M3 9h18"/></svg>';
+const TABSBAR_ICON_SHOW = '<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="M3 9h18"/></svg>';
+function applyTabsBarHidden() {
+  const on = !!settings.tabsBarHidden;
+  const app = document.getElementById('app');
+  if (app) {
+    app.classList.toggle('tabs-hidden', on);
+    if (!on) app.classList.remove('tabs-peek');
+  }
+  if (els.tabsToggle) {
+    els.tabsToggle.setAttribute('aria-pressed', String(on));
+    els.tabsToggle.title = on ? 'Show tab bar (Ctrl+Shift+\\)' : 'Hide tab bar (Ctrl+Shift+\\)';
+    els.tabsToggle.innerHTML = on ? TABSBAR_ICON_SHOW : TABSBAR_ICON_HIDE;
+  }
+  const hideBtn = els.tabMenu && els.tabMenu.querySelector('[data-act="hidebar"]');
+  if (hideBtn) hideBtn.textContent = on ? 'Show tab bar' : 'Hide tab bar';
+}
+
+function toggleTabsBar() {
+  settings.tabsBarHidden = !settings.tabsBarHidden;
+  applyTabsBarHidden();
+  scheduleSave();
+}
+
+// While the strip is hidden, nudging the screen edge where it lives (top, or
+// left with vertical tabs) peeks it as an overlay; it tucks away on mouseleave.
+window.addEventListener('mousemove', (e) => {
+  if (!settings.tabsBarHidden) return;
+  const app = document.getElementById('app');
+  if (!app || app.classList.contains('tabs-peek')) return;
+  if (isVerticalTabs() ? e.clientX <= 3 : e.clientY <= 3) app.classList.add('tabs-peek');
+});
+document.getElementById('tabstrip').addEventListener('mouseleave', () => {
+  if (els.tabMenu && !els.tabMenu.hidden) return; // keep the peek under an open tab menu
+  const app = document.getElementById('app');
+  if (app && app.classList.contains('tabs-hidden')) app.classList.remove('tabs-peek');
+});
+
 // ---- Drag-to-reorder tabs (works horizontally or vertically) ----
 let tabDragId = null;
 let tabSelectMode = false;
@@ -1632,8 +1719,39 @@ function shuffleSuggestions(count = 4) {
 
 function renderSuggestions() {
   if (!els.suggestions) return;
-  const picks = shuffleSuggestions(4);
   els.suggestions.innerHTML = '';
+
+  // Your places — one-click tiles above the idea chips (no data-q: they
+  // navigate directly instead of going through the composer).
+  const p = settings.places || {};
+  const tiles = [];
+  const defs = [
+    ['email', '📧', p.email === 'gmail' ? 'Gmail' : p.email === 'outlook' ? 'Outlook' : 'Email'],
+    ['blog', '✍️', 'Blog'], ['x', '𝕏', 'X'], ['bluesky', '🦋', 'Bluesky'],
+    ['facebook', '📘', 'Facebook'], ['instagram', '📸', 'Instagram'], ['tiktok', '🎵', 'TikTok'],
+  ];
+  for (const [key, icon, label] of defs) {
+    const u = placeUrl(key);
+    if (u) tiles.push([icon, label, u]);
+  }
+  for (const ex of p.extras || []) {
+    if (ex && ex.url && ex.name) tiles.push(['🔗', ex.name, normalizePlaceUrl(ex.url)]);
+  }
+  if (tiles.length) {
+    const row = document.createElement('div');
+    row.className = 'places-row';
+    for (const [icon, label, u] of tiles.slice(0, 8)) {
+      const btn = document.createElement('button');
+      btn.className = 'place-tile';
+      btn.textContent = `${icon} ${label}`;
+      btn.title = u;
+      btn.addEventListener('click', () => openUrlInTab(u));
+      row.appendChild(btn);
+    }
+    els.suggestions.appendChild(row);
+  }
+
+  const picks = shuffleSuggestions(4);
   for (const [label, query] of picks) {
     const btn = document.createElement('button');
     btn.setAttribute('data-q', `Hey Sprig, ${query}`);
@@ -1750,6 +1868,7 @@ function renderCurrentPage() {
     els.save.disabled = false;
     setRemixVisible(true);
     maybeRefreshSkillHtml(tab, entry); // upgrade stored lessons/quizzes to the current renderer
+    maybeRefreshEditorHtml(tab, entry); // same for image-editor shells
   }
   updateNavButtons();
   updatePlaceholder();
@@ -1757,6 +1876,7 @@ function renderCurrentPage() {
   updatePwFillButton();
   applyZoom();
   const onLiveSite = !!(entry && entry.kind === 'navigate');
+  if (els.reload) els.reload.disabled = !onLiveSite;       // reload = live sites only (pages have ↻ Refresh on the remix bar)
   if (els.readerBtn) els.readerBtn.disabled = !onLiveSite; // reader = live sites only
   if (els.askPageBtn) els.askPageBtn.disabled = !onLiveSite; // ask-about-page = live sites only
   if (!onLiveSite && askPageArmed) setAskPageArmed(false); // disarm when leaving the site
@@ -1766,6 +1886,7 @@ function renderCurrentPage() {
   }
   if (els.readAloudBtn) els.readAloudBtn.disabled = !entry; // read-aloud = any page or site
   if (els.sendPhoneBtn) els.sendPhoneBtn.disabled = !onLiveSite; // send-to-phone = live sites (they have a URL)
+  if (els.emailPageBtn) els.emailPageBtn.disabled = !(onLiveSite || (entry && entry.publishedUrl)); // email = anything with a URL to share
   if (els.pipBtn) els.pipBtn.disabled = !onLiveSite;       // PiP = live-site video only
   if (onLiveSite) applyTabMute();
 }
@@ -2140,6 +2261,266 @@ function startSnip() {
   document.body.appendChild(ov);
 }
 
+// ---- Lightweight image editor (snips) ----------------------------------------
+// A self-contained editor PAGE (regular tab entry, kind 'page'), so it can be
+// revisited, bookmarked, and survives restarts. Client-side canvas tools (text,
+// erase, crop, undo) work offline; the "Ask Sprig" box round-trips through the
+// composed-page bridge (edit_image → BYO OpenAI/Gemini image edit). Every change
+// commits back into entry.html so the tab always holds the latest image.
+// Bump when imageEditorHtml's UI changes — editor tabs persist their built HTML
+// in entry.html, so stale shells are re-rendered from entry.snipImage on open.
+const IMAGE_EDITOR_HTML_VERSION = 4;
+
+function imageEditorHtml(dataUrl, name) {
+  const safeName = String(name || 'snip.png').replace(/[<>&"']/g, '');
+  return `<!doctype html><html><head><meta charset="utf-8"><title>Edit ${safeName}</title><style>
+  :root { color-scheme: dark; }
+  body { margin: 0; background: #0b0d12; color: #e6e9ef; font: 13px -apple-system, "Segoe UI", Roboto, sans-serif; }
+  #bar { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding: 10px 12px; border-bottom: 1px solid #232733; position: sticky; top: 0; background: #0b0d12; z-index: 5; }
+  #bar .sep { width: 1px; height: 22px; background: #232733; margin: 0 4px; }
+  button { background: #171b24; color: #e6e9ef; border: 1px solid #2a2f3d; border-radius: 8px; padding: 6px 12px; font-size: 13px; cursor: pointer; }
+  button:hover { border-color: #7be0a3; }
+  button.on { border-color: #7be0a3; background: #14231b; }
+  button:disabled { opacity: .5; cursor: default; }
+  #ask { flex: 1; min-width: 180px; background: #171b24; color: #e6e9ef; border: 1px solid #2a2f3d; border-radius: 8px; padding: 6px 10px; font-size: 13px; outline: none; }
+  #ask:focus { border-color: #7be0a3; }
+  #stage { display: flex; justify-content: center; padding: 18px; }
+  #wrap { position: relative; }
+  canvas { max-width: 100%; height: auto; display: block; border: 1px solid #2a2f3d; border-radius: 8px;
+    background: repeating-conic-gradient(#14161c 0 25%, #0e1015 0 50%) 0 0 / 18px 18px; }
+  #wrap.tool-text canvas { cursor: text; } #wrap.tool-erase canvas, #wrap.tool-crop canvas { cursor: crosshair; }
+  #marq { position: absolute; border: 1.5px dashed #7be0a3; background: rgba(123,224,163,.12); pointer-events: none; display: none; }
+  #ti { position: absolute; display: none; background: rgba(11,13,18,.9); color: #fff; border: 1px solid #7be0a3; border-radius: 6px; padding: 4px 8px; font-size: 14px; outline: none; min-width: 140px; }
+  #note { padding: 0 14px 14px; color: #8b93a7; font-size: 12px; text-align: center; }
+  #busy { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.45); z-index: 9; align-items: center; justify-content: center; color: #e6e9ef; font-size: 14px; }
+  </style></head><body>
+  <div id="bar">
+    <button id="t-text" title="Click the image to place text">T Text</button>
+    <button id="t-erase" title="Drag a box to blend it away">◫ Erase</button>
+    <button id="t-crop" title="Drag a box to crop to it">⛶ Crop</button>
+    <button id="t-undo" title="Undo" disabled>↶ Undo</button>
+    <span class="sep"></span>
+    <button id="t-up" title="Double the resolution — faithful high-quality resample, right here, free">⤴ Upscale 2×</button>
+    <button id="t-enhance" title="AI upscale + sharpen via your image key (regenerates — tiny details may shift)">✨ Enhance 2×</button>
+    <span class="sep"></span>
+    <input id="ask" placeholder="Ask Sprig to change the image… e.g. add a red arrow pointing at the button" />
+    <button id="go">✨ Apply</button>
+    <span class="sep"></span>
+    <button id="x-copy">Copy</button>
+    <button id="x-save">Save</button>
+    <button id="x-viewer">Open in viewer</button>
+    <button id="x-attach">Ask about it</button>
+  </div>
+  <div id="stage"><div id="wrap">
+    <canvas id="cv"></canvas>
+    <div id="marq"></div>
+    <input id="ti" placeholder="Type, then Enter" />
+  </div></div>
+  <p id="note">Text, erase, and crop happen right here. “Ask Sprig” uses your Grok, OpenAI, or Gemini key (Settings → AI). Everything stays in this tab until you copy or save it.</p>
+  <div id="busy">Sprig is editing the image…</div>
+  <script>
+  (function () {
+    var cv = document.getElementById('cv'), ctx = cv.getContext('2d');
+    var wrap = document.getElementById('wrap'), marq = document.getElementById('marq'), ti = document.getElementById('ti');
+    var undoStack = [], tool = null;
+    var img = new Image();
+    img.onload = function () { cv.width = img.naturalWidth; cv.height = img.naturalHeight; ctx.drawImage(img, 0, 0); };
+    img.src = ${JSON.stringify(dataUrl)};
+    function snap() { undoStack.push(cv.toDataURL('image/png')); if (undoStack.length > 15) undoStack.shift(); document.getElementById('t-undo').disabled = false; }
+    function commit() { try { window.chervil && window.chervil.call('editor_commit', { image: cv.toDataURL('image/png') }); } catch (e) {} }
+    function loadInto(dataUrl2) { var im = new Image(); im.onload = function () { cv.width = im.naturalWidth; cv.height = im.naturalHeight; ctx.drawImage(im, 0, 0); commit(); }; im.src = dataUrl2; }
+    // AI results come back at the provider's generation size (e.g. 1k-wide even
+    // for a small snip) — scale them back DOWN to fit the pre-edit dimensions,
+    // preserving the result's aspect. Never upscale.
+    function loadEdited(dataUrl2, ow, oh) {
+      var im = new Image();
+      im.onload = function () {
+        var w = im.naturalWidth, h = im.naturalHeight;
+        if (w > ow || h > oh) { var s = Math.min(ow / w, oh / h); w = Math.max(1, Math.round(w * s)); h = Math.max(1, Math.round(h * s)); }
+        cv.width = w; cv.height = h;
+        ctx.drawImage(im, 0, 0, w, h);
+        commit();
+      };
+      im.src = dataUrl2;
+    }
+    function setTool(t) { tool = tool === t ? null : t; ['text','erase','crop'].forEach(function (k) { document.getElementById('t-' + k).classList.toggle('on', tool === k); wrap.classList.toggle('tool-' + k, tool === k); }); ti.style.display = 'none'; }
+    ['text','erase','crop'].forEach(function (k) { document.getElementById('t-' + k).onclick = function () { setTool(k); }; });
+    document.getElementById('t-undo').onclick = function () {
+      var prev = undoStack.pop(); if (!prev) return;
+      if (!undoStack.length) document.getElementById('t-undo').disabled = true;
+      loadInto(prev);
+    };
+    function pos(e) { var r = cv.getBoundingClientRect(); return { x: (e.clientX - r.left) * (cv.width / r.width), y: (e.clientY - r.top) * (cv.height / r.height), rx: e.clientX - r.left + cv.offsetLeft, ry: e.clientY - r.top + cv.offsetTop }; }
+    // Text: click to place, Enter to draw.
+    cv.addEventListener('click', function (e) {
+      if (tool !== 'text') return;
+      var p = pos(e);
+      ti.style.display = 'block'; ti.style.left = p.rx + 'px'; ti.style.top = p.ry + 'px';
+      ti.dataset.x = p.x; ti.dataset.y = p.y; ti.value = ''; ti.focus();
+    });
+    ti.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape') { ti.style.display = 'none'; return; }
+      if (e.key !== 'Enter' || !ti.value.trim()) return;
+      snap();
+      var size = Math.max(16, Math.round(cv.height * 0.05));
+      ctx.font = '600 ' + size + 'px -apple-system, "Segoe UI", Roboto, sans-serif';
+      ctx.textBaseline = 'top';
+      ctx.lineWidth = Math.max(2, Math.round(size / 8)); ctx.strokeStyle = 'rgba(0,0,0,.85)'; ctx.fillStyle = '#fff';
+      ctx.strokeText(ti.value, +ti.dataset.x, +ti.dataset.y); ctx.fillText(ti.value, +ti.dataset.x, +ti.dataset.y);
+      ti.style.display = 'none'; commit();
+    });
+    // Erase / crop: marquee drag.
+    var drag = null;
+    cv.addEventListener('pointerdown', function (e) {
+      if (tool !== 'erase' && tool !== 'crop') return;
+      drag = { a: pos(e) }; cv.setPointerCapture(e.pointerId);
+      marq.style.display = 'block';
+    });
+    cv.addEventListener('pointermove', function (e) {
+      if (!drag) return;
+      drag.b = pos(e);
+      var x = Math.min(drag.a.rx, drag.b.rx), y = Math.min(drag.a.ry, drag.b.ry);
+      marq.style.left = x + 'px'; marq.style.top = y + 'px';
+      marq.style.width = Math.abs(drag.a.rx - drag.b.rx) + 'px'; marq.style.height = Math.abs(drag.a.ry - drag.b.ry) + 'px';
+    });
+    cv.addEventListener('pointerup', function () {
+      marq.style.display = 'none';
+      if (!drag || !drag.b) { drag = null; return; }
+      var x = Math.round(Math.min(drag.a.x, drag.b.x)), y = Math.round(Math.min(drag.a.y, drag.b.y));
+      var w = Math.round(Math.abs(drag.a.x - drag.b.x)), h = Math.round(Math.abs(drag.a.y - drag.b.y));
+      drag = null;
+      if (w < 4 || h < 4) return;
+      if (tool === 'erase') {
+        snap();
+        // Blend the box away with the average of a ring just outside it.
+        var pad = 6, sx = Math.max(0, x - pad), sy = Math.max(0, y - pad);
+        var sw = Math.min(cv.width - sx, w + pad * 2), sh = Math.min(cv.height - sy, h + pad * 2);
+        var d = ctx.getImageData(sx, sy, sw, sh).data, r = 0, g = 0, b = 0, n = 0;
+        for (var i = 0; i < d.length; i += 4 * 7) { r += d[i]; g += d[i+1]; b += d[i+2]; n++; }
+        ctx.fillStyle = 'rgb(' + Math.round(r/n) + ',' + Math.round(g/n) + ',' + Math.round(b/n) + ')';
+        ctx.fillRect(x, y, w, h); commit();
+      } else if (tool === 'crop') {
+        snap();
+        var cut = ctx.getImageData(x, y, w, h);
+        cv.width = w; cv.height = h; ctx.putImageData(cut, 0, 0); commit();
+      }
+    });
+    // Ask Sprig (AI edit via the page bridge).
+    var busyEl = document.getElementById('busy'), askEl = document.getElementById('ask'), goBtn = document.getElementById('go');
+    function askSprig() {
+      var instruction = askEl.value.trim();
+      if (!instruction || !window.chervil) return;
+      busyEl.style.display = 'flex'; goBtn.disabled = true;
+      var ow = cv.width, oh = cv.height;
+      window.chervil.call('edit_image', { image: cv.toDataURL('image/png'), instruction: instruction })
+        .then(function (res) { if (res && res.image) { snap(); loadEdited(res.image, ow, oh); askEl.value = ''; } })
+        .catch(function (err) { document.getElementById('note').textContent = '⚠ ' + (err && err.message || err); })
+        .finally(function () { busyEl.style.display = 'none'; goBtn.disabled = false; });
+    }
+    goBtn.onclick = askSprig;
+    askEl.addEventListener('keydown', function (e) { if (e.key === 'Enter') askSprig(); });
+    // Local upscale: multi-pass-free 2× with high-quality resampling. Faithful
+    // (no regeneration) and offline — the print/publish "300 DPI" workhorse.
+    document.getElementById('t-up').onclick = function () {
+      var MAX = 4096;
+      if (cv.width * 2 > MAX || cv.height * 2 > MAX) { document.getElementById('note').textContent = 'Already at the maximum size (' + cv.width + '×' + cv.height + ').'; return; }
+      snap();
+      var tmp = document.createElement('canvas');
+      tmp.width = cv.width * 2; tmp.height = cv.height * 2;
+      var tctx = tmp.getContext('2d');
+      tctx.imageSmoothingEnabled = true; tctx.imageSmoothingQuality = 'high';
+      tctx.drawImage(cv, 0, 0, tmp.width, tmp.height);
+      cv.width = tmp.width; cv.height = tmp.height;
+      ctx.drawImage(tmp, 0, 0);
+      document.getElementById('note').textContent = 'Upscaled to ' + cv.width + '×' + cv.height + '.';
+      commit();
+    };
+    // AI enhance: real detail synthesis at the provider's 2k tier. Regenerative —
+    // adopt the model's full-size result rather than rescaling it back down.
+    document.getElementById('t-enhance').onclick = function () {
+      if (!window.chervil) return;
+      busyEl.style.display = 'flex';
+      window.chervil.call('edit_image', {
+        image: cv.toDataURL('image/png'),
+        instruction: 'Upscale and enhance this image to a higher resolution. Increase sharpness and detail. Do NOT add, remove, move, or change ANY content, text, colors, or layout — produce an exact higher-resolution version only.',
+        resolution: '2k',
+      })
+        .then(function (res) { if (res && res.image) { snap(); loadInto(res.image); document.getElementById('note').textContent = 'AI-enhanced.'; } })
+        .catch(function (err) { document.getElementById('note').textContent = '⚠ ' + (err && err.message || err); })
+        .finally(function () { busyEl.style.display = 'none'; });
+    };
+    // The host composer forwards edit requests here — typing "add a red arrow…"
+    // in Chervil's main bar edits this image instead of composing a page.
+    window.addEventListener('message', function (e) {
+      var d = e.data;
+      if (!d || d.__chervil !== true || d.type !== 'edit-instruction' || !d.text) return;
+      askEl.value = String(d.text);
+      askSprig();
+    });
+    // Exports round-trip through the host (the sandboxed frame can't reach the
+    // clipboard, Downloads, or the OS shell itself).
+    function exportAs(action) {
+      if (!window.chervil) return;
+      window.chervil.call('editor_export', { action: action, image: cv.toDataURL('image/png') })
+        .catch(function (err) { document.getElementById('note').textContent = '⚠ ' + (err && err.message || err); });
+    }
+    document.getElementById('x-copy').onclick = function () { exportAs('copy'); };
+    document.getElementById('x-save').onclick = function () { exportAs('save'); };
+    document.getElementById('x-viewer').onclick = function () { exportAs('viewer'); };
+    document.getElementById('x-attach').onclick = function () { exportAs('attach'); };
+  })();
+  </script></body></html>`;
+}
+
+// Open a snip (or any data: image) in its own editor tab.
+function openImageEditor(dataUrl, name) {
+  const tab = newTab(true);
+  const entry = {
+    kind: 'page',
+    title: `✏️ ${name}`,
+    query: '',
+    html: imageEditorHtml(dataUrl, name),
+    imageEditor: true,
+    snipName: name,
+    snipImage: dataUrl,
+    editorHtmlVersion: IMAGE_EDITOR_HTML_VERSION,
+  };
+  pushEntry(tab, entry);
+  tab.title = `✏️ ${name}`;
+  renderTabs();
+  renderCurrentPage();
+  scheduleSave();
+}
+
+// Re-render a stale editor shell (same trick as maybeRefreshSkillHtml): the tab
+// stores built HTML, so a UI fix would otherwise never reach existing editors.
+// Pre-versioning tabs have no snipImage — pull the image out of the stored HTML.
+function maybeRefreshEditorHtml(tab, entry) {
+  if (!entry || !entry.imageEditor || entry.editorHtmlVersion === IMAGE_EDITOR_HTML_VERSION) return;
+  let image = entry.snipImage;
+  if (!image) {
+    const m = /img\.src = "(data:image\/[^"]+)"/.exec(entry.html || '');
+    image = m && m[1];
+  }
+  if (!image) return; // can't recover the image — keep the old shell
+  entry.snipImage = image;
+  entry.html = imageEditorHtml(image, entry.snipName || 'snip.png');
+  entry.editorHtmlVersion = IMAGE_EDITOR_HTML_VERSION;
+  scheduleSave();
+  if (activeTab() === tab && currentEntry(tab) === entry) renderPageHtml(entry.html);
+}
+
+// The composer, pointed at an image-editor tab, edits the image (the request is
+// forwarded into the editor's own Ask-Sprig box) — see handleComposerSubmit.
+function forwardEditToImageEditor(instruction) {
+  try {
+    els.frame.contentWindow.postMessage({ __chervil: true, type: 'edit-instruction', text: String(instruction || '') }, '*');
+    toast('Sprig is editing the image…');
+  } catch {
+    toast('Couldn’t reach the image editor — use the box on the image page.');
+  }
+}
+
 async function captureSnip(x, y, w, h) {
   // Two frames so the overlay's removal has actually painted before we shoot.
   await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
@@ -2178,10 +2559,15 @@ async function captureSnip(x, y, w, h) {
         toast('Snip copied.');
       } catch { toast('Couldn’t copy the snip.'); }
     } },
+    { label: 'Edit in Chervil', onClick: () => openImageEditor(dataUrl, name) },
     { label: 'Save to Downloads', onClick: () => {
       const a = document.createElement('a');
       a.href = dataUrl; a.download = name;
       document.body.appendChild(a); a.click(); a.remove();
+    } },
+    { label: 'Open in image viewer', onClick: async () => {
+      const r = window.chervil.openImage ? await window.chervil.openImage({ dataUrl, name }) : null;
+      if (!r || !r.ok) toast('Couldn’t open the image viewer.');
     } },
   ]);
 }
@@ -2900,17 +3286,22 @@ async function startWake() {
     if (!km || !km.ok) {
       throw new Error(usingCustom ? 'Load a wake-word model (.onnx) first, or pick a built-in.' : (km && km.error) || 'keyword model missing');
     }
+    const noisy = !!settings.noisyMode;
     await window.ChervilWake.start({
       ortWasm: wakeAssets.ortWasm,
       melspec: wakeAssets.melspec,
       embedding: wakeAssets.embedding,
       keywordModel: km.model,
-      threshold: settings.wakeThreshold || 0.5,
+      // Noisy room: floor the threshold high, demand a longer hold, cool down
+      // longer — a broadcast that brushes the threshold once shouldn't wake us.
+      threshold: noisy ? Math.max(settings.wakeThreshold || 0.5, 0.72) : (settings.wakeThreshold || 0.5),
+      minHits: noisy ? 3 : 2,
+      cooldownMs: noisy ? 8000 : 2500,
       onDetect: onWakeDetected,
       onError: (e) => setWakeStatus('Wake-word listening stopped — ' + errText(e, 'mic unavailable'), 'warn'),
     });
     const label = usingCustom ? (settings.wakeKeywordLabel || 'your model') : prettyWake(settings.wakeKeyword);
-    setWakeStatus(`Listening for “${label}”…`, 'ok');
+    setWakeStatus(`Listening for “${label}”…${noisy ? ' (noisy room mode)' : ''}`, 'ok');
     return true;
   } catch (e) {
     setWakeStatus('Could not start listening: ' + (e && e.message ? e.message : e), 'warn');
@@ -2936,11 +3327,17 @@ async function onWakeDetected() {
   try {
     window.chervil.wakeListening && window.chervil.wakeListening(); // pop Quick-Ask "listening" bar
     if (window.ChervilWake) await window.ChervilWake.pause();       // free the mic for capture
-    const text = await captureUtterance();
+    // Noisy room: shorter onset window, quicker cut on trailing noise, and a
+    // higher above-the-floor bar before room audio counts as speech.
+    const text = await captureUtterance(settings.noisyMode
+      ? { maxMs: 8000, silenceMs: 1000, onsetMs: 2500, voiceBoost: 2.6 }
+      : {});
     window.chervil.wakeDone && window.chervil.wakeDone();           // hide the listening bar
     if (text) {
       window.chervil.showMain && window.chervil.showMain();         // surface the result (only on a real request)
-      if (settings.wakeConfirm === false) {
+      // Noisy room ALWAYS gates — auto-compose stays off even if the user
+      // disabled the confirm toggle back in quiet-room days.
+      if (settings.wakeConfirm === false && !settings.noisyMode) {
         // Power-user / quiet-room path: compose straight from the wake.
         newTab(true);
         handleComposerSubmit(text);
@@ -3006,7 +3403,7 @@ if (els.wakeConfirm) {
 
 // Record the spoken command and auto-stop on silence (energy-based VAD), then
 // transcribe via the configured voice-input endpoint. Returns the text or null.
-async function captureUtterance({ maxMs = 9000, silenceMs = 1200, minMs = 500 } = {}) {
+async function captureUtterance({ maxMs = 9000, silenceMs = 1200, minMs = 500, onsetMs = 3500, voiceBoost = 2.0 } = {}) {
   let stream;
   try { stream = await navigator.mediaDevices.getUserMedia({ audio: true }); } catch { return null; }
   let mime = '';
@@ -3030,12 +3427,21 @@ async function captureUtterance({ maxMs = 9000, silenceMs = 1200, minMs = 500 } 
   let lastVoiceAt = startedAt;
   let sawVoice = false;
   let monitor = null;
+  // Adaptive noise floor: in a room with the TV on, the mic is never "silent",
+  // so a fixed RMS cutoff hears the broadcast as speech. Track the quietest
+  // recent level (dips between words) and call it voice only when the signal
+  // clearly rises above that floor — or is loud outright (someone at the mic).
+  let noiseFloor = Infinity;
+  let aborted = false;
 
   return await new Promise((resolve) => {
     rec.addEventListener('stop', async () => {
       if (monitor) clearInterval(monitor);
       try { if (ac) await ac.close(); } catch { /* ignore */ }
       for (const t of stream.getTracks()) t.stop();
+      // No actual speech (just ambient noise after a false wake) → don't send
+      // the room's audio to the transcriber at all.
+      if (aborted) return resolve(null);
       const type = rec.mimeType || mime || 'audio/webm';
       const blob = new Blob(chunks, { type });
       if (!blob.size) return resolve(null);
@@ -3061,9 +3467,19 @@ async function captureUtterance({ maxMs = 9000, silenceMs = 1200, minMs = 500 } 
         rms = Math.sqrt(sum / data.length);
       }
       const now = Date.now();
-      if (rms > 0.045) { lastVoiceAt = now; sawVoice = true; }
+      // Floor rides the minimum, decaying slowly upward so it can re-adapt.
+      if (rms < noiseFloor) noiseFloor = rms;
+      else noiseFloor = Math.min(noiseFloor * 1.03, rms);
+      const voiceThresh = Math.max(0.045, (isFinite(noiseFloor) ? noiseFloor : 0) * voiceBoost);
+      if (rms > voiceThresh || rms > 0.12) { lastVoiceAt = now; sawVoice = true; }
       const elapsed = now - startedAt;
       const silentFor = now - lastVoiceAt;
+      // Nobody actually spoke within the onset window → this wake was spurious.
+      if (analyser && !sawVoice && elapsed >= onsetMs) {
+        aborted = true;
+        try { rec.stop(); } catch { /* ignore */ }
+        return;
+      }
       // Stop on max duration, or after enough silence once we've actually heard speech.
       // If there's no analyser, just record up to maxMs.
       const silenceStop = analyser && sawVoice && elapsed >= minMs && silentFor >= silenceMs;
@@ -5158,6 +5574,110 @@ const NAV_WORD_DENYLIST = new Set([
   'page', 'devtools', 'console', 'cart', 'checkout', 'home', 'back', 'forward',
 ]);
 
+// ---- Your places (Settings → You) ------------------------------------------
+// The user's registered personal sites: webmail, blog, socials, freeform extras.
+// URLs only — logins belong in the password vault. Powers "open my email",
+// mailto: links, welcome-overlay tiles, and the post-publish share sheet.
+const PLACE_ALIASES = {
+  email: ['email', 'e-mail', 'mail', 'inbox', 'webmail', 'gmail', 'outlook'],
+  blog: ['blog'],
+  x: ['x', 'twitter'],
+  bluesky: ['bluesky', 'bsky'],
+  facebook: ['facebook', 'fb'],
+  instagram: ['instagram', 'insta', 'ig'],
+  tiktok: ['tiktok', 'tik tok'],
+};
+const WEBMAIL = {
+  gmail: {
+    home: 'https://mail.google.com/',
+    compose: (p) => `https://mail.google.com/mail/?view=cm&fs=1&to=${p.to}&su=${p.subject}&body=${p.body}` + (p.cc ? `&cc=${p.cc}` : '') + (p.bcc ? `&bcc=${p.bcc}` : ''),
+  },
+  outlook: {
+    home: 'https://outlook.live.com/mail/0/',
+    compose: (p) => `https://outlook.live.com/mail/0/deeplink/compose?to=${p.to}&subject=${p.subject}&body=${p.body}`,
+  },
+};
+// settings.places with the pieces guaranteed present (mutate through this).
+function placesObj() {
+  if (!settings.places) settings.places = {};
+  if (!Array.isArray(settings.places.extras)) settings.places.extras = [];
+  return settings.places;
+}
+function normalizePlaceUrl(u) {
+  u = (u || '').trim();
+  return u ? (/^https?:\/\//i.test(u) ? u : 'https://' + u) : '';
+}
+// The URL a place key opens ('' if not configured).
+function placeUrl(key) {
+  const p = settings.places || {};
+  if (key === 'email') {
+    if (p.email === 'gmail' || p.email === 'outlook') return WEBMAIL[p.email].home;
+    if (p.email === 'custom') return normalizePlaceUrl(p.emailUrl);
+    return '';
+  }
+  return normalizePlaceUrl(p[key] || '');
+}
+// "email" / "twitter" / an extra's name → its registered URL, or null.
+function resolvePlace(nameRaw) {
+  const name = (nameRaw || '').toLowerCase()
+    .replace(/\s+(?:page|profile|feed|account|site)$/, '').trim();
+  if (!name) return null;
+  for (const [key, aliases] of Object.entries(PLACE_ALIASES)) {
+    if (aliases.includes(name)) { const u = placeUrl(key); if (u) return u; }
+  }
+  for (const ex of (settings.places && settings.places.extras) || []) {
+    if (ex && ex.url && (ex.name || '').trim().toLowerCase() === name) return normalizePlaceUrl(ex.url);
+  }
+  return null;
+}
+// "open / check / go to my email" (typed, omnibox, or "Hey Sprig …") → the
+// registered URL. Only fires when the possessive target actually resolves, so
+// on a live site "open my orders" still reaches the web agent untouched.
+function parsePlaceIntent(query) {
+  const t = (query || '').trim();
+  const m = t.match(/^(?:go\s*to|goto|navigate\s+to|visit|open(?:\s+up)?|launch|pull\s+up|bring\s+up|take\s+me\s+to|check|show\s+me)\s+my\s+(.+)$/i)
+    || t.match(/^my\s+(.+)$/i);
+  if (!m) return null;
+  return resolvePlace(m[1].replace(/[.?!,;:'"]+$/, ''));
+}
+// mailto:alice@x.com?subject=…&body=…&cc=… → { to, subject, body, cc, bcc }.
+function parseMailto(href) {
+  try {
+    const u = new URL(href);
+    if (u.protocol !== 'mailto:') return null;
+    const q = u.searchParams;
+    return { to: decodeURIComponent(u.pathname || ''), subject: q.get('subject') || '', body: q.get('body') || '', cc: q.get('cc') || '', bcc: q.get('bcc') || '' };
+  } catch { return null; }
+}
+// A mailto: link — open the registered webmail's compose in a new tab; without
+// one (or with a custom webmail that has no compose URL) hand it to the OS.
+function openMailto(href) {
+  const fields = parseMailto(href);
+  const p = settings.places || {};
+  const wm = fields && WEBMAIL[p.email];
+  if (wm) {
+    const enc = (s) => encodeURIComponent(s || '');
+    openUrlInNewTab(wm.compose({ to: enc(fields.to), subject: enc(fields.subject), body: enc(fields.body), cc: enc(fields.cc), bcc: enc(fields.bcc) }));
+    return;
+  }
+  if (window.chervil.openExternal) window.chervil.openExternal(href);
+}
+// "Email this page" — a live site's URL, or a composed page's published link.
+function emailCurrentPage() {
+  const tab = activeTab();
+  const entry = currentEntry(tab);
+  if (!entry) return;
+  const pageUrl = entry.kind === 'navigate' ? entry.url : entry.publishedUrl;
+  if (!pageUrl) { toast('Publish this page first, then email the link.'); return; }
+  // A navigate entry's stored title is its URL — the webview knows the real one.
+  let subject = entry.title || 'A page from Chervil';
+  if (entry.kind === 'navigate') {
+    const wv = webviews.get(tab.id);
+    try { subject = (wv && wv.getTitle()) || tab.title || subject; } catch { subject = tab.title || subject; }
+  }
+  openMailto('mailto:?subject=' + encodeURIComponent(subject) + '&body=' + encodeURIComponent(pageUrl));
+}
+
 // Detect a "go to / open <site>" navigation intent and resolve it to a URL.
 // Returns the URL string, or null if it isn't a confident navigation request.
 // `strict` (used while a live site is showing) only honors explicit domains and
@@ -5264,6 +5784,20 @@ function buildOmniSuggestions(text) {
     if (`${title} ${url}`.toLowerCase().includes(q)) {
       out.push({ type: 'tab', tabId: t.id, title: title || 'Untitled tab', url });
       if (url) seen.add(url); // don't re-suggest the same page from history/bookmarks
+    }
+  }
+  // Your places — "my em…" or the place's own name surfaces the registered URL.
+  {
+    const bare = q.replace(/^my\s+/, '');
+    const placeDefs = [['email', 'My email'], ['blog', 'My blog'], ['x', 'My X'], ['bluesky', 'My Bluesky'], ['facebook', 'My Facebook'], ['instagram', 'My Instagram'], ['tiktok', 'My TikTok']];
+    for (const [key, title] of placeDefs) {
+      if (out.length >= 6) break;
+      const u = placeUrl(key);
+      if (u && (title.toLowerCase().includes(q) || (bare.length >= 2 && (PLACE_ALIASES[key] || []).some((a) => a.startsWith(bare))))) add(u, title);
+    }
+    for (const ex of (settings.places && settings.places.extras) || []) {
+      if (out.length >= 6) break;
+      if (ex && ex.url && ex.name && ('my ' + ex.name).toLowerCase().includes(q)) add(normalizePlaceUrl(ex.url), `My ${ex.name}`);
     }
   }
   for (const b of bookmarks) { if (out.length >= 6) break; if (b.kind === 'site' && b.url && `${b.title || ''} ${b.url}`.toLowerCase().includes(q)) add(b.url, b.title); }
@@ -5385,6 +5919,21 @@ function handleComposerSubmit(text, opts = {}) {
   if (quizCmd) { buildAndRenderSkill(tab, 'quiz', quizCmd[1].trim(), 'quiz'); return; }
   if (skillMode) { buildAndRenderSkill(tab, skillMode, query, skillMode === 'learn' ? 'lesson' : 'quiz'); return; }
 
+  // On an image-editor tab the composer edits THE IMAGE — "add a red arrow at
+  // the button" must not web-search and compose a new page (or chat). Explicit
+  // navigation still escapes ("open my email", "go to github.com").
+  {
+    const curEd = currentEntry(tab);
+    if (curEd && curEd.imageEditor) {
+      const esc = parsePlaceIntent(query) || parseNavIntent(query, { strict: true });
+      if (esc) { openUrlInTab(esc); return; }
+      els.prompt.value = '';
+      resetPromptHeight();
+      forwardEditToImageEditor(query);
+      return;
+    }
+  }
+
   // "Just a chatbot" mode: a plain conversational reply, no page composed.
   // forceChat routes a single turn to chat (e.g. the extension's "Chervil Chat")
   // without flipping the sticky global toggle; the armed 💬 "Ask about this page"
@@ -5405,13 +5954,42 @@ function handleComposerSubmit(text, opts = {}) {
     return;
   }
 
+  // "Open / check my email|blog|X…" → the registered Your-places URL. Checked
+  // before the generic nav intent (which strips "my" and would send "open my
+  // email" to email.com); only fires when the name resolves to a saved place.
+  const placeNav = parsePlaceIntent(query);
+  if (placeNav) { openUrlInTab(placeNav); return; }
+
   // "Go to / open <site>" navigates to a real URL instead of composing a page.
   // On a live site we stay strict (explicit domains / known names only) so the
   // web agent's own "open …" commands aren't hijacked.
   const navUrl = parseNavIntent(query, { strict: !!(cur && cur.kind === 'navigate') });
   if (navUrl) { openUrlInTab(navUrl); return; }
 
-  if (cur && cur.kind === 'navigate') {
+  // "Open (all pages in) the <name> Collection (in tabs)" → every saved page.
+  {
+    const m = query.match(/^open\s+(?:all\s+)?(?:the\s+)?(?:pages\s+|links\s+|tabs\s+|everything\s+)?(?:in\s+|from\s+)?(?:the\s+)?(.+?)\s+collection(?:\s+in\s+tabs)?[\s.!?]*$/i);
+    const c = m && findCollectionByName(m[1]);
+    if (c) { openCollectionInTabs(c); return; }
+  }
+
+  // A compose that says "based on / from / using the <name> Collection" gets
+  // grounded on that collection: its saved pages are appended as the primary
+  // sources for the web-searching composer to fetch. A match also forces the
+  // compose path — even on a live site, "compose a page based on my Kyoto
+  // Collection" means a new page, not a web-agent action on the current site.
+  let collectionCompose = false;
+  {
+    const m = query.match(/\b(?:based\s+on|from|using|with)\s+(?:the\s+|my\s+)?["“']?(.+?)["”']?\s+collection\b/i);
+    const c = m && findCollectionByName(m[1]);
+    if (c && c.items.length) {
+      collectionCompose = true;
+      query += `\n\nGround this page on my “${c.name}” collection — fetch and use these saved pages as the primary sources:\n`
+        + c.items.map((it) => `- ${it.title && it.title !== it.url ? it.title + ' — ' : ''}${it.url}`).join('\n');
+    }
+  }
+
+  if (!collectionCompose && cur && cur.kind === 'navigate') {
     if (/^\s*(auto-?fill|fill\s+(in|out)?\s*(the|this|my)?\s*form|fill\s+my\s+(details|info|information))\b/i.test(query)) { autofillCurrentForm(); return; }
     startAgent(query);
     return;
@@ -6585,7 +7163,7 @@ function toggleBookmark() {
 }
 // Rebuild a full tab from a bookmark/snapshot, remapping page ids so the restored
 // copy never collides with the still-open original tab.
-function restoreTabSnapshot(snap) {
+function restoreTabSnapshot(snap, opts = {}) {
   const srcPages = Array.isArray(snap.pages) ? snap.pages : [];
   const idMap = new Map();
   for (const p of srcPages) if (p && p.id) idMap.set(p.id, uid());
@@ -6603,14 +7181,20 @@ function restoreTabSnapshot(snap) {
     pages,
     currentId,
     pinned: false,
+    private: !!snap.private, // duplicates of private tabs stay private
   };
-  tabs.push(tab);
+  // Insert next to a requested sibling (Duplicate tab); pinned originals get
+  // their clone just past the pinned region so the invariant holds.
+  let at = opts.afterId ? tabs.findIndex((t) => t.id === opts.afterId) : -1;
+  if (at >= 0 && tabs[at].pinned) at = lastPinnedIndex();
+  if (at >= 0) tabs.splice(at + 1, 0, tab); else tabs.push(tab);
   activeId = tab.id;
   renderTabs();
   renderConversation();
   renderCurrentPage();
   refreshComposer();
   scheduleSave();
+  return tab;
 }
 
 function openBookmark(b) {
@@ -6660,6 +7244,102 @@ function clearTombstone(coll, id) {
   const key = String(id);
   const arr = deletionTombstones[coll];
   if (arr) deletionTombstones[coll] = arr.filter((t) => String(t.id) !== key);
+}
+
+// ---- Collections (Library → Collections) ----
+// A collection is a named working set of web pages gathered on purpose ("Kyoto
+// trip", "GPU reviews") — distinct from Favorites (single starred sites). Sprig
+// can use one as a data source ("compose a page based on the Kyoto Collection")
+// or reopen the whole set ("open all pages in the Kyoto Collection in tabs").
+function findCollection(id) { return collections.find((c) => c.id === id) || null; }
+function findCollectionByName(name) {
+  const n = (name || '').trim().toLowerCase().replace(/^the\s+/, '').replace(/\s+collection$/, '').trim();
+  if (!n) return null;
+  return collections.find((c) => (c.name || '').trim().toLowerCase() === n)
+    || collections.find((c) => (c.name || '').toLowerCase().includes(n))
+    || null;
+}
+function touchCollection(c) { c.updatedAt = Date.now(); scheduleSave(); }
+function refreshCollectionsPanel() {
+  if (els.libraryDrawer.classList.contains('open') && drawerTab === 'collections') renderDrawer();
+}
+async function createCollection() {
+  const name = await showInputSheet({
+    title: 'New collection',
+    subtitle: 'A named set of web pages — Sprig can compose from it or open the whole set in tabs.',
+    placeholder: 'e.g. Kyoto trip research',
+    okLabel: 'Create',
+  });
+  const trimmed = (name || '').trim();
+  if (!trimmed) return null;
+  if (findCollectionByName(trimmed)) { toast(`A collection named “${trimmed}” already exists.`); return null; }
+  const c = { id: uid(), name: trimmed, items: [], createdAt: Date.now(), updatedAt: Date.now() };
+  collections.unshift(c);
+  clearTombstone('collections', c.id);
+  scheduleSave();
+  refreshCollectionsPanel();
+  return c;
+}
+async function renameCollection(c) {
+  const name = await showInputSheet({ title: 'Rename collection', subtitle: c.name, placeholder: c.name, okLabel: 'Rename' });
+  if (name && name.trim()) { c.name = name.trim(); touchCollection(c); refreshCollectionsPanel(); }
+}
+function deleteCollection(id) {
+  const c = findCollection(id);
+  if (!c) return;
+  const n = c.items.length;
+  if (!confirm(`Delete the “${c.name}” collection${n ? ` (${n} page${n === 1 ? '' : 's'})` : ''}? The pages themselves aren’t touched.`)) return;
+  collections = collections.filter((x) => x.id !== id);
+  addTombstone('collections', id);
+  scheduleSave();
+  refreshCollectionsPanel();
+}
+function addToCollection(c, page) {
+  if (!c || !page || !page.url) return false;
+  if (c.items.some((it) => it.url === page.url)) { toast(`Already in “${c.name}”.`); return false; }
+  c.items.push({ id: uid(), url: page.url, title: page.title || page.url, addedAt: Date.now() });
+  touchCollection(c);
+  toast(`Added to “${c.name}” — ${c.items.length} page${c.items.length === 1 ? '' : 's'}.`);
+  refreshCollectionsPanel();
+  return true;
+}
+function removeFromCollection(c, itemId) {
+  c.items = c.items.filter((it) => it.id !== itemId);
+  touchCollection(c);
+  refreshCollectionsPanel();
+}
+function openCollectionInTabs(c) {
+  if (!c || !c.items.length) { toast('That collection is empty.'); return; }
+  closeDrawer();
+  for (const it of c.items) openUrlInNewTab(it.url);
+  toast(`Opened ${c.items.length} page${c.items.length === 1 ? '' : 's'} from “${c.name}”.`);
+}
+// What a tab contributes to a collection: its live site, or its published page.
+function collectionPageForTab(tab) {
+  const entry = currentEntry(tab);
+  if (!entry) return null;
+  if (entry.kind === 'navigate' && entry.url) {
+    let title = tab.title || entry.url;
+    const wv = webviews.get(tab.id);
+    try { title = (wv && wv.getTitle()) || title; } catch { /* keep the tab title */ }
+    return { url: entry.url, title };
+  }
+  if (entry.publishedUrl) return { url: entry.publishedUrl, title: entry.title || 'Chervil page' };
+  return null;
+}
+// Picker sheet: which collection should this page join?
+function chooseCollectionFor(page) {
+  if (!page) { toast('Open a website first — collections gather web pages (or published Chervil pages).'); return; }
+  const actions = collections.map((c) => ({
+    label: `${c.name} (${c.items.length})`,
+    onClick: () => addToCollection(c, page),
+  }));
+  actions.push({
+    label: '＋ New collection…',
+    primary: collections.length === 0,
+    onClick: async () => { const c = await createCollection(); if (c) addToCollection(c, page); },
+  });
+  showActionSheet('Add to Collection', page.title || page.url, actions);
 }
 
 // ---- Favorites (sites-only, on the ★ star) ----
@@ -7279,17 +7959,99 @@ function toggleCollapseAll() {
   renderDrawer();
 }
 
+// Library → Collections: one collapsible group per collection, with per-item
+// rows and header actions (add current page / open all / rename / delete).
+function renderCollectionsPanel(q) {
+  els.libraryList.innerHTML = '';
+  let list = collections;
+  if (q) {
+    list = collections.filter((c) =>
+      (c.name + ' ' + c.items.map((it) => `${it.title} ${it.url}`).join(' ')).toLowerCase().includes(q));
+  }
+  if (!list.length) {
+    const empty = document.createElement('div');
+    empty.className = 'lib-empty';
+    empty.textContent = q
+      ? `No matches for “${librarySearch.trim()}”.`
+      : 'No collections yet. Create one, then add pages from a tab’s right-click menu (“Add to Collection…”). Then try: “Sprig, compose a page based on the <name> Collection” — or “open all pages in the <name> Collection in tabs.”';
+    els.libraryList.appendChild(empty);
+    return;
+  }
+  const mkBtn = (text, title, onClick) => {
+    const b = document.createElement('button');
+    b.className = 'lib-btn';
+    b.textContent = text;
+    b.title = title;
+    b.addEventListener('click', (e) => { e.stopPropagation(); onClick(); });
+    return b;
+  };
+  for (const c of list) {
+    const collapsed = isFolderCollapsed('collections', c.id) && !q;
+    const head = document.createElement('div');
+    head.className = 'lib-folder-head coll-head' + (collapsed ? ' collapsed' : '');
+    const name = document.createElement('span');
+    name.className = 'coll-name';
+    name.textContent = `${collapsed ? '▸' : '▾'} ${c.name} · ${c.items.length}`;
+    name.title = collapsed ? 'Expand' : 'Collapse';
+    head.appendChild(name);
+    const actions = document.createElement('span');
+    actions.className = 'coll-actions';
+    actions.appendChild(mkBtn('＋ Add this page', 'Add the current page to this collection', () => {
+      addToCollection(c, collectionPageForTab(activeTab()));
+    }));
+    actions.appendChild(mkBtn('⧉ Open all', `Open all ${c.items.length} pages in tabs`, () => openCollectionInTabs(c)));
+    actions.appendChild(mkBtn('✎', 'Rename', () => renameCollection(c)));
+    const del = mkBtn('🗑', 'Delete collection', () => deleteCollection(c.id));
+    del.classList.add('danger');
+    actions.appendChild(del);
+    head.appendChild(actions);
+    head.addEventListener('click', () => toggleFolderCollapsed('collections', c.id));
+    els.libraryList.appendChild(head);
+    if (collapsed) continue;
+    if (!c.items.length) {
+      const none = document.createElement('div');
+      none.className = 'coll-item-empty';
+      none.textContent = 'Empty — use “＋ Add this page”, or a tab’s right-click → Add to Collection…';
+      els.libraryList.appendChild(none);
+      continue;
+    }
+    for (const it of c.items) {
+      const row = document.createElement('div');
+      row.className = 'coll-item';
+      const fav = faviconImg(it.url, 'coll-favicon');
+      if (fav) row.appendChild(fav);
+      const meta = document.createElement('div');
+      meta.className = 'coll-item-meta';
+      const t = document.createElement('div');
+      t.className = 'coll-item-title';
+      t.textContent = it.title || it.url;
+      const u = document.createElement('div');
+      u.className = 'coll-item-url';
+      u.textContent = it.url;
+      meta.append(t, u);
+      meta.title = 'Open in a new tab';
+      meta.addEventListener('click', () => { closeDrawer(); openUrlInNewTab(it.url); });
+      row.appendChild(meta);
+      const rm = mkBtn('✕', 'Remove from collection', () => removeFromCollection(c, it.id));
+      row.appendChild(rm);
+      els.libraryList.appendChild(row);
+    }
+  }
+}
+
 function renderDrawer() {
   els.libTabHistory.classList.toggle('active', drawerTab === 'history');
   els.libTabTrash.classList.toggle('active', drawerTab === 'trash');
   if (els.libTabBookmarks) els.libTabBookmarks.classList.toggle('active', drawerTab === 'bookmarks');
   if (els.libTabFavorites) els.libTabFavorites.classList.toggle('active', drawerTab === 'favorites');
+  if (els.libTabCollections) els.libTabCollections.classList.toggle('active', drawerTab === 'collections');
   if (els.libTabSites) els.libTabSites.classList.toggle('active', drawerTab === 'sites');
   if (els.libTabDownloads) els.libTabDownloads.classList.toggle('active', drawerTab === 'downloads');
   els.emptyTrash.hidden = drawerTab !== 'trash';
   if (els.clearSites) els.clearSites.hidden = drawerTab !== 'sites' || !siteHistory.length;
   if (els.clearDownloads) els.clearDownloads.hidden = drawerTab !== 'downloads' || !downloads.length;
   if (els.libNewFolder) els.libNewFolder.hidden = drawerTab !== 'favorites';
+  if (els.libNewCollection) els.libNewCollection.hidden = drawerTab !== 'collections';
   if (els.libCollapseAll) {
     const grpTab = drawerTab === 'favorites' && !librarySearch.trim();
     const folders = grpTab ? foldersInTab(drawerTab) : [];
@@ -7301,6 +8063,15 @@ function renderDrawer() {
   // Select mode only applies to History; leaving History cancels it.
   if (drawerTab !== 'history' && librarySelectMode) { librarySelectMode = false; selectedLibraryIds.clear(); }
   renderSpaceBar();
+
+  // Collections render their own grouped panel (collection → items), not the
+  // shared flat list below.
+  if (drawerTab === 'collections') {
+    if (els.libSelectToggle) els.libSelectToggle.hidden = true;
+    if (els.libSelectBar) els.libSelectBar.hidden = true;
+    renderCollectionsPanel(librarySearch.trim().toLowerCase());
+    return;
+  }
 
   let items = drawerTab === 'history' ? library.history        // Activity: flat, newest-first
     : drawerTab === 'bookmarks' ? savedSpaceItems()            // Saved Pages: the active Space
@@ -7513,8 +8284,45 @@ function closeDrawer() {
 
 // ---- Settings ----
 const AUTOFILL_FIELDS = ['fullName', 'email', 'phone', 'organization', 'address', 'city', 'postal', 'country'];
+const PLACES_FIELDS = ['blog', 'x', 'bluesky', 'facebook', 'instagram', 'tiktok'];
+
+// Your places → extras list (name + URL rows, editable in place).
+function renderPlacesExtras() {
+  const box = document.getElementById('pl-extras');
+  if (!box) return;
+  box.innerHTML = '';
+  const extras = placesObj().extras;
+  extras.forEach((ex, i) => {
+    const row = document.createElement('div');
+    row.className = 'place-extra-row';
+    const name = document.createElement('input');
+    name.type = 'text'; name.placeholder = 'Name (e.g. work portal)'; name.value = ex.name || '';
+    const url = document.createElement('input');
+    url.type = 'text'; url.placeholder = 'https://…'; url.value = ex.url || '';
+    const del = document.createElement('button');
+    del.type = 'button'; del.className = 'lib-btn'; del.textContent = '✕'; del.title = 'Remove this place';
+    name.addEventListener('input', () => { ex.name = name.value.trim(); scheduleSave(); });
+    url.addEventListener('input', () => { ex.url = url.value.trim(); scheduleSave(); });
+    del.addEventListener('click', () => { extras.splice(i, 1); scheduleSave(); renderPlacesExtras(); });
+    row.append(name, url, del);
+    box.appendChild(row);
+  });
+}
+function applyPlacesToUI() {
+  const p = placesObj();
+  for (const k of PLACES_FIELDS) {
+    const el = document.getElementById('pl-' + k);
+    if (el) el.value = p[k] || '';
+  }
+  const kind = document.getElementById('pl-email-kind');
+  const url = document.getElementById('pl-email-url');
+  if (kind) kind.value = p.email || '';
+  if (url) { url.value = p.emailUrl || ''; url.hidden = p.email !== 'custom'; }
+  renderPlacesExtras();
+}
 
 function applySettingsToUI() {
+  applyPlacesToUI();
   for (const k of AUTOFILL_FIELDS) {
     const el = document.getElementById('af-' + k);
     if (el) el.value = (settings.autofill && settings.autofill[k]) || '';
@@ -7553,6 +8361,7 @@ function applySettingsToUI() {
     if (els.wakeThresholdVal) els.wakeThresholdVal.textContent = thr.toFixed(2);
   }
   if (els.wakeConfirmToggle) els.wakeConfirmToggle.checked = settings.wakeConfirm !== false;
+  if (els.noisyModeToggle) els.noisyModeToggle.checked = !!settings.noisyMode;
   if (els.sttKeyInput) els.sttKeyInput.value = '';
   if (els.heroToggle) els.heroToggle.checked = !!settings.heroImages;
   { const ps = document.getElementById('page-style-select'); if (ps) ps.value = settings.pageStyle || 'balanced'; }
@@ -8136,6 +8945,7 @@ const TOOLBAR_BUTTONS = [
   { key: 'readAloud', id: 'read-aloud-btn', label: 'Read aloud (🔊)' },
   { key: 'snip', id: 'snip-btn', label: 'Snip screenshot (✂)' },
   { key: 'sendPhone', id: 'send-phone-btn', label: 'Send to phone (📱)' },
+  { key: 'emailPage', id: 'email-page-btn', label: 'Email this page (✉️)' },
   { key: 'reader', id: 'reader-btn', label: 'Reader view' },
   { key: 'pip', id: 'pip-btn', label: 'Picture-in-picture' },
   { key: 'zoom', id: 'zoom-controls', label: 'Zoom controls' },
@@ -8367,7 +9177,7 @@ function scheduleSave() {
     const persistActiveId = persistTabs.some((t) => t.id === activeId)
       ? activeId
       : (persistTabs[0] && persistTabs[0].id) || null;
-    window.chervil.saveState({ tabs: persistTabs, activeId: persistActiveId, tabGroups, settings, library, bookmarks, bookmarkFolders, bookmarkTombstones, favorites, favoriteFolders, favoriteTombstones, deletionTombstones, siteHistory, downloads, agentAudit, spaces, activeSpaceId, savedSpaces, activeSavedSpaceId, living, schedules, agents, activeAgentId, pipelines, pageStores })
+    window.chervil.saveState({ tabs: persistTabs, activeId: persistActiveId, tabGroups, settings, library, bookmarks, bookmarkFolders, bookmarkTombstones, favorites, favoriteFolders, favoriteTombstones, collections, deletionTombstones, siteHistory, downloads, agentAudit, spaces, activeSpaceId, savedSpaces, activeSavedSpaceId, living, schedules, agents, activeAgentId, pipelines, pageStores })
       .then((r) => { if (r && r.mtimeMs) lastStateMtimeMs = r.mtimeMs; }) // our own write — keep baseline current
       .catch(() => {});
   }, 500);
@@ -8394,6 +9204,7 @@ async function reconcileNow() {
   if (Array.isArray(m.favorites)) favorites = m.favorites;
   if (Array.isArray(m.favoriteFolders)) favoriteFolders = m.favoriteFolders.filter((f) => typeof f === 'string');
   if (Array.isArray(m.favoriteTombstones)) favoriteTombstones = m.favoriteTombstones;
+  if (Array.isArray(m.collections)) collections = m.collections.filter((c) => c && c.id && Array.isArray(c.items));
   if (Array.isArray(m.siteHistory)) siteHistory = m.siteHistory;
   if (m.library && Array.isArray(m.library.history)) {
     library = { history: m.library.history, trash: Array.isArray(m.library.trash) ? m.library.trash : [] };
@@ -8521,6 +9332,7 @@ async function init() {
   if (restored && Array.isArray(restored.favorites)) favorites = restored.favorites;
   if (restored && Array.isArray(restored.favoriteFolders)) favoriteFolders = restored.favoriteFolders.filter((f) => typeof f === 'string');
   if (restored && Array.isArray(restored.favoriteTombstones)) favoriteTombstones = restored.favoriteTombstones;
+  if (restored && Array.isArray(restored.collections)) collections = restored.collections.filter((c) => c && c.id && Array.isArray(c.items));
   if (restored && restored.deletionTombstones && typeof restored.deletionTombstones === 'object') {
     deletionTombstones = { ...deletionTombstones, ...restored.deletionTombstones };
   }
@@ -8575,6 +9387,7 @@ async function init() {
 
   applyTabLayout();
   applySidebarCollapsed();
+  applyTabsBarHidden();
   applyToolbar(); // honor the user's chosen top-bar buttons
   if (migrateSiteBookmarksToFavorites()) scheduleSave(); // websites belong in Favorites now, not Saved Pages
   applyBookmarksBar(); // restore the bookmarks bar (if enabled) + its contents
@@ -8620,6 +9433,270 @@ async function saveCurrentPage() {
   } else if (res && !res.canceled) {
     addMessage(tab, 'bot', `Couldn't save: ${res.error || 'unknown error'}`, 'error');
   }
+}
+
+// ---- EPUB (eBook) export ----
+// The renderer owns sanitization because it has a real DOM: page/lesson HTML is
+// parsed, scripts/applets stripped, inline data: images pulled out as bundled
+// files, and the result serialized to well-formed XHTML (XMLSerializer). The
+// main process (lib/epub.js) then just assembles the .epub container.
+function epubEsc(s) {
+  return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+// resources === null → keep data: images inline (the print-PDF path); an array →
+// extract them into it as bundled files (the EPUB path).
+function epubXhtmlFromHtml(html, resources, seq) {
+  const doc = new DOMParser().parseFromString(html || '', 'text/html');
+  for (const n of doc.querySelectorAll('script, iframe, webview, object, embed, link, noscript, style')) n.remove();
+  for (const el of doc.body.querySelectorAll('*')) {
+    for (const a of [...el.attributes]) {
+      if (/^on/i.test(a.name)) el.removeAttribute(a.name);
+      else if (a.name === 'href' && /^javascript:/i.test(a.value || '')) el.removeAttribute('href');
+    }
+  }
+  for (const img of doc.body.querySelectorAll('img')) {
+    if (!img.getAttribute('alt')) img.setAttribute('alt', '');
+    if (!resources) continue; // inline mode — leave data: URLs in place
+    const m = /^data:(image\/[a-z0-9+.-]+);base64,(.+)$/i.exec(img.getAttribute('src') || '');
+    if (!m) continue;
+    const ext = /png/i.test(m[1]) ? 'png' : /gif/i.test(m[1]) ? 'gif' : /svg/i.test(m[1]) ? 'svg' : 'jpg';
+    const href = `images/img${seq.n++}.${ext}`;
+    resources.push({ href, base64: m[2], mediaType: m[1].toLowerCase() });
+    img.setAttribute('src', href);
+  }
+  const ser = new XMLSerializer();
+  return [...doc.body.childNodes].map((n) => ser.serializeToString(n)).join('');
+}
+
+// A composed page → chapters split on its h1/h2 headings (single chapter if none).
+// opts.inline keeps data: images in the chapter bodies (print-PDF) instead of
+// extracting them as bundled files (EPUB).
+function epubBookFromPage(entry, opts = {}) {
+  const resources = opts.inline ? null : [];
+  const seq = { n: 1 };
+  const bodyX = epubXhtmlFromHtml(entry.html, resources, seq);
+  const doc = new DOMParser().parseFromString(`<body>${bodyX}</body>`, 'text/html');
+  const kids = [...doc.body.childNodes];
+  const heads = kids.filter((n) => n.nodeType === 1 && /^H[12]$/.test(n.tagName));
+  const chapters = [];
+  const ser = new XMLSerializer();
+  if (heads.length >= 2) {
+    let cur = { title: entry.title || 'Introduction', parts: [] };
+    for (const n of kids) {
+      if (n.nodeType === 1 && /^H[12]$/.test(n.tagName)) {
+        if (cur.parts.length) chapters.push(cur);
+        cur = { title: (n.textContent || '').trim() || 'Chapter', parts: [] };
+      }
+      cur.parts.push(ser.serializeToString(n));
+    }
+    if (cur.parts.length) chapters.push(cur);
+  } else {
+    chapters.push({ title: entry.title || 'Chervil page', parts: [bodyX] });
+  }
+  return {
+    title: entry.title || entry.query || 'Chervil page',
+    author: 'Composed with Chervil',
+    language: 'en',
+    description: entry.query || '',
+    chapters: chapters.map((c) => ({ title: c.title, body: c.parts.join('') })),
+    resources: resources || [],
+  };
+}
+
+// A lesson artifact → title page + one chapter per module + sources.
+function epubBookFromLesson(lesson, entry, opts = {}) {
+  const resources = opts.inline ? null : [];
+  const seq = { n: 1 };
+  const chapters = [];
+  const objectives = (lesson.objectives || []).map((o) => `<li>${epubEsc(o)}</li>`).join('');
+  chapters.push({
+    title: lesson.title || 'Lesson',
+    body: `<div class="titlepage">
+<h1>${epubEsc(lesson.title || 'Lesson')}</h1>
+${lesson.subtitle ? `<p class="subtitle">${epubEsc(lesson.subtitle)}</p>` : ''}
+${lesson.summary ? `<p>${epubEsc(lesson.summary)}</p>` : ''}
+${objectives ? `<div class="objectives"><strong>You will learn to:</strong><ul>${objectives}</ul></div>` : ''}
+<p class="meta">${epubEsc([lesson.level, lesson.estMinutes ? `~${lesson.estMinutes} min` : ''].filter(Boolean).join(' · '))}</p>
+<p class="chervil-colophon">Built with Chervil${lesson.authorModel ? ` · ${epubEsc(lesson.authorModel)}` : ''}</p>
+</div>`,
+  });
+  for (const mod of lesson.modules || []) {
+    const parts = [`<h1>${epubEsc(mod.title || 'Module')}</h1>`];
+    if (mod.summary) parts.push(`<p><em>${epubEsc(mod.summary)}</em></p>`);
+    for (const card of mod.cards || []) {
+      if (card.kind === 'concept') {
+        if (card.title) parts.push(`<h2>${epubEsc(card.title)}</h2>`);
+        parts.push(epubXhtmlFromHtml(card.html, resources, seq));
+      } else if (card.kind === 'media' && card.videoId) {
+        parts.push(`<p class="media-link">▶ Watch: <a href="https://www.youtube.com/watch?v=${epubEsc(card.videoId)}">${epubEsc(card.title || card.caption || 'video')}</a>${card.caption && card.caption !== card.title ? ` — ${epubEsc(card.caption)}` : ''}</p>`);
+      } else if (card.kind === 'applet') {
+        parts.push(`<div class="applet-note"><strong>Interactive exercise${card.title ? `: ${epubEsc(card.title)}` : ''}.</strong> ${epubEsc(card.prompt || '')} <em>(Open this lesson in Chervil to try it live.)</em></div>`);
+      } else if (card.kind === 'check') {
+        const opts = (card.options || []).map((o, i) => `<li>${epubEsc(o)}</li>`).join('');
+        const answer = (card.options || [])[card.answerIndex];
+        parts.push(`<h3>Check yourself${card.title ? `: ${epubEsc(card.title)}` : ''}</h3><p>${epubEsc(card.question || '')}</p><ol>${opts}</ol>`
+          + (answer != null ? `<p class="check-answer">Answer: ${epubEsc(answer)}.${card.explanation ? ' ' + epubEsc(card.explanation) : ''}</p>` : ''));
+      } else if (card.kind === 'flashcard') {
+        parts.push(`<dl class="flashcard"><dt>${epubEsc(card.front || '')}</dt><dd>${epubEsc(card.back || '')}</dd></dl>`);
+      }
+    }
+    chapters.push({ title: mod.title || 'Module', body: parts.join('\n') });
+  }
+  const sources = (lesson.sources || []).filter((s) => s && s.url);
+  if (sources.length) {
+    chapters.push({
+      title: 'Sources',
+      body: `<h1>Sources</h1><ul>${sources.map((s) => `<li><a href="${epubEsc(s.url)}">${epubEsc(s.title || s.url)}</a></li>`).join('')}</ul>`,
+    });
+  }
+  return {
+    title: lesson.title || (entry && entry.title) || 'Chervil lesson',
+    author: 'Built with Chervil',
+    language: 'en',
+    description: lesson.summary || lesson.topic || '',
+    chapters,
+    resources: resources || [],
+  };
+}
+
+async function exportCurrentEpub() {
+  const tab = activeTab();
+  const entry = currentEntry(tab);
+  if (!entry || entry.kind !== 'page' || (!entry.html && !(entry.artifact || entry.lesson))) {
+    toast('Open a composed page or lesson first.');
+    return;
+  }
+  if (!window.chervil.exportEpub) { toast('EPUB export isn’t available in this build.'); return; }
+  toast('Exporting eBook…');
+  try {
+    const lesson = entry.artifact || entry.lesson;
+    const book = lesson ? epubBookFromLesson(lesson, entry) : epubBookFromPage(entry);
+    const res = await window.chervil.exportEpub({ book, suggestedName: entry.title || book.title });
+    if (res && res.ok) addMessage(tab, 'bot', `Exported eBook to ${res.path} — EPUB works on Kindle (send or upload to KDP), Apple Books, Kobo, and most readers.`);
+    else if (res && !res.canceled) addMessage(tab, 'bot', `Couldn’t export the eBook: ${res.error || 'unknown error'}`, 'error');
+  } catch (e) {
+    addMessage(tab, 'bot', `Couldn’t export the eBook: ${errText(e, 'unknown error')}`, 'error');
+  }
+}
+
+// ---- Print-ready PDF (book) ----
+// Shares the EPUB pipeline (sanitized chapters via epubBookFrom*), restyled with
+// print typography and rendered at a real trim size with page numbers. Bleed
+// follows KDP's rule: +0.125" width, +0.25" height on the trim.
+const PRINT_TRIM_SIZES = [
+  { key: '6x9', label: '6 × 9 in — trade paperback (KDP standard)', w: 6, h: 9 },
+  { key: '5x8', label: '5 × 8 in — compact paperback', w: 5, h: 8 },
+  { key: 'a5', label: 'A5 (5.83 × 8.27 in)', w: 5.83, h: 8.27 },
+  { key: 'letter', label: 'US Letter (8.5 × 11 in)', w: 8.5, h: 11 },
+];
+
+// High-quality local 2× resample of a data: image (print prep for small images).
+function upscaleDataUrl(dataUrl, maxDim = 4096) {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => {
+      let f = 2;
+      if (Math.max(img.naturalWidth, img.naturalHeight) * f > maxDim) f = maxDim / Math.max(img.naturalWidth, img.naturalHeight);
+      if (f <= 1.05) return resolve(dataUrl);
+      const c = document.createElement('canvas');
+      c.width = Math.round(img.naturalWidth * f);
+      c.height = Math.round(img.naturalHeight * f);
+      const cx = c.getContext('2d');
+      cx.imageSmoothingEnabled = true;
+      cx.imageSmoothingQuality = 'high';
+      cx.drawImage(img, 0, 0, c.width, c.height);
+      resolve(/^data:image\/png/i.test(dataUrl) ? c.toDataURL('image/png') : c.toDataURL('image/jpeg', 0.92));
+    };
+    img.onerror = () => resolve(dataUrl);
+    img.src = dataUrl;
+  });
+}
+
+// Upscale small inline images in an HTML fragment (print target ≈ 300 DPI, so a
+// sub-1200px image on a 4-inch column prints soft — double it).
+async function upscaleInlineImagesHtml(html) {
+  const doc = new DOMParser().parseFromString(`<body>${html}</body>`, 'text/html');
+  for (const img of doc.body.querySelectorAll('img[src^="data:image/"]')) {
+    const src = img.getAttribute('src');
+    const probe = new Image();
+    await new Promise((r) => { probe.onload = r; probe.onerror = r; probe.src = src; });
+    if (probe.naturalWidth && probe.naturalWidth < 1200) {
+      img.setAttribute('src', await upscaleDataUrl(src));
+    }
+  }
+  const ser = new XMLSerializer();
+  return [...doc.body.childNodes].map((n) => ser.serializeToString(n)).join('');
+}
+
+function printBookHtml(book) {
+  const esc = epubEsc;
+  const chapters = book.chapters.map((c) => `<section class="chapter">\n${c.body}\n</section>`).join('\n');
+  return `<!doctype html><html><head><meta charset="utf-8"><title>${esc(book.title)}</title><style>
+  body { font-family: Georgia, "Times New Roman", serif; font-size: 11pt; line-height: 1.5; color: #000; margin: 0; }
+  h1, h2, h3 { font-family: "Helvetica Neue", Arial, sans-serif; line-height: 1.25; break-after: avoid; }
+  h1 { font-size: 1.55em; } h2 { font-size: 1.25em; } h3 { font-size: 1.05em; }
+  p { orphans: 3; widows: 3; }
+  img { max-width: 100%; height: auto; break-inside: avoid; }
+  figure { margin: 1em 0; break-inside: avoid; } figcaption { font-size: .85em; color: #333; }
+  blockquote { margin: 1em 1.5em; padding-left: .8em; border-left: 2.5pt solid #999; }
+  code, pre { font-family: Consolas, Menlo, monospace; font-size: .85em; }
+  pre { white-space: pre-wrap; border: .5pt solid #bbb; padding: .7em; break-inside: avoid; }
+  table { border-collapse: collapse; break-inside: avoid; } td, th { border: .5pt solid #666; padding: .25em .5em; }
+  a { color: #000; text-decoration: none; }
+  .chapter { break-before: page; }
+  .print-titlepage { break-after: page; text-align: center; margin-top: 34%; }
+  .print-titlepage h1 { font-size: 2em; }
+  .print-titlepage .author { margin-top: 2.5em; font-variant: small-caps; letter-spacing: .08em; }
+  .titlepage { text-align: center; margin-top: 20%; } .titlepage .subtitle { font-style: italic; }
+  .titlepage .objectives { text-align: left; display: inline-block; margin-top: 1.5em; }
+  .check-answer { font-style: italic; } .applet-note { border: .75pt dashed #666; padding: .7em; font-size: .9em; }
+  .flashcard dt { font-weight: bold; margin-top: .6em; }
+  </style></head><body>
+  <section class="print-titlepage"><h1>${esc(book.title)}</h1>${book.description ? `<p><em>${esc(book.description)}</em></p>` : ''}<p class="author">${esc(book.author || '')}</p></section>
+  ${chapters}
+  </body></html>`;
+}
+
+async function exportCurrentPrintPdf() {
+  const tab = activeTab();
+  const entry = currentEntry(tab);
+  if (!entry || entry.kind !== 'page' || (!entry.html && !(entry.artifact || entry.lesson))) {
+    toast('Open a composed page or lesson first.');
+    return;
+  }
+  if (!window.chervil.exportPrintPdf) { toast('Print-ready export isn’t available in this build.'); return; }
+  let bleed = false;
+  const actions = PRINT_TRIM_SIZES.map((s, i) => ({
+    label: s.label,
+    primary: i === 0,
+    onClick: async () => {
+      toast('Preparing print-ready PDF…');
+      try {
+        const lesson = entry.artifact || entry.lesson;
+        const book = lesson ? epubBookFromLesson(lesson, entry, { inline: true }) : epubBookFromPage(entry, { inline: true });
+        // Print wants dense pixels — double any small inline images first.
+        for (const c of book.chapters) c.body = await upscaleInlineImagesHtml(c.body);
+        const res = await window.chervil.exportPrintPdf({
+          html: printBookHtml(book),
+          suggestedName: (entry.title || book.title) + ' (print)',
+          widthIn: bleed ? s.w + 0.125 : s.w,
+          heightIn: bleed ? s.h + 0.25 : s.h,
+          pageNumbers: true,
+        });
+        if (res && res.ok) addMessage(tab, 'bot', `Exported print-ready PDF to ${res.path} — ${s.label.split(' — ')[0]}${bleed ? ' + bleed' : ''}, page numbers included. Upload straight to KDP or a print shop.`);
+        else if (res && !res.canceled) addMessage(tab, 'bot', `Couldn’t export the print PDF: ${res.error || 'unknown error'}`, 'error');
+      } catch (e) {
+        addMessage(tab, 'bot', `Couldn’t export the print PDF: ${errText(e, 'unknown error')}`, 'error');
+      }
+    },
+  }));
+  showActionSheet(
+    'Print-ready PDF',
+    'Pick a trim size. Book typography, chapters on fresh pages, page numbers — sized for KDP or any print shop.',
+    actions,
+    null,
+    { checkbox: { label: 'Add bleed (KDP: +0.125" width, +0.25" height) — for images that run to the page edge.', checked: false, onChange: (v) => { bleed = v; } } }
+  );
 }
 
 async function exportCurrentPdf() {
@@ -8785,6 +9862,8 @@ function onExportSelect(e) {
   else if (v === 'pptx') exportCurrentPptx();
   else if (v === 'docx') exportCurrentDocx();
   else if (v === 'xlsx') exportCurrentXlsx();
+  else if (v === 'epub') exportCurrentEpub();
+  else if (v === 'print-book') exportCurrentPrintPdf();
   else if (v === 'lesson') exportCurrentLessonReader();
   else if (v === 'lesson-publish') publishCurrentToWeb();
 }
@@ -8850,6 +9929,53 @@ async function setCloudLive(entry, intervalMs) {
 // Publish any composed page (self-contained interactive HTML — clock, calculator,
 // converter, etc.) to a shareable getchervil.com link (Chervil Pro). Model-dependent
 // applets that call Sprig at runtime won't work when hosted.
+// ---- Share to your networks (post-publish, Your places) ---------------------
+// Sprig DRAFTS a per-network post, then opens that network's web share intent
+// pre-filled in a new tab. The user reviews and clicks Post over there —
+// Chervil NEVER auto-posts (same philosophy as never auto-submitting logins).
+const SHARE_NETWORKS = [
+  { key: 'x', label: 'X', limit: 280, flavor: 'a punchy post for X (Twitter) — max 280 characters INCLUDING the link', intent: (text, url) => 'https://twitter.com/intent/tweet?text=' + encodeURIComponent(text + '\n\n' + url) },
+  { key: 'bluesky', label: 'Bluesky', limit: 300, flavor: 'a friendly, conversational Bluesky post — max 300 characters including the link', intent: (text, url) => 'https://bsky.app/intent/compose?text=' + encodeURIComponent(text + '\n\n' + url) },
+  { key: 'facebook', label: 'Facebook', limit: 900, flavor: 'a warm Facebook post, two or three sentences', intent: (text, url) => 'https://www.facebook.com/sharer/sharer.php?u=' + encodeURIComponent(url) + '&quote=' + encodeURIComponent(text) },
+];
+function configuredShareNetworks() {
+  return SHARE_NETWORKS.filter((n) => placeUrl(n.key));
+}
+
+async function draftShareText(net, title, url) {
+  const prompt = `I just published "${title}" — it's live at ${url}. Write ${net.flavor} announcing it to my followers. Match my voice, at most one tasteful hashtag, no preamble or quotes — reply with ONLY the post text, and do NOT include the link (it's appended automatically).`;
+  try {
+    const resp = await window.chervil.chat({ query: prompt, history: [], profile: settings.profile || null, config: providerConfig() });
+    let text = ((resp && resp.ok && resp.text) || '').trim().replace(/^["“]+|["”]+$/g, '');
+    const room = net.limit - url.length - 2;
+    if (text.length > room) text = text.slice(0, Math.max(0, room - 1)) + '…';
+    return text || title;
+  } catch { return title; }
+}
+
+// The sheet re-offers itself after each share so several networks can be hit in
+// a row (✓ marks the ones already opened). `done` runs once it's dismissed.
+function offerShareToNetworks(title, url, done, shared = new Set()) {
+  const nets = configuredShareNetworks();
+  if (!nets.length) { if (done) done(); return; }
+  const actions = nets.map((n) => ({
+    label: (shared.has(n.key) ? '✓ ' : '') + 'Share to ' + n.label,
+    onClick: async () => {
+      toast(`Sprig is drafting your ${n.label} post…`);
+      const text = await draftShareText(n, title, url);
+      openUrlInNewTab(n.intent(text, url));
+      shared.add(n.key);
+      offerShareToNetworks(title, url, done, shared);
+    },
+  }));
+  showActionSheet(
+    'Share to your networks',
+    'Sprig drafts a post for each network and opens its compose pre-filled — you review and hit Post there. Nothing is ever posted automatically.',
+    actions,
+    done
+  );
+}
+
 async function publishCurrentPage(kind = 'page') {
   const tab = activeTab();
   const entry = currentEntry(tab);
@@ -8878,24 +10004,28 @@ async function publishCurrentPage(kind = 'page') {
       // Pages (not blog posts) can be kept current in the cloud. Auto-offer it unless
       // the user turned the prompt off globally (Settings → Publishing) or already
       // dismissed it for this page — they can still enable it anytime from Publish ☁.
-      if (kind === 'page' && entry.query && entry.publishedId && !entry.cloudLiveMs
-          && settings.cloudLivePrompt !== false && !entry.cloudPromptSkipped) {
-        showActionSheet(
-          'Keep it live in the cloud?',
-          'Auto-refresh this page on a schedule — runs in the cloud even when Chervil is closed (Pro). You can also turn this on anytime later from the ☁ option in Publish.',
-          cloudLiveOptions(entry),
-          () => { entry.cloudPromptSkipped = true; scheduleSave(); },  // dismissed → don't re-ask for this page on re-publish
-          { checkbox: {
-              label: 'Don’t offer this after publishing (manage in Settings → Publishing).',
-              checked: false,
-              onChange: (off) => {
-                settings.cloudLivePrompt = !off;
-                scheduleSave();
-                if (els.cloudLivePrompt) els.cloudLivePrompt.checked = !off;
-              },
-            } }
-        );
-      }
+      const offerCloud = () => {
+        if (kind === 'page' && entry.query && entry.publishedId && !entry.cloudLiveMs
+            && settings.cloudLivePrompt !== false && !entry.cloudPromptSkipped) {
+          showActionSheet(
+            'Keep it live in the cloud?',
+            'Auto-refresh this page on a schedule — runs in the cloud even when Chervil is closed (Pro). You can also turn this on anytime later from the ☁ option in Publish.',
+            cloudLiveOptions(entry),
+            () => { entry.cloudPromptSkipped = true; scheduleSave(); },  // dismissed → don't re-ask for this page on re-publish
+            { checkbox: {
+                label: 'Don’t offer this after publishing (manage in Settings → Publishing).',
+                checked: false,
+                onChange: (off) => {
+                  settings.cloudLivePrompt = !off;
+                  scheduleSave();
+                  if (els.cloudLivePrompt) els.cloudLivePrompt.checked = !off;
+                },
+              } }
+          );
+        }
+      };
+      // Share first (Your places), then the cloud-live offer once that's done.
+      offerShareToNetworks(entry.title || entry.query || 'my new page', res.url, offerCloud);
     } else {
       addMessage(tab, 'bot', `Couldn’t publish: ${(res && res.error) || 'unknown error'}`, 'error');
     }
@@ -8928,6 +10058,7 @@ async function publishCurrentLesson() {
       scheduleSave();
       addMessage(tab, 'bot', `${res.updated ? 'Updated' : 'Published'} — it’s live at ${res.url}`);
       try { await navigator.clipboard.writeText(res.url); toast('Published — link copied to clipboard.'); } catch { toast('Published.'); }
+      offerShareToNetworks(entry.title || 'my new lesson', res.url);
     } else {
       addMessage(tab, 'bot', `Couldn’t publish: ${(res && res.error) || 'unknown error'}`, 'error');
     }
@@ -9139,6 +10270,7 @@ els.tabs.addEventListener('dragover', onTabsDragOver);
 els.tabs.addEventListener('drop', (e) => e.preventDefault());
 els.back.addEventListener('click', goBack);
 els.fwd.addEventListener('click', goForward);
+if (els.reload) els.reload.addEventListener('click', () => reloadTab(activeId));
 els.save.addEventListener('click', saveCurrentPage);
 
 // Back/forward tooltips showing the target page.
@@ -9277,6 +10409,29 @@ for (const k of AUTOFILL_FIELDS) {
   if (el) el.addEventListener('input', () => { settings.autofill = settings.autofill || {}; settings.autofill[k] = el.value.trim(); scheduleSave(); });
 }
 
+// Your places — save on input (URLs only; see placesObj/placeUrl).
+for (const k of PLACES_FIELDS) {
+  const el = document.getElementById('pl-' + k);
+  if (el) el.addEventListener('input', () => { placesObj()[k] = el.value.trim(); scheduleSave(); });
+}
+{
+  const kind = document.getElementById('pl-email-kind');
+  const url = document.getElementById('pl-email-url');
+  if (kind) kind.addEventListener('change', () => {
+    placesObj().email = kind.value;
+    if (url) url.hidden = kind.value !== 'custom';
+    scheduleSave();
+  });
+  if (url) url.addEventListener('input', () => { placesObj().emailUrl = url.value.trim(); scheduleSave(); });
+  const add = document.getElementById('pl-add-extra');
+  if (add) add.addEventListener('click', () => {
+    placesObj().extras.push({ name: '', url: '' });
+    renderPlacesExtras();
+    const rows = document.querySelectorAll('#pl-extras .place-extra-row input');
+    if (rows.length >= 2) rows[rows.length - 2].focus();
+  });
+}
+
 // Listening — "Hey Sprig"
 if (els.wakeToggle) els.wakeToggle.addEventListener('change', async () => {
   settings.wakeEnabled = els.wakeToggle.checked;
@@ -9294,6 +10449,11 @@ if (els.wakeKeyword) els.wakeKeyword.addEventListener('change', () => {
 });
 if (els.wakeConfirmToggle) els.wakeConfirmToggle.addEventListener('change', () => {
   settings.wakeConfirm = els.wakeConfirmToggle.checked; scheduleSave();
+});
+if (els.noisyModeToggle) els.noisyModeToggle.addEventListener('change', () => {
+  settings.noisyMode = els.noisyModeToggle.checked;
+  scheduleSave();
+  if (settings.wakeEnabled) restartWake(); // re-arm with the stricter (or relaxed) engine config
 });
 if (els.wakeThreshold) {
   let wtTimer = null;
@@ -9342,6 +10502,7 @@ if (els.sttKeySave) els.sttKeySave.addEventListener('click', async () => {
 
 // Collapse / show the chat sidebar (full-width page).
 if (els.sidebarToggle) els.sidebarToggle.addEventListener('click', toggleSidebar);
+if (els.tabsToggle) els.tabsToggle.addEventListener('click', toggleTabsBar);
 
 // Tab layout (horizontal strip vs. vertical rail).
 if (els.tabLayoutSelect) els.tabLayoutSelect.addEventListener('change', () => {
@@ -9468,6 +10629,8 @@ if (els.libTabBookmarks) els.libTabBookmarks.addEventListener('click', () => { d
 if (els.libTabFavorites) els.libTabFavorites.addEventListener('click', () => { drawerTab = 'favorites'; renderDrawer(); });
 if (els.libTabSites) els.libTabSites.addEventListener('click', () => { drawerTab = 'sites'; renderDrawer(); });
 if (els.libTabDownloads) els.libTabDownloads.addEventListener('click', () => { drawerTab = 'downloads'; renderDrawer(); });
+if (els.libTabCollections) els.libTabCollections.addEventListener('click', () => { drawerTab = 'collections'; renderDrawer(); });
+if (els.libNewCollection) els.libNewCollection.addEventListener('click', createCollection);
 els.libTabTrash.addEventListener('click', () => { drawerTab = 'trash'; renderDrawer(); });
 if (els.clearSites) els.clearSites.addEventListener('click', clearSiteHistory);
 if (els.clearDownloads) els.clearDownloads.addEventListener('click', clearDownloads);
@@ -9539,6 +10702,7 @@ document.addEventListener('keydown', (e) => {
   else if (e.ctrlKey && e.shiftKey && (e.key === 'b' || e.key === 'B')) { e.preventDefault(); settings.bookmarksBar = !settings.bookmarksBar; applyBookmarksBar(); scheduleSave(); }
   else if (e.ctrlKey && e.key === 't') { e.preventDefault(); newTab(true); }
   else if (e.ctrlKey && e.key === 'w') { e.preventDefault(); if (activeId) closeTab(activeId); }
+  else if ((e.ctrlKey || e.metaKey) && e.shiftKey && (e.key === '\\' || e.key === '|')) { e.preventDefault(); toggleTabsBar(); }
   else if ((e.ctrlKey || e.metaKey) && e.key === '\\') { e.preventDefault(); toggleSidebar(); }
   else if (e.altKey && e.key === 'ArrowLeft') { e.preventDefault(); goBack(); }
   else if (e.altKey && e.key === 'ArrowRight') { e.preventDefault(); goForward(); }
@@ -9609,6 +10773,54 @@ async function handleAppletTool(source, msg) {
       const res = await window.chervil.appletAsk({ prompt, config: providerConfig() });
       if (res && res.ok) reply({ ok: true, result: { text: res.text, sources: res.sources || [] } });
       else reply({ ok: false, error: (res && res.error) || 'Sprig could not answer.' });
+    } else if (msg.name === 'edit_image' || msg.name === 'editor_commit' || msg.name === 'editor_export') {
+      // Snip-editor tools — only honored for a page WE built as an image editor
+      // (an arbitrary composed page must not reach the clipboard/shell/model-edit).
+      const entry = currentEntry(activeTab());
+      if (!entry || !entry.imageEditor) return reply({ ok: false, error: 'Only available in the image editor.' });
+      const image = String((msg.args && msg.args.image) || '');
+      if (!/^data:image\//.test(image)) return reply({ ok: false, error: 'Missing image.' });
+      const name = entry.snipName || 'snip.png';
+      if (msg.name === 'edit_image') {
+        const instruction = String((msg.args && msg.args.instruction) || '').trim();
+        if (!instruction) return reply({ ok: false, error: 'Say what to change.' });
+        const res = window.chervil.editImage
+          ? await window.chervil.editImage({ imageDataUrl: image, instruction, resolution: msg.args && msg.args.resolution === '2k' ? '2k' : '' })
+          : null;
+        if (res && res.ok) reply({ ok: true, result: { image: res.dataUrl } });
+        else reply({ ok: false, error: res && res.error === 'no-image-key' ? 'Add a Grok, OpenAI, or Gemini key in Settings → AI to let Sprig edit images.' : ((res && res.error) || 'Edit failed.') });
+      } else if (msg.name === 'editor_commit') {
+        // Persist the latest image back into the tab's entry (survives restarts).
+        entry.html = imageEditorHtml(image, name);
+        entry.snipImage = image;
+        entry.editorHtmlVersion = IMAGE_EDITOR_HTML_VERSION;
+        scheduleSave();
+        reply({ ok: true, result: {} });
+      } else {
+        const action = (msg.args && msg.args.action) || '';
+        if (action === 'copy') {
+          const blob = await (await fetch(image)).blob();
+          await navigator.clipboard.write([new ClipboardItem({ [blob.type || 'image/png']: blob })]);
+          toast('Image copied.');
+        } else if (action === 'save') {
+          const a = document.createElement('a');
+          a.href = image; a.download = name.replace(/\.png$/i, '') + '-edited.png';
+          document.body.appendChild(a); a.click(); a.remove();
+        } else if (action === 'viewer') {
+          const r = window.chervil.openImage ? await window.chervil.openImage({ dataUrl: image, name }) : null;
+          if (!r || !r.ok) return reply({ ok: false, error: (r && r.error) || 'Couldn’t open the image viewer.' });
+        } else if (action === 'attach') {
+          const im = /^data:([^;]+);base64,(.*)$/.exec(image);
+          if (!im || pendingAttachments.length >= MAX_ATTACH) return reply({ ok: false, error: `Up to ${MAX_ATTACH} files at a time.` });
+          pendingAttachments.push({ id: uid(), name, kind: 'image', data: im[2], mediaType: im[1] || 'image/png' });
+          renderAttachChips();
+          els.prompt.focus();
+          toast('Attached — ask away.');
+        } else {
+          return reply({ ok: false, error: 'Unknown export.' });
+        }
+        reply({ ok: true, result: {} });
+      }
     } else if (msg.name === 'applet') {
       // Build a self-contained interactive widget (HTML) the card renders inline.
       // Cache by prompt for the session so re-opening a lesson (or re-rendering it)
@@ -9769,6 +10981,7 @@ if (els.translateBtn) els.translateBtn.addEventListener('click', openTranslateSh
 if (els.readAloudBtn) els.readAloudBtn.addEventListener('click', readPageAloud);
 if (els.snipBtn) els.snipBtn.addEventListener('click', startSnip);
 if (els.sendPhoneBtn) els.sendPhoneBtn.addEventListener('click', sendTabToPhone);
+if (els.emailPageBtn) els.emailPageBtn.addEventListener('click', emailCurrentPage);
 if (els.pipBtn) els.pipBtn.addEventListener('click', () => togglePictureInPicture());
 
 // Show the running app version in Settings (from the preload bridge), and wire

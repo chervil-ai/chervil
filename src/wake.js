@@ -26,6 +26,7 @@
   let embBuf = [];   // Float32Array(96) rows
   let framesSinceEmb = 0;
   let lastDetect = 0;
+  let hitStreak = 0; // consecutive scores ≥ threshold (debounce — see below)
   let queue = [], draining = false;
 
   function available() { return typeof window.__ortReady !== 'undefined'; }
@@ -85,9 +86,20 @@
         if (embBuf.length >= WW_FRAMES) {
           const score = await runWW(ort, embBuf.slice(embBuf.length - WW_FRAMES));
           const now = Date.now();
-          if (score >= (cfg.threshold || 0.5) && now - lastDetect > (cfg.cooldownMs || 2500)) {
-            lastDetect = now;
-            try { cfg.onDetect && cfg.onDetect({ score }); } catch (_) { /* ignore */ }
+          const thr = cfg.threshold || 0.5;
+          // Debounce: a real utterance holds a high score across consecutive
+          // ~80 ms score frames; a spurious blip (TV audio) usually spikes once.
+          // Require cfg.minHits consecutive hits before firing. Scores in the
+          // hysteresis band (0.6×thr .. thr) neither extend nor reset the streak.
+          if (score >= thr) {
+            hitStreak++;
+            if (hitStreak >= Math.max(1, cfg.minHits || 1) && now - lastDetect > (cfg.cooldownMs || 2500)) {
+              lastDetect = now;
+              hitStreak = 0;
+              try { cfg.onDetect && cfg.onDetect({ score }); } catch (_) { /* ignore */ }
+            }
+          } else if (score < thr * 0.6) {
+            hitStreak = 0;
           }
         }
       }
@@ -147,12 +159,12 @@
     // Keep the graph pulling without making noise.
     workletNode.connect(audioCtx.destination);
 
-    melBuf = []; embBuf = []; framesSinceEmb = 0; queue = [];
+    melBuf = []; embBuf = []; framesSinceEmb = 0; hitStreak = 0; queue = [];
     running = true; paused = false;
   }
 
   function pause() { paused = true; }
-  function resume() { paused = false; melBuf = []; embBuf = []; framesSinceEmb = 0; queue = []; }
+  function resume() { paused = false; melBuf = []; embBuf = []; framesSinceEmb = 0; hitStreak = 0; queue = []; }
 
   async function stop() {
     running = false; paused = false;

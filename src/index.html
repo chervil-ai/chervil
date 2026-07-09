@@ -29,12 +29,16 @@
       <button data-act="new">New tab</button>
       <button data-act="new-private">New private tab</button>
       <button data-act="new-window">New window</button>
+      <button data-act="reload">Reload</button>
+      <button data-act="duplicate">Duplicate tab</button>
+      <button data-act="collect">Add to Collection…</button>
       <button data-act="pin">Pin tab</button>
       <button data-act="group">Add to group…</button>
       <button data-act="close">Close tab</button>
       <button data-act="others">Close other tabs</button>
       <button data-act="right">Close tabs to the right</button>
       <div class="ctx-sep"></div>
+      <button data-act="hidebar">Hide tab bar</button>
       <button data-act="layout">Switch to vertical tabs</button>
       <button data-act="select">Select tabs…</button>
       <button data-act="all" class="ctx-danger">Close all tabs</button>
@@ -105,8 +109,10 @@
     <main id="canvas">
       <div id="omnibar">
         <button id="sidebar-toggle" class="omni-btn" title="Hide chat sidebar (Ctrl+\)" aria-pressed="false"><svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="M9 4 H5.5 A2.5 2.5 0 0 0 3 6.5 V17.5 A2.5 2.5 0 0 0 5.5 20 H9 Z" fill="currentColor" stroke="none"/><path d="M9 4v16"/></svg></button>
+        <button id="tabsbar-toggle" class="omni-btn" title="Hide tab bar (Ctrl+Shift+\)" aria-pressed="false"><svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="M3 9 V6.5 A2.5 2.5 0 0 1 5.5 4 H18.5 A2.5 2.5 0 0 1 21 6.5 V9 Z" fill="currentColor" stroke="none"/><path d="M3 9h18"/></svg></button>
         <button id="back-btn" class="omni-btn" title="Back" disabled>‹</button>
         <button id="fwd-btn" class="omni-btn" title="Forward" disabled>›</button>
+        <button id="reload-btn" class="omni-btn" title="Reload page" disabled>⟳</button>
         <input id="page-title" class="omnibox" value="Welcome to Chervil" spellcheck="false"
                autocomplete="off" autocapitalize="off"
                title="Enter a URL, ask Sprig, or type a command (/learn, /quiz) — Ctrl+L to focus"
@@ -125,6 +131,7 @@
           <button id="read-aloud-btn" class="omni-btn" title="Read this page aloud (select text to read just that)" disabled>🔊</button>
           <button id="snip-btn" class="omni-btn" title="Snip a screenshot — ask Sprig, copy, or save">✂</button>
           <button id="send-phone-btn" class="omni-btn" title="Send this page to your phone (QR)" disabled>📱</button>
+          <button id="email-page-btn" class="omni-btn" title="Email this page" disabled>✉️</button>
           <button id="reader-btn" class="omni-btn" title="Reader view — declutter this page" disabled>📖</button>
           <button id="pip-btn" class="omni-btn" title="Picture-in-picture (pop out the video)" disabled>📺</button>
           <button id="save-btn" class="omni-btn text" title="Save this page to disk" disabled>⤓ <span class="lbl">Save</span></button>
@@ -207,6 +214,8 @@
             <option value="pptx">PowerPoint (.pptx)</option>
             <option value="docx">Word (.docx)</option>
             <option value="xlsx">Excel (.xlsx)</option>
+            <option value="epub">📚 eBook — EPUB / Kindle (.epub)</option>
+            <option value="print-book">🖨 Print-ready PDF — book (.pdf)</option>
             <option value="lesson">📱 Mobile lesson (.html)</option>
             <option value="lesson-publish">🌐 Publish to web (Pro)</option>
           </select>
@@ -627,6 +636,10 @@
             <input id="wake-confirm-toggle" type="checkbox" />
             <span>Confirm before composing from a wake word — shows what Sprig heard and waits for your OK (auto-cancels after a few seconds). <strong>Recommended in a noisy room</strong> so a false trigger can’t compose a page on its own.</span>
           </label>
+          <label class="toggle-row">
+            <input id="noisy-mode-toggle" type="checkbox" />
+            <span><strong>Noisy room mode</strong> — for a TV, music, or chatter that never stops. Sprig demands a much clearer “Hey Sprig” (held across several frames, with a longer cool-down), ignores room audio that never rises above the background, and always confirms before composing.</span>
+          </label>
         </div>
       </section>
 
@@ -698,6 +711,31 @@
       </section>
 
       <section class="setting-group" data-sgroup="you">
+        <h3>Your places</h3>
+        <p class="group-hint">Register your personal corners of the web — then say “open my email” (typed, omnibox, or “Hey Sprig”), get one-click shortcuts on the welcome screen, have mailto: links open your webmail, and share what you publish to your networks. URLs only — logins stay in the password vault.</p>
+        <div class="places-grid">
+          <div class="place-email-row">
+            <label for="pl-email-kind">Email</label>
+            <select id="pl-email-kind">
+              <option value="">Not set</option>
+              <option value="gmail">Gmail</option>
+              <option value="outlook">Outlook.com</option>
+              <option value="custom">Other webmail (URL)</option>
+            </select>
+            <input id="pl-email-url" type="text" placeholder="https://webmail.example.com" hidden />
+          </div>
+          <input id="pl-blog" type="text" placeholder="Blog URL" autocomplete="off" />
+          <input id="pl-x" type="text" placeholder="X (Twitter) profile URL" autocomplete="off" />
+          <input id="pl-bluesky" type="text" placeholder="Bluesky profile URL" autocomplete="off" />
+          <input id="pl-facebook" type="text" placeholder="Facebook profile URL" autocomplete="off" />
+          <input id="pl-instagram" type="text" placeholder="Instagram profile URL" autocomplete="off" />
+          <input id="pl-tiktok" type="text" placeholder="TikTok profile URL" autocomplete="off" />
+        </div>
+        <div id="pl-extras"></div>
+        <button id="pl-add-extra" type="button" class="lib-btn">＋ Add another place</button>
+      </section>
+
+      <section class="setting-group" data-sgroup="you">
         <h3>About you (personal memory)</h3>
         <p class="group-hint">Tell Sprig about yourself — location, interests, work, preferences, how you like answers. Sprig uses this to tailor every page it composes (kept on this machine, sent only to your chosen model).</p>
         <textarea id="profile-input" class="profile-input" rows="5"
@@ -750,6 +788,7 @@
           <button id="lib-tab-bookmarks" class="drawer-tab">Saved Pages</button>
           <button id="lib-tab-history" class="drawer-tab active">Activity</button>
           <button id="lib-tab-favorites" class="drawer-tab">Favorites</button>
+          <button id="lib-tab-collections" class="drawer-tab">Collections</button>
           <button id="lib-tab-downloads" class="drawer-tab">Downloads</button>
           <button id="lib-tab-sites" class="drawer-tab">History</button>
           <button id="lib-tab-trash" class="drawer-tab">Trash</button>
@@ -757,6 +796,7 @@
         <div class="drawer-head-right">
           <button id="lib-import-page" class="lib-btn" title="Import a shared Chervil page (.chervil)">⤒ Import page</button>
           <button id="lib-new-folder" class="lib-btn" title="Create a folder" hidden>+ Folder</button>
+          <button id="lib-new-collection" class="lib-btn" title="Create a collection" hidden>+ Collection</button>
           <button id="lib-collapse-all" class="lib-btn" hidden>Collapse all</button>
           <button id="lib-select-toggle" class="lib-btn" hidden>Select</button>
           <button id="clear-sites" class="lib-btn danger" hidden>Clear history</button>

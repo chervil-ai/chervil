@@ -61,6 +61,14 @@ contextBridge.exposeInMainWorld('chervil', {
   generateHero: (payload) => ipcRenderer.invoke('chervil:generate-hero', payload),
   /** Whether an image-capable key (OpenAI/Gemini) is configured. */
   imageKeyStatus: () => ipcRenderer.invoke('chervil:image-key-status'),
+  /** AI-edit an image from a natural-language instruction (snip editor). */
+  editImage: (payload) => ipcRenderer.invoke('chervil:edit-image', payload),
+  /** Export a pre-sanitized book (chapters + images) as an .epub file. */
+  exportEpub: (payload) => ipcRenderer.invoke('chervil:export-epub', payload),
+  /** Export book HTML as a print-ready PDF at an exact trim size. */
+  exportPrintPdf: (payload) => ipcRenderer.invoke('chervil:export-print-pdf', payload),
+  /** Open an image (data: URL) in the OS-registered image viewer. */
+  openImage: (payload) => ipcRenderer.invoke('chervil:open-image', payload),
 
   /** Credential vault (RFC 0008): passphrase-gated password store. Plaintext
    *  passwords are only returned by reveal/forOrigin, and only while unlocked. */

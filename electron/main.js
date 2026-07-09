@@ -11,9 +11,16 @@ const { app, BrowserWindow, ipcMain, dialog, safeStorage, Notification, Tray, Me
 // renders as mojibake in the Windows console).
 require('dotenv').config({ path: path.join(__dirname, '..', '.env'), quiet: true });
 
+// Dev: `--profile-dir=<path>` runs this build with its own profile, so it can
+// boot beside an installed Chervil (separate userData ⇒ separate instance lock)
+// without touching the real profile. Must be set before the lock is requested.
+const profileArg = process.argv.find((a) => a.startsWith('--profile-dir='));
+if (profileArg) app.setPath('userData', path.resolve(profileArg.slice('--profile-dir='.length)));
+
 const QRCode = require('qrcode');
 const { runAgent, runChat, runTranslate, runAgentTurn, runOrchestrator, runAppletAsk, runComposeApplet, runListModels, runAgentStep, runAgentPlan, runExtractSlides, runExtractDoc, runExtractSheets, runSynthesizeAgent } = require('../lib/agent');
-const { generateHeroImage } = require('../lib/images');
+const { generateHeroImage, editImage } = require('../lib/images');
+const { buildEpub } = require('../lib/epub');
 const { getSkill } = require('../lib/skills');
 const { createVault } = require('../lib/vault');
 const { createSitePermissions, MANAGED_PERMISSIONS } = require('../lib/sitePermissions');
@@ -1217,6 +1224,46 @@ ipcMain.handle('chervil:generate-hero', async (_event, payload) => {
   }
 });
 
+// AI image edit for the in-Chervil snip editor (BYO Grok/OpenAI/Gemini key).
+ipcMain.handle('chervil:edit-image', async (_event, payload) => {
+  try {
+    const { imageDataUrl, instruction } = payload || {};
+    if (!imageDataUrl || !instruction) return { ok: false, error: 'missing-args' };
+    const dataUrl = await editImage({
+      imageDataUrl,
+      instruction: String(instruction).slice(0, 2000),
+      grokKey: savedKeys.grok || '',
+      openaiKey: savedKeys.openai || '',
+      geminiKey: savedKeys.gemini || '',
+      resolution: payload && payload.resolution === '2k' ? '2k' : '',
+    });
+    if (!dataUrl) return { ok: false, error: 'no-image-key' };
+    return { ok: true, dataUrl };
+  } catch (err) {
+    return { ok: false, error: String(err && err.message ? err.message : err) };
+  }
+});
+
+// Open an image (data: URL) in the Windows-registered image viewer: write it to
+// a temp file and hand it to the shell.
+ipcMain.handle('chervil:open-image', async (_event, payload) => {
+  try {
+    const { dataUrl, name } = payload || {};
+    const m = /^data:([^;]+);base64,(.*)$/.exec(String(dataUrl || ''));
+    if (!m || !m[2]) return { ok: false, error: 'bad-image' };
+    const dir = path.join(os.tmpdir(), 'chervil-snips');
+    fs.mkdirSync(dir, { recursive: true });
+    const safe = String(name || 'snip.png').replace(/[^\w.-]+/g, '_').replace(/^_+/, '') || 'snip.png';
+    const file = path.join(dir, safe);
+    fs.writeFileSync(file, Buffer.from(m[2], 'base64'));
+    const err = await shell.openPath(file);
+    if (err) return { ok: false, error: err };
+    return { ok: true, file };
+  } catch (err) {
+    return { ok: false, error: String(err && err.message ? err.message : err) };
+  }
+});
+
 // Whether an image-capable key (OpenAI, Gemini, or Grok) is configured —
 // Settings uses this to show the hero-image toggle's availability.
 ipcMain.handle('chervil:image-key-status', async () => {
@@ -2237,6 +2284,68 @@ ipcMain.handle('chervil:open-page-file', async (event) => {
 });
 
 // --- Export a composed page as PDF --------------------------------------
+// EPUB ebook export — the renderer sends a pre-sanitized book (XHTML chapters +
+// bundled images); this assembles the .epub (lib/epub.js) and saves it.
+ipcMain.handle('chervil:export-epub', async (event, payload) => {
+  const { book, suggestedName } = payload || {};
+  if (!book) return { ok: false, error: 'Nothing to export.' };
+  const win = BrowserWindow.fromWebContents(event.sender);
+  const safe = String(suggestedName || book.title || 'chervil-book')
+    .replace(/[^a-z0-9\-_ ]+/gi, '').trim().slice(0, 80) || 'chervil-book';
+  const { canceled, filePath } = await dialog.showSaveDialog(win, {
+    title: 'Export eBook (EPUB)',
+    defaultPath: `${safe}.epub`,
+    filters: [{ name: 'EPUB eBook', extensions: ['epub'] }],
+  });
+  if (canceled || !filePath) return { ok: false, canceled: true };
+  try {
+    fs.writeFileSync(filePath, buildEpub(book));
+    return { ok: true, path: filePath };
+  } catch (err) {
+    return { ok: false, error: String(err && err.message ? err.message : err) };
+  }
+});
+
+// Print-ready (book) PDF: exact trim size in inches, page numbers in the footer.
+// The renderer sends fully-restyled book HTML (see printBookHtml).
+ipcMain.handle('chervil:export-print-pdf', async (event, payload) => {
+  const { html, suggestedName, widthIn, heightIn, pageNumbers } = payload || {};
+  if (!html) return { ok: false, error: 'Nothing to export.' };
+  const w = Math.min(14, Math.max(3, Number(widthIn) || 6));
+  const h = Math.min(20, Math.max(3, Number(heightIn) || 9));
+  const win = BrowserWindow.fromWebContents(event.sender);
+  const safe = String(suggestedName || 'chervil-book')
+    .replace(/[^a-z0-9\-_ ()]+/gi, '').trim().slice(0, 80) || 'chervil-book';
+  const { canceled, filePath } = await dialog.showSaveDialog(win, {
+    title: 'Export print-ready PDF',
+    defaultPath: `${safe}.pdf`,
+    filters: [{ name: 'PDF', extensions: ['pdf'] }],
+  });
+  if (canceled || !filePath) return { ok: false, canceled: true };
+  const tmp = path.join(os.tmpdir(), `chervil-print-${Date.now()}.html`);
+  const printWin = new BrowserWindow({ show: false, webPreferences: { sandbox: true, javascript: false } });
+  try {
+    fs.writeFileSync(tmp, html, 'utf8');
+    await printWin.loadFile(tmp);
+    const pdf = await printWin.webContents.printToPDF({
+      printBackground: true,
+      pageSize: { width: w, height: h },
+      margins: { top: 0.7, bottom: 0.7, left: 0.75, right: 0.75 },
+      displayHeaderFooter: !!pageNumbers,
+      headerTemplate: '<div></div>',
+      footerTemplate: '<div style="width:100%;text-align:center;font-size:8.5px;font-family:Georgia,serif;color:#333;"><span class="pageNumber"></span></div>',
+      preferCSSPageSize: false,
+    });
+    fs.writeFileSync(filePath, pdf);
+    return { ok: true, path: filePath };
+  } catch (err) {
+    return { ok: false, error: String(err && err.message ? err.message : err) };
+  } finally {
+    try { printWin.destroy(); } catch { /* ignore */ }
+    try { fs.unlinkSync(tmp); } catch { /* ignore */ }
+  }
+});
+
 ipcMain.handle('chervil:export-pdf', async (event, payload) => {
   const { html, suggestedName } = payload || {};
   if (!html) return { ok: false, error: 'Nothing to export.' };
