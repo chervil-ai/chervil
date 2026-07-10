@@ -303,6 +303,39 @@ function touchWebview(tabId) {
   if (oldest) destroyWebview(oldest);
 }
 
+// Cold-start pre-warm for pinned tabs. Restored tabs are inert data: renderSite
+// creates the <webview> and fires the load lazily on first activation, so every
+// morning the first click on each pinned tab waits through a full reload. Pinned
+// tabs are precisely the always-open ones, so we warm them in the background right
+// after launch — create their webviews and start loading while hidden, staggered
+// so a dozen pages don't hit the network at once (and don't starve the active tab).
+// Clicking a pinned tab then reveals an already-loaded page. No token cost: this is
+// just loading live sites the user will open anyway.
+function prewarmPinnedTabs() {
+  const pending = tabs.filter((t) => {
+    if (!t.pinned || t.id === activeId || webviews.has(t.id)) return false; // active already loaded; skip warm ones
+    const entry = currentEntry(t);
+    return entry && entry.kind === 'navigate' && entry.url; // live sites only (composed pages need no webview)
+  });
+  // Stay under the live-webview cap: the active tab holds one slot, warm the rest
+  // up to the cap. Any extra pinned tabs stay lazy (the LRU would evict them anyway).
+  const warmNow = pending.slice(0, Math.max(0, MAX_LIVE_WEBVIEWS - 1));
+  let i = 0;
+  const warmNext = () => {
+    const tab = warmNow[i++];
+    if (tab && tabs.includes(tab) && !webviews.has(tab.id)) { // may have closed/navigated while we waited
+      const entry = currentEntry(tab);
+      if (entry && entry.kind === 'navigate' && entry.url) {
+        const wv = ensureWebview(tab);      // created hidden; loads in the background
+        wv.__lastShown = Date.now();        // treat as recent so a genuinely-old tab is evicted first
+        try { if (!wv.getAttribute('src')) wv.setAttribute('src', entry.url); } catch { /* ignore */ }
+      }
+    }
+    if (i < warmNow.length) setTimeout(warmNext, 450);
+  };
+  if (warmNow.length) setTimeout(warmNext, 600); // let the active tab paint first
+}
+
 // Per-webview events, with the owning tab bound in the closure — a background
 // site that redirects must update ITS tab, never whichever tab is active.
 function attachWebviewEvents(wv, tabId) {
@@ -1264,7 +1297,13 @@ function renderGroupHeader(g) {
   const el = document.createElement('div');
   el.className = 'tab-group-head' + (g.collapsed ? ' collapsed' : '');
   el.style.setProperty('--group-color', g.color || TAB_GROUP_COLORS[0]);
-  el.textContent = g.collapsed ? `${g.name || 'Group'} (${count})` : (g.name || 'Group');
+  const caret = document.createElement('span');
+  caret.className = 'tab-group-caret';
+  caret.textContent = g.collapsed ? '▸' : '▾';
+  const label = document.createElement('span');
+  label.className = 'tab-group-label';
+  label.textContent = g.collapsed ? `${g.name || 'Group'} (${count})` : (g.name || 'Group');
+  el.append(caret, label);
   el.title = g.collapsed ? 'Click to expand' : 'Click to collapse — right-click for options';
   el.addEventListener('click', () => toggleGroupCollapsed(g.id));
   el.addEventListener('contextmenu', (e) => { e.preventDefault(); e.stopPropagation(); openGroupMenu(g.id); });
@@ -7311,8 +7350,14 @@ function removeFromCollection(c, itemId) {
 function openCollectionInTabs(c) {
   if (!c || !c.items.length) { toast('That collection is empty.'); return; }
   closeDrawer();
-  for (const it of c.items) openUrlInNewTab(it.url);
-  toast(`Opened ${c.items.length} page${c.items.length === 1 ? '' : 's'} from “${c.name}”.`);
+  // Gather the opened pages under a tab group named after the collection, so the
+  // whole set stays visually together (and can be collapsed away as one).
+  const group = createTabGroup(c.name);
+  for (const it of c.items) {
+    openUrlInNewTab(it.url);   // creates + activates the new tab
+    moveTabToGroup(activeId, group.id);
+  }
+  toast(`Opened ${c.items.length} page${c.items.length === 1 ? '' : 's'} from “${c.name}” in a group.`);
 }
 // What a tab contributes to a collection: its live site, or its published page.
 function collectionPageForTab(tab) {
@@ -9399,6 +9444,7 @@ async function init() {
   renderTabs();
   renderConversation();
   renderCurrentPage();
+  prewarmPinnedTabs(); // warm restored pinned tabs in the background so morning clicks are instant
   refreshComposer();
   els.prompt.focus();
 

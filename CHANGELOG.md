@@ -6,6 +6,81 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.17.0] — 2026-07-10
+
+A polish release aimed at the friction you feel every single morning. Your
+pinned tabs now warm up in the background the moment Chervil launches, so the
+first click on each one shows a loaded page instead of a spinner. Tab groups
+grew a visible fold arrow so it's obvious they collapse. And opening a whole
+Collection now drops its pages into a tab group named after the Collection, so
+your working set arrives already organized.
+
+### Added
+- **Pinned tabs pre-warm on launch.** Restored tabs used to load lazily — the
+  first time you clicked each one after starting Chervil, its page reloaded from
+  scratch. Now your **pinned** tabs load quietly in the background right after
+  launch (staggered so they don't all hit the network at once, and capped so
+  they don't crowd out the tab you're actually using). Clicking through your
+  morning tabs is instant. Costs nothing extra — it's just loading sites you
+  were about to open anyway.
+- **Open all → a named group.** **⧉ Open all** on a Library Collection now opens
+  its pages into a **tab group named after the Collection**, so the whole set
+  stays together (and folds away as one) instead of scattering across the strip.
+
+### Changed
+- **Tab groups show a fold arrow.** A group's header now carries a **▾ / ▸**
+  chevron, so it's obvious at a glance that clicking it collapses and expands the
+  group. (The collapse behavior itself is unchanged — this just makes it
+  discoverable.)
+
+## [0.16.0] — 2026-07-09
+
+Your places, Collections, and a book press. This release teaches Chervil where
+*you* live on the web, gives you working sets of pages that Sprig can compose
+from, and turns any lesson or page into a real, publishable book.
+
+### Added — Your places
+- **Your places** (Settings → You). Register your webmail, blog, and socials by
+  URL; then *"open my email"* / *"check my blog"* works typed, from the omnibox,
+  or by voice, and your places show up in omnibox suggestions and as welcome-
+  screen tiles.
+- **mailto: links open your webmail** compose window in a tab, pre-addressed —
+  no desktop mail app required — plus a ✉️ **Email this page** button.
+- **Share to your networks.** Publish a page, blog post, or lesson and Sprig
+  drafts a tailored post for each network and opens its compose box pre-filled.
+  You always press Post yourself — Chervil never posts on your behalf.
+
+### Added — Collections
+- **Collections** — named working sets of pages, built from any tab's right-click
+  **Add to Collection…**, living in **Library → Collections** and syncing with
+  folder sync. Reopen the whole set in tabs, or use a Collection as a **data
+  source**: *"compose a page based on the Kyoto Collection"* grounds a new page
+  on your saved pages.
+
+### Added — a book press
+- **eBook export (EPUB / Kindle).** Any lesson or composed page becomes a proper
+  chaptered EPUB — the format Kindle, Apple Books, Kobo, and KDP accept.
+- **Print-ready PDF** at true trim sizes (6×9, 5×8, A5, Letter) with optional
+  KDP-spec bleed, book typography, chapter breaks, and page numbers.
+- **Image upscaling for print** — the snip editor gained **⤴ Upscale 2×** (on-
+  device resample) and **✨ Enhance 2×** (AI upscaling through your image key);
+  the print exporter doubles small images so they don't print soft.
+- **The snip editor grew up** — open a snip in Chervil's own **image editor**
+  (text, erase, crop, undo, all offline) with an *Ask Sprig* box for AI edits.
+
+### Changed
+- **"Hey Sprig" in a noisy room.** Wake detection now needs a sustained match,
+  command capture tracks the room's noise floor, and a wake with no speech is
+  discarded untranscribed — plus a **Noisy room mode** toggle that turns all of
+  it up and always confirms before composing.
+
+### Fixed
+- **Background tabs really stay alive now.** A CSS one-liner was quietly
+  detaching background tabs, so switching still reloaded the page. Fixed —
+  switching is instant, scroll holds, and audio keeps playing. Also added a **⟳
+  reload button**, **Reload** / **Duplicate tab** on the tab menu, and a
+  hideable tab bar (**Ctrl+Shift+\\**).
+
 ## [0.15.0] — 2026-07-08
 
 The big one: a real multi-tab engine, and Sprig on every page. Until today,
