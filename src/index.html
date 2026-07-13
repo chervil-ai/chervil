@@ -31,6 +31,7 @@
       <button data-act="new-window">New window</button>
       <button data-act="reload">Reload</button>
       <button data-act="duplicate">Duplicate tab</button>
+      <button data-act="mute">Mute tab</button>
       <button data-act="collect">Add to Collection…</button>
       <button data-act="pin">Pin tab</button>
       <button data-act="group">Add to group…</button>
@@ -132,6 +133,7 @@
           <button id="snip-btn" class="omni-btn" title="Snip a screenshot — ask Sprig, copy, or save">✂</button>
           <button id="send-phone-btn" class="omni-btn" title="Send this page to your phone (QR)" disabled>📱</button>
           <button id="email-page-btn" class="omni-btn" title="Email this page" disabled>✉️</button>
+          <button id="share-fedica-btn" class="omni-btn" title="Share this page (Fedica, AddToAny…)" disabled>📣</button>
           <button id="reader-btn" class="omni-btn" title="Reader view — declutter this page" disabled>📖</button>
           <button id="pip-btn" class="omni-btn" title="Picture-in-picture (pop out the video)" disabled>📺</button>
           <button id="save-btn" class="omni-btn text" title="Save this page to disk" disabled>⤓ <span class="lbl">Save</span></button>
@@ -355,6 +357,23 @@
       </section>
 
       <section class="setting-group" data-sgroup="browser">
+        <h3>Sharing</h3>
+        <p class="group-hint">Choose which services appear on the <strong>📣 Share</strong> button and the post-publish share sheet. Sprig composes the post; you review and post it — nothing is shared automatically.</p>
+        <label class="toggle-row">
+          <input type="checkbox" id="share-fedica-toggle" checked />
+          <span>Fedica <small>— opens Fedica's composer pre-filled to schedule (needs a Fedica account)</small></span>
+        </label>
+        <label class="toggle-row">
+          <input type="checkbox" id="share-addtoany-toggle" checked />
+          <span>AddToAny <small>— share to 100+ networks, no extra account needed</small></span>
+        </label>
+        <label class="toggle-row">
+          <input type="checkbox" id="share-popup-toggle" checked />
+          <span>Open share composers in a popup window <small>— uncheck to open in a tab instead</small></span>
+        </label>
+      </section>
+
+      <section class="setting-group" data-sgroup="browser">
         <h3>Site permissions</h3>
         <p class="group-hint">Chervil asks per site before a page can use your <strong>camera &amp; microphone</strong>, <strong>location</strong>, or <strong>notifications</strong>, and remembers your answer. Review or revoke those choices here.</p>
         <div id="site-perms-panel" class="site-perms-panel"><small class="field-note">No site permissions saved yet.</small></div>
@@ -553,6 +572,17 @@
             <span>After publishing a page, offer to keep it live in the cloud (auto-refresh on a schedule). Turn this off to stop the prompt — you can still enable it anytime from the ☁ option in <b>Publish</b>.</span>
           </label>
         </div>
+      </section>
+
+      <section class="setting-group" data-sgroup="publishing">
+        <h3>Blogs (WordPress, Substack &amp; Medium)</h3>
+        <p class="group-hint">Publish a Chervil page straight to your blog. Use “Publish to web → To WordPress / Substack / Medium…” on any page. WordPress posts a real draft via its API; Substack/Medium open pre-filled — you always review and hit Publish. WordPress app passwords are kept in your encrypted vault, never here.</p>
+        <div id="blog-targets"></div>
+        <button id="blog-add-target" type="button" class="lib-btn">＋ Add a blog</button>
+        <label class="toggle-row" style="margin-top:12px;">
+          <input type="checkbox" id="blog-agent-toggle" />
+          <span>Let Sprig fill the Substack/Medium editor for me <small>— fills the title + body when you publish there; still stops before Publish so you post it yourself</small></span>
+        </label>
       </section>
 
       <section class="setting-group" data-sgroup="publishing">

@@ -12,20 +12,89 @@
       overflow: hidden;
       font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
     }
-    #bar {
+    #panel {
       display: flex;
-      align-items: center;
-      gap: 12px;
+      flex-direction: column;
       margin: 12px;
-      padding: 0 18px;
-      height: 64px;
+      height: calc(100% - 24px);
       background: rgba(17, 20, 28, 0.96);
       border: 1px solid #2a3142;
       border-radius: 16px;
       box-shadow: 0 18px 50px rgba(0, 0, 0, 0.55);
+      overflow: hidden;
+    }
+
+    /* Header — only in chat mode */
+    #header {
+      display: none;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 12px 10px 16px;
+      border-bottom: 1px solid #232a38;
       -webkit-app-region: drag;
     }
+    #h-title { color: #e6e6e6; font-size: 13px; font-weight: 600; }
+    #h-spacer { flex: 1; }
+    .chip {
+      -webkit-app-region: no-drag;
+      background: transparent;
+      border: 1px solid #2a3142;
+      color: #aeb6c4;
+      font-size: 12px;
+      border-radius: 8px;
+      padding: 4px 9px;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+    .chip:hover { color: #e6e6e6; background: rgba(255, 255, 255, 0.06); border-color: #3a4256; }
+
+    /* Messages — only in chat mode */
+    #msgs {
+      display: none;
+      flex: 1;
+      overflow-y: auto;
+      padding: 12px 14px;
+      flex-direction: column;
+      gap: 8px;
+    }
+    #msgs::-webkit-scrollbar { width: 8px; }
+    #msgs::-webkit-scrollbar-thumb { background: #2a3142; border-radius: 8px; }
+    .msg {
+      max-width: 82%;
+      padding: 8px 11px;
+      border-radius: 12px;
+      font-size: 14px;
+      line-height: 1.45;
+      white-space: pre-wrap;
+      word-wrap: break-word;
+    }
+    .msg.user { align-self: flex-end; background: #2b6cb0; color: #fff; border-bottom-right-radius: 4px; }
+    .msg.bot { align-self: flex-start; background: #1b212d; color: #e6e6e6; border: 1px solid #232a38; border-bottom-left-radius: 4px; }
+    .msg.bot.err { color: #ffb4b4; border-color: #5a2a2a; }
+    .msg.typing { color: #8b93a3; font-style: italic; }
+    #empty {
+      display: none;
+      margin: auto;
+      color: #7c8595;
+      font-size: 13px;
+      text-align: center;
+      padding: 20px;
+    }
+    body.chat #empty.show { display: block; }
+
+    /* Input row — both modes */
+    #bar {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 0 18px;
+      height: 64px;
+      flex: none;
+      -webkit-app-region: drag;
+    }
+    body.chat #bar { height: 56px; border-top: 1px solid #232a38; }
     #leaf { font-size: 20px; -webkit-app-region: no-drag; }
+    body.chat #leaf { display: none; }
     #q {
       -webkit-app-region: no-drag;
       flex: 1;
@@ -35,7 +104,22 @@
       color: #e6e6e6;
       font-size: 17px;
     }
+    body.chat #q { font-size: 15px; }
     #q::placeholder { color: #7c8595; }
+    #chat-toggle {
+      -webkit-app-region: no-drag;
+      flex: none;
+      background: transparent;
+      border: 1px solid #2a3142;
+      color: #7c8595;
+      font-size: 15px;
+      line-height: 1;
+      cursor: pointer;
+      padding: 5px 8px;
+      border-radius: 8px;
+    }
+    #chat-toggle:hover { color: #e6e6e6; border-color: #3a4256; }
+    #chat-toggle.active { color: #7fd1b9; border-color: #2f6f5c; background: rgba(127, 209, 185, 0.10); }
     #hint {
       -webkit-app-region: no-drag;
       color: #7c8595;
@@ -45,6 +129,7 @@
       border-radius: 6px;
       padding: 2px 6px;
     }
+    body.chat #hint { display: none; }
     #close {
       -webkit-app-region: no-drag;
       flex: none;
@@ -58,34 +143,152 @@
       border-radius: 6px;
     }
     #close:hover { color: #e6e6e6; background: rgba(255, 255, 255, 0.08); }
+
+    body.chat #header { display: flex; }
+    body.chat #msgs { display: flex; }
   </style>
 </head>
 <body>
-  <div id="bar">
-    <span id="leaf">🌿</span>
-    <input id="q" type="text" placeholder="Hey Sprig, ask…" autocomplete="off" spellcheck="false" />
-    <span id="hint">↵ send · Esc to close</span>
-    <button id="close" title="Close (Esc)" aria-label="Close">✕</button>
+  <div id="panel">
+    <div id="header">
+      <span id="h-leaf">🌿</span>
+      <span id="h-title">Sprig chat</span>
+      <span id="h-spacer"></span>
+      <button id="new-btn" class="chip" title="Start a new chat">＋ New</button>
+      <button id="app-btn" class="chip" title="Open this conversation in Chervil">↗ Open in Chervil</button>
+    </div>
+    <div id="msgs">
+      <div id="empty">Chat with Sprig — no page composed, no tabs opened.<br />Ask anything, then hit ↗ to carry it into Chervil.</div>
+    </div>
+    <div id="bar">
+      <span id="leaf">🌿</span>
+      <input id="q" type="text" placeholder="Hey Sprig, ask…" autocomplete="off" spellcheck="false" />
+      <button id="chat-toggle" title="Chat with Sprig (no page composed)" aria-pressed="false">💬</button>
+      <span id="hint">↵ send · Esc to close</span>
+      <button id="close" title="Close (Esc)" aria-label="Close">✕</button>
+    </div>
   </div>
   <script>
     const q = document.getElementById('q');
+    const msgs = document.getElementById('msgs');
+    const empty = document.getElementById('empty');
+    const chatToggle = document.getElementById('chat-toggle');
     const closeBtn = document.getElementById('close');
-    if (closeBtn) closeBtn.addEventListener('click', () => { if (window.quick) window.quick.hide(); });
+    const newBtn = document.getElementById('new-btn');
+    const appBtn = document.getElementById('app-btn');
+
+    let chatMode = false;
+    let busy = false;
+    let count = 0; // messages exchanged (drives the empty-state hint + app-handoff enable)
+    let gen = 0;   // bumped on New/reset so an in-flight reply from a cleared chat is discarded
+
+    // Clear the panel (messages + counters) and invalidate any in-flight reply.
+    function resetPanel() {
+      gen++;
+      busy = false;
+      Array.from(msgs.querySelectorAll('.msg')).forEach((m) => m.remove());
+      count = 0;
+      refreshEmpty();
+    }
+
     function focusInput() { try { q.focus(); q.select(); } catch (e) {} }
-    // Refocus + clear each time the bar is summoned.
-    if (window.quick && window.quick.onShow) window.quick.onShow(() => {
-      q.value = ''; q.placeholder = 'Hey Sprig, ask…'; setTimeout(focusInput, 30);
+    function scrollBottom() { msgs.scrollTop = msgs.scrollHeight; }
+
+    function refreshEmpty() {
+      empty.classList.toggle('show', chatMode && count === 0);
+      appBtn.style.display = count > 0 ? '' : 'none';
+    }
+
+    function applyMode() {
+      document.body.classList.toggle('chat', chatMode);
+      chatToggle.classList.toggle('active', chatMode);
+      chatToggle.setAttribute('aria-pressed', String(chatMode));
+      q.placeholder = chatMode ? 'Message Sprig…' : 'Hey Sprig, ask…';
+      refreshEmpty();
+    }
+
+    function addMsg(role, text, extraClass) {
+      const el = document.createElement('div');
+      el.className = 'msg ' + role + (extraClass ? ' ' + extraClass : '');
+      el.textContent = text;
+      msgs.appendChild(el);
+      refreshEmpty();
+      scrollBottom();
+      return el;
+    }
+
+    function setChat(on) {
+      if (chatMode === on) return;
+      chatMode = on;
+      applyMode();
+      if (window.quick) window.quick.setMode(chatMode); // main resizes the window
+      setTimeout(() => { focusInput(); scrollBottom(); }, 20);
+    }
+
+    chatToggle.addEventListener('click', () => setChat(!chatMode));
+    if (closeBtn) closeBtn.addEventListener('click', () => { if (window.quick) window.quick.hide(); });
+    if (newBtn) newBtn.addEventListener('click', () => {
+      resetPanel();                       // also invalidates any in-flight reply + clears busy
+      if (window.quick) window.quick.clear(); // clear the renderer's shared history too
+      focusInput();
     });
-    // Wake mode: show a "listening" cue (the spoken request is captured + composed
-    // by the main window; this bar is the visible affordance).
+    if (appBtn) appBtn.addEventListener('click', () => { if (window.quick) window.quick.openInApp(); });
+
+    async function sendChat(text) {
+      if (busy) return;
+      busy = true;
+      const myGen = gen; // if the panel is reset (New / handoff) mid-flight, discard this reply
+      addMsg('user', text);
+      count++;
+      const typing = addMsg('bot', 'Sprig is typing…', 'typing');
+      try {
+        const resp = await window.quick.chat(text);
+        if (myGen !== gen) return;        // conversation was cleared while awaiting — drop it
+        typing.remove();
+        if (resp && resp.ok) {
+          addMsg('bot', (resp.text || '…'));
+          count++;
+        } else {
+          addMsg('bot', (resp && resp.error) || 'Something went wrong.', 'err');
+        }
+      } catch (e) {
+        if (myGen !== gen) return;
+        typing.remove();
+        addMsg('bot', String((e && e.message) || e), 'err');
+      } finally {
+        if (myGen === gen) { busy = false; focusInput(); }
+      }
+    }
+
+    // Refocus + clear each time the bar is summoned; sync to the mode main reports.
+    if (window.quick && window.quick.onShow) window.quick.onShow((info) => {
+      chatMode = !!(info && info.chat);
+      applyMode();
+      q.value = '';
+      setTimeout(() => { focusInput(); scrollBottom(); }, 30);
+    });
+    // Wake mode: always the compact ask bar with a "listening" cue.
     if (window.quick && window.quick.onListening) window.quick.onListening(() => {
-      q.value = ''; q.placeholder = '🎙️ Listening… speak your request';
+      chatMode = false;
+      applyMode();
+      q.value = '';
+      q.placeholder = '🎙️ Listening… speak your request';
     });
+    // Handed off to the app ("Open in Chervil") — clear the panel so it doesn't re-show.
+    if (window.quick && window.quick.onReset) window.quick.onReset(() => resetPanel());
+
     focusInput();
     q.addEventListener('keydown', (e) => {
       if (e.key === 'Enter') {
         const v = q.value.trim();
-        if (v && window.quick) { window.quick.submit(v); q.value = ''; }
+        if (!v) return;
+        if (chatMode) {
+          q.value = '';
+          sendChat(v);
+        } else if (window.quick) {
+          window.quick.submit(v);
+          q.value = '';
+        }
       } else if (e.key === 'Escape') {
         if (window.quick) window.quick.hide();
       }

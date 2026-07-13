@@ -6,6 +6,48 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.18.0] — 2026-07-13
+
+Chervil learns to publish. Compose a page, then send it straight to your blog —
+a real draft on **WordPress**, an import on **Medium**, a pre-filled editor on
+**Substack**. There's a new **Share this page** menu (Fedica, AddToAny, and your
+own networks) that opens each composer already written. The floating **Hey Sprig**
+bar (Ctrl+Shift+Space) can now hold a real conversation without opening a tab. Plus
+a **Mute tab** menu item and a quieter web (broken "Enable Push" buttons are gone).
+
+### Added
+- **Publish to your blog (WordPress, Substack & Medium).** From any composed page,
+  **Publish to web → To WordPress / Substack / Medium…**. WordPress posts a real
+  **draft** via its REST API (using an Application Password kept in your encrypted
+  vault) and opens the editor to review. Medium uses its **Import a story** by URL
+  (Chervil publishes the page first, then hands Medium the link — it adds a
+  canonical back to your page). Substack opens your new-post editor with the post
+  **copied to your clipboard** for a single paste. Configure your blogs in
+  **Settings → Publishing & Sync → Blogs**. As always, Chervil drafts and fills —
+  **you click Publish**.
+- **Optional: let Sprig fill the editor.** A per-choice opt-in (Settings → Blogs)
+  that fills the Substack editor's title and body for you — but always stops before
+  Publish, so you post it yourself.
+- **A "Share this page" menu (📣).** One button that drafts a post and opens the
+  right composer pre-filled: **Fedica** (schedule it), **AddToAny** (share to 100+
+  services, no extra account), and any social networks you've added in *Your places*.
+  Choose which appear, and whether composers open in a popup window or a tab, in
+  **Settings → Sharing**.
+- **A real chat in the floating quick bar.** Press **Ctrl+Shift+Space** and hit 💬
+  to chat with Sprig right there — no tab opened, no page composed. Carry the
+  conversation into Chervil anytime with **↗ Open in Chervil**.
+- **Mute tab** on the tab right-click menu — silence a noisy tab without switching
+  to it.
+
+### Changed
+- Share composers (Fedica, AddToAny, your networks) open in a tidy **popup window**
+  by default, riding your logged-in session — switch to a tab in Settings → Sharing.
+
+### Fixed
+- **Broken "Enable notifications / Push" buttons are hidden.** Electron ships no web
+  push service, so those buttons always failed — Chervil now hides the Web Push API
+  on embedded sites so they don't show up. (Site notifications still work.)
+
 ## [0.17.0] — 2026-07-10
 
 A polish release aimed at the friction you feel every single morning. Your

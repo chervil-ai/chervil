@@ -119,6 +119,9 @@ contextBridge.exposeInMainWorld('chervil', {
   /** Publish any composed page's HTML to a shareable getchervil.com link (Chervil Pro). */
   publishPage: (payload) => ipcRenderer.invoke('chervil:publish-page', payload),
 
+  /** Create a WordPress draft via the REST API (Basic auth with an application password). */
+  wpPublish: (payload) => ipcRenderer.invoke('chervil:wp-publish', payload),
+
   /** Publish an agent to the web — owner profile + importable + store-submittable. */
   publishAgent: (payload) => ipcRenderer.invoke('chervil:publish-agent', payload),
 
@@ -283,6 +286,18 @@ contextBridge.exposeInMainWorld('chervil', {
 
   /** Subscribe to prompts sent from the floating quick-ask bar (global hotkey). */
   onQuickPrompt: (cb) => ipcRenderer.on('chervil:quick-prompt', (_e, prompt, opts) => cb(prompt, opts)),
+
+  /** The floating quick-ask panel wants one chat turn run here; reply via sendQuickChatReply. */
+  onQuickChatRun: (cb) => ipcRenderer.on('chervil:quick-chat-run', (_e, payload) => cb(payload)),
+  /** Return a quick-chat turn's result to the floating panel (matched by payload.id). */
+  sendQuickChatReply: (res) => ipcRenderer.send('chervil:quick-chat-reply', res),
+  /** "Open in Chervil" from the floating panel — adopt the quick conversation into a tab. */
+  onQuickOpenInApp: (cb) => ipcRenderer.on('chervil:quick-open-in-app', () => cb()),
+  /** "New chat" from the floating panel — clear the shared quick-chat history. */
+  onQuickClear: (cb) => ipcRenderer.on('chervil:quick-clear', () => cb()),
+
+  /** Open a share composer (Fedica, AddToAny, …) in a small popup window. */
+  openSharePopup: (url, opts) => ipcRenderer.send('chervil:open-share-popup', { url, ...(opts || {}) }),
 
   /** A shared .chervil page arrived via a chervil://import deep link → import it. */
   onImportPage: (cb) => ipcRenderer.on('chervil:import-page', (_e, doc) => cb(doc)),

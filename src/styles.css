@@ -1674,6 +1674,17 @@ html, body {
 .place-extra-row input:nth-child(2) { flex: 1; }
 #pl-add-extra { margin-top: 8px; }
 
+/* Blogs → publishing targets */
+.blog-target-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 8px; }
+.blog-target-row select, .blog-target-row input {
+  background: var(--panel-2); border: 1px solid var(--border); color: var(--text);
+  border-radius: 8px; padding: 8px 10px; font-size: 13px; outline: none;
+}
+.blog-target-row select:focus, .blog-target-row input:focus { border-color: var(--accent); }
+.blog-target-row input { flex: 1; min-width: 120px; }
+.blog-target-row input[hidden], .blog-target-row button[hidden] { display: none; }
+#blog-add-target { margin-top: 8px; }
+
 /* Your-places tiles on the welcome overlay. */
 .places-row { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; width: 100%; margin-bottom: 10px; }
 .place-tile {

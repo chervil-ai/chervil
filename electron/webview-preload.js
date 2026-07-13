@@ -9,6 +9,52 @@
 
 const { ipcRenderer } = require('electron');
 
+// --- Hide the (broken) Web Push API from real sites --------------------------
+// Electron ships NO web-push service (no FCM/GCM — electron/electron#6697), so
+// PushManager.subscribe() ALWAYS fails ("push service not available"). But Chromium
+// still EXPOSES PushManager, so sites feature-detect push as supported and render
+// broken "Enable notifications / Push" buttons that error when clicked. We remove
+// the push surface from the page's MAIN world so those sites hide that UI.
+// Notes: this preload runs in an isolated world (contextIsolation), so we inject a
+// tiny inline <script> to reach the page realm; it runs at document-start, before
+// the page's own feature detection. Chervil's own file:// UI isn't a webview, so
+// it's untouched, and the Notification API is left intact (site notification
+// permission prompts still work — only Web Push is removed).
+(function hideWebPush() {
+  const code =
+    '(function(){' +
+    "try{delete window.PushManager;}catch(e){try{Object.defineProperty(window,'PushManager',{configurable:true,get:function(){return undefined;}});}catch(_){}}" +
+    'try{if(window.ServiceWorkerRegistration&&ServiceWorkerRegistration.prototype){delete ServiceWorkerRegistration.prototype.pushManager;}}catch(e){}' +
+    'try{delete window.PushSubscription;}catch(e){}' +
+    'try{delete window.PushSubscriptionOptions;}catch(e){}' +
+    '})();';
+  let done = false; // inject exactly once — the observer and readystatechange both race to it
+  function inject() {
+    if (done) return true;
+    try {
+      const root = document.documentElement || document.head || document.body;
+      if (!root) return false;
+      const s = document.createElement('script');
+      s.textContent = code;
+      root.appendChild(s);
+      s.remove();
+      done = true;
+      return true;
+    } catch (e) { return false; }
+  }
+  // documentElement usually exists at document-start; if not, inject the moment it does.
+  // NOTE: under a strict page CSP (script-src without 'unsafe-inline') the browser
+  // blocks this inline <script>, so push isn't hidden on those hardened sites — known
+  // Electron limitation (a preload can't reach the page's main world any other way).
+  if (!inject()) {
+    try {
+      const obs = new MutationObserver(() => { if (inject()) obs.disconnect(); }); // childList only — we await <html>
+      obs.observe(document, { childList: true });
+    } catch (e) { /* fall back to readystatechange */ }
+    document.addEventListener('readystatechange', inject, { once: true });
+  }
+})();
+
 (function () {
   function visible(el) { return el && el.offsetParent !== null && !el.disabled && !el.readOnly; }
 

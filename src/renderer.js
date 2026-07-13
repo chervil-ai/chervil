@@ -199,6 +199,9 @@ const els = {
   adblockToggle: document.getElementById('adblock-toggle'),
   adblockStat: document.getElementById('adblock-stat'),
   spellcheckToggle: document.getElementById('spellcheck-toggle'),
+  sharePopupToggle: document.getElementById('share-popup-toggle'),
+  shareFedicaToggle: document.getElementById('share-fedica-toggle'),
+  shareAddtoanyToggle: document.getElementById('share-addtoany-toggle'),
   clearDataBtn: document.getElementById('clear-data-btn'),
   menuBarToggle: document.getElementById('menu-bar-toggle'),
   zoomControls: document.getElementById('zoom-controls'),
@@ -213,6 +216,7 @@ const els = {
   snipBtn: document.getElementById('snip-btn'),
   sendPhoneBtn: document.getElementById('send-phone-btn'),
   emailPageBtn: document.getElementById('email-page-btn'),
+  shareFedicaBtn: document.getElementById('share-fedica-btn'),
   pipBtn: document.getElementById('pip-btn'),
   bookmarkBtn: document.getElementById('bookmark-btn'),
   favoriteBtn: document.getElementById('favorite-btn'),
@@ -411,6 +415,8 @@ let settings = {
   // forms on real sites on request.
   autofill: {},              // { fullName, givenName, familyName, email, phone, address, city, postal, country, organization }
   places: {},                // Your places (URLs only, never credentials): { email: 'gmail'|'outlook'|'custom', emailUrl, blog, x, bluesky, facebook, instagram, tiktok, extras: [{name,url}] }
+  blogTargets: [],           // blogging destinations: [{ id, platform:'wordpress'|'substack'|'medium', name, siteUrl, username }] — WP app password lives in the vault, never here
+  blogAgent: false,          // opt-in: let Sprig auto-fill the Substack/Medium editor (never publishes) — off by default
   sidebarCollapsed: false,   // hide the left chat sidebar for a full-width page (Ctrl+\)
   tabsBarHidden: false,      // hide the tab strip for full-height pages (Ctrl+Shift+\); top/left edge peeks it
   chatMode: false,           // "Just a chatbot" — plain conversational replies, no page composed
@@ -427,6 +433,9 @@ let settings = {
   collapsedFolders: [],      // ["favorites:Name" | "bookmarks:Name"] folder groups the user collapsed in the Library
   adblock: false,            // block common ad/tracker hosts in embedded sites (main-process filter)
   spellcheck: true,          // red squiggles + right-click suggestions in text fields (app + embedded sites)
+  sharePopup: true,          // open share composers (Fedica, AddToAny…) in a popup window vs a tab
+  shareFedica: true,         // show Fedica on the 📣 share menu + post-publish sheet
+  shareAddtoany: true,       // show AddToAny on the 📣 share menu + post-publish sheet
   translateLang: 'English',  // target language for 🌐 inline page translation (free text — any language)
   showMenuBar: false,        // always show the native menu bar (File/Edit/View); else Alt reveals it
   onboarded: false,          // first-run welcome shown (fresh profiles) / suppressed (upgrades)
@@ -1086,6 +1095,13 @@ function openTabMenu(e, tabId) {
   }
   const dupBtn = menu.querySelector('[data-act="duplicate"]');
   if (dupBtn) dupBtn.disabled = !target;
+  const muteBtn = menu.querySelector('[data-act="mute"]');
+  if (muteBtn) {
+    muteBtn.textContent = (target && target.muted) ? 'Unmute tab' : 'Mute tab';
+    const cur = currentEntry(target);
+    // Live sites can play audio; also allow unmuting a tab that's muted or currently audible.
+    muteBtn.disabled = !target || !((cur && cur.kind === 'navigate') || target.muted || webviewAudibleTabs.has(tabId));
+  }
   const collectBtn = menu.querySelector('[data-act="collect"]');
   if (collectBtn) collectBtn.disabled = !(target && collectionPageForTab(target)); // needs a URL (live site / published page)
   menu.querySelector('[data-act="others"]').disabled = tabs.length <= 1;
@@ -1112,6 +1128,7 @@ function onTabMenuClick(act) {
   else if (act === 'new-window') { if (window.chervil.newWindow) window.chervil.newWindow(); }
   else if (act === 'reload') reloadTab(id);
   else if (act === 'duplicate') duplicateTab(id);
+  else if (act === 'mute') toggleTabMute(id);
   else if (act === 'collect') { const t = tabs.find((x) => x.id === id); chooseCollectionFor(collectionPageForTab(t)); }
   else if (act === 'pin') toggleTabPin(id);
   else if (act === 'group') openGroupPicker(id);
@@ -1926,6 +1943,7 @@ function renderCurrentPage() {
   if (els.readAloudBtn) els.readAloudBtn.disabled = !entry; // read-aloud = any page or site
   if (els.sendPhoneBtn) els.sendPhoneBtn.disabled = !onLiveSite; // send-to-phone = live sites (they have a URL)
   if (els.emailPageBtn) els.emailPageBtn.disabled = !(onLiveSite || (entry && entry.publishedUrl)); // email = anything with a URL to share
+  if (els.shareFedicaBtn) els.shareFedicaBtn.disabled = !(onLiveSite || (entry && entry.publishedUrl)); // Fedica = anything with a URL to share
   if (els.pipBtn) els.pipBtn.disabled = !onLiveSite;       // PiP = live-site video only
   if (onLiveSite) applyTabMute();
 }
@@ -5703,18 +5721,9 @@ function openMailto(href) {
 }
 // "Email this page" — a live site's URL, or a composed page's published link.
 function emailCurrentPage() {
-  const tab = activeTab();
-  const entry = currentEntry(tab);
-  if (!entry) return;
-  const pageUrl = entry.kind === 'navigate' ? entry.url : entry.publishedUrl;
-  if (!pageUrl) { toast('Publish this page first, then email the link.'); return; }
-  // A navigate entry's stored title is its URL — the webview knows the real one.
-  let subject = entry.title || 'A page from Chervil';
-  if (entry.kind === 'navigate') {
-    const wv = webviews.get(tab.id);
-    try { subject = (wv && wv.getTitle()) || tab.title || subject; } catch { subject = tab.title || subject; }
-  }
-  openMailto('mailto:?subject=' + encodeURIComponent(subject) + '&body=' + encodeURIComponent(pageUrl));
+  const t = currentShareTarget(); // resolves the live-site/published URL + real title
+  if (!t) { toast('Publish this page first, then email the link.'); return; }
+  openMailto('mailto:?subject=' + encodeURIComponent(t.title) + '&body=' + encodeURIComponent(t.url));
 }
 
 // Detect a "go to / open <site>" navigation intent and resolve it to a URL.
@@ -7879,6 +7888,9 @@ function applyBookmarksBar() {
 async function refreshPrivacyUI() {
   if (els.adblockToggle) els.adblockToggle.checked = !!settings.adblock;
   if (els.spellcheckToggle) els.spellcheckToggle.checked = settings.spellcheck !== false;
+  if (els.sharePopupToggle) els.sharePopupToggle.checked = settings.sharePopup !== false;
+  if (els.shareFedicaToggle) els.shareFedicaToggle.checked = settings.shareFedica !== false;
+  if (els.shareAddtoanyToggle) els.shareAddtoanyToggle.checked = settings.shareAddtoany !== false;
   if (els.adblockStat && window.chervil.adblockStats) {
     try { const s = await window.chervil.adblockStats(); els.adblockStat.textContent = (s && s.enabled) ? `· ${s.blocked} blocked this session` : ''; }
     catch { /* ignore */ }
@@ -8366,8 +8378,80 @@ function applyPlacesToUI() {
   renderPlacesExtras();
 }
 
+// --- Blogs → publishing targets (WordPress / Substack / Medium) ---
+const BLOG_PLATFORMS = [['wordpress', 'WordPress'], ['substack', 'Substack'], ['medium', 'Medium']];
+function blogTargets() {
+  if (!Array.isArray(settings.blogTargets)) settings.blogTargets = [];
+  return settings.blogTargets;
+}
+function blogSitePlaceholder(platform) {
+  if (platform === 'substack') return 'https://yourname.substack.com';
+  if (platform === 'medium') return 'https://medium.com/@yourname';
+  return 'https://yourblog.com';
+}
+function renderBlogTargets() {
+  const box = document.getElementById('blog-targets');
+  if (!box) return;
+  box.innerHTML = '';
+  const list = blogTargets();
+  list.forEach((t, i) => {
+    const row = document.createElement('div');
+    row.className = 'blog-target-row';
+    const plat = document.createElement('select');
+    for (const [val, label] of BLOG_PLATFORMS) {
+      const o = document.createElement('option'); o.value = val; o.textContent = label; plat.appendChild(o);
+    }
+    plat.value = t.platform || 'wordpress';
+    const name = document.createElement('input');
+    name.type = 'text'; name.placeholder = 'Name (e.g. My blog)'; name.value = t.name || '';
+    const site = document.createElement('input');
+    site.type = 'text'; site.placeholder = blogSitePlaceholder(plat.value); site.value = t.siteUrl || '';
+    const user = document.createElement('input');
+    user.type = 'text'; user.placeholder = 'WordPress username'; user.value = t.username || '';
+    user.hidden = plat.value !== 'wordpress';
+    const pw = document.createElement('button');
+    pw.type = 'button'; pw.className = 'lib-btn'; pw.textContent = '🔑 App password';
+    pw.title = 'Store your WordPress application password in the encrypted vault';
+    pw.hidden = plat.value !== 'wordpress';
+    const del = document.createElement('button');
+    del.type = 'button'; del.className = 'lib-btn'; del.textContent = '✕'; del.title = 'Remove this blog';
+    plat.addEventListener('change', () => { t.platform = plat.value; scheduleSave(); renderBlogTargets(); });
+    name.addEventListener('input', () => { t.name = name.value.trim(); scheduleSave(); });
+    site.addEventListener('input', () => { t.siteUrl = site.value.trim(); scheduleSave(); });
+    user.addEventListener('input', () => { t.username = user.value.trim(); scheduleSave(); });
+    pw.addEventListener('click', () => setBlogAppPassword(t));
+    del.addEventListener('click', () => { list.splice(i, 1); scheduleSave(); renderBlogTargets(); });
+    row.append(plat, name, site, user, pw, del);
+    box.appendChild(row);
+  });
+}
+// Store a WordPress application password in the encrypted vault (keyed to the site).
+async function setBlogAppPassword(t) {
+  if (!t.siteUrl) { toast('Enter your WordPress site URL first.'); return; }
+  if (!t.username) { toast('Enter your WordPress username first.'); return; }
+  if (!(await ensureVaultUnlocked())) return;
+  const pass = await showInputSheet({
+    title: 'WordPress application password',
+    subtitle: `Generate one in WordPress → Users → Profile → Application Passwords, then paste it for ${t.username}.`,
+    placeholder: 'xxxx xxxx xxxx xxxx xxxx xxxx', type: 'password', okLabel: 'Save',
+  });
+  if (pass == null) return;
+  const clean = String(pass).trim();
+  if (!clean) { toast('No password entered.'); return; }
+  try {
+    const r = await window.chervil.creds.save({ origin: t.siteUrl, username: t.username, password: clean, label: 'WordPress app password' });
+    toast((r && r.ok) ? 'App password saved to your vault.' : ((r && r.error) || 'Couldn’t save the app password.'));
+  } catch { toast('Couldn’t save the app password.'); }
+}
+function applyBlogsToUI() {
+  renderBlogTargets();
+  const at = document.getElementById('blog-agent-toggle');
+  if (at) at.checked = !!settings.blogAgent;
+}
+
 function applySettingsToUI() {
   applyPlacesToUI();
+  applyBlogsToUI();
   for (const k of AUTOFILL_FIELDS) {
     const el = document.getElementById('af-' + k);
     if (el) el.value = (settings.autofill && settings.autofill[k]) || '';
@@ -8991,6 +9075,7 @@ const TOOLBAR_BUTTONS = [
   { key: 'snip', id: 'snip-btn', label: 'Snip screenshot (✂)' },
   { key: 'sendPhone', id: 'send-phone-btn', label: 'Send to phone (📱)' },
   { key: 'emailPage', id: 'email-page-btn', label: 'Email this page (✉️)' },
+  { key: 'shareFedica', id: 'share-fedica-btn', label: 'Share to Fedica (📣)' },
   { key: 'reader', id: 'reader-btn', label: 'Reader view' },
   { key: 'pip', id: 'pip-btn', label: 'Picture-in-picture' },
   { key: 'zoom', id: 'zoom-controls', label: 'Zoom controls' },
@@ -9926,11 +10011,227 @@ function publishCurrentToWeb() {
     { label: '🌐 As a Page', primary: true, onClick: () => publishCurrentPage('page') },
     { label: '✍️ As a Blog post', onClick: () => publishCurrentPage('blog') },
   ];
+  if (blogTargets().some(blogTargetReady)) {
+    opts.push({ label: '📝 To WordPress / Substack / Medium…', onClick: () => openBlogPublishMenu() });
+  }
   // Already published as a page → offer cloud auto-refresh settings.
   if (entry.publishedId) {
     opts.push({ label: entry.cloudLiveMs ? '☁ Cloud refresh: on — change…' : '☁ Keep it live in the cloud…', onClick: () => chooseCloudLive(entry) });
   }
   showActionSheet('Publish to web', 'How should this go out?', opts);
+}
+
+// --- Publish a composed page to an external blog (WordPress / Substack / Medium) ---
+// Boundary: Sprig prepares the post (WordPress draft via API; Substack/Medium editor
+// pre-filled), the user always reviews and clicks Publish. Nothing is auto-published.
+
+function blogTargetReady(t) {
+  if (!t) return false;
+  if (t.platform === 'wordpress') return !!(t.siteUrl && t.username);
+  if (t.platform === 'substack') return !!t.siteUrl;
+  if (t.platform === 'medium') return true; // imports by URL — no per-site config needed
+  return false;
+}
+
+// Clean article HTML from a composed page: full document → body prose, minus
+// scripts/styles, the inline data-URL hero (blogs reject data URIs), and the
+// Chervil "Open in Chervil" CTA/source block. Falls back to plain text.
+function blogContentHtml(entry) {
+  const raw = (entry && entry.html) || '';
+  try {
+    const doc = new DOMParser().parseFromString(raw, 'text/html');
+    const body = doc.body;
+    if (!body) return stripText(raw);
+    body.querySelectorAll('script, style, noscript, template, iframe, object, embed').forEach((n) => n.remove());
+    body.querySelectorAll('.chervil-hero').forEach((n) => n.remove()); // inline data-URL hero — blogs reject data URIs
+    body.querySelectorAll('#chervil-edit-btn, .chervil-edit-btn, #chervil-source, #chervil-report').forEach((n) => n.remove());
+    // Strip inline event handlers + javascript: URLs. This HTML is posted to your blog
+    // AND injected into third-party editors (Substack/Medium) via innerHTML, where
+    // on* handlers fire — and composed pages can carry markup pulled from arbitrary sites.
+    body.querySelectorAll('*').forEach((el) => {
+      for (const a of Array.from(el.attributes)) {
+        const n = a.name.toLowerCase();
+        if (n.startsWith('on')) el.removeAttribute(a.name);
+        else if ((n === 'href' || n === 'src' || n === 'xlink:href') && /^\s*javascript:/i.test(a.value || '')) el.removeAttribute(a.name);
+      }
+    });
+    const html = body.innerHTML.trim();
+    return html || stripText(raw);
+  } catch { return stripText(raw); }
+}
+
+function blogTargetLabel(t) {
+  const icon = t.platform === 'wordpress' ? '📝' : t.platform === 'substack' ? '📬' : '📖';
+  return `${icon} ${t.name || t.siteUrl || t.platform}`;
+}
+
+function openBlogPublishMenu() {
+  const tab = activeTab();
+  const entry = currentEntry(tab);
+  if (!entry || entry.kind !== 'page' || !entry.html) { toast('Open a page first, then publish it.'); return; }
+  const targets = blogTargets().filter(blogTargetReady);
+  if (!targets.length) { toast('Add a blog in Settings → Blogs first.'); return; }
+  showActionSheet('Publish to a blog',
+    'WordPress posts a real draft via its API; Substack/Medium open pre-filled. You always review and hit Publish.',
+    targets.map((t) => ({ label: blogTargetLabel(t), onClick: () => publishToBlog(t, entry, tab) })));
+}
+
+function publishToBlog(t, entry, tab) {
+  if (t.platform === 'wordpress') return publishToWordPress(t, entry, tab);
+  if (t.platform === 'substack') return publishToSubstack(t, entry, tab);
+  if (t.platform === 'medium') return publishToMedium(t, entry, tab);
+}
+
+// WordPress — real draft via the REST API (Basic auth with the vault app password).
+async function publishToWordPress(t, entry, tab) {
+  if (!t.siteUrl || !t.username) { toast('Add your WordPress site URL and username in Settings → Blogs.'); return; }
+  if (!window.chervil.wpPublish) { toast('WordPress publishing isn’t available in this build.'); return; }
+  if (!(await ensureVaultUnlocked())) return;
+  let appPassword = '';
+  try {
+    const res = await window.chervil.creds.forOrigin(t.siteUrl);
+    const items = (res && res.ok && res.items) || [];
+    // Strict username match only — never fall back to another credential saved for
+    // this domain (e.g. a normal wp-login password), which would send the wrong secret.
+    const match = items.find((it) => it.username === t.username);
+    appPassword = (match && match.password) || '';
+  } catch { /* ignore */ }
+  if (!appPassword) { toast('Set your WordPress app password in Settings → Blogs (🔑 App password).'); return; }
+  const content = blogContentHtml(entry);
+  toast('Creating a WordPress draft…');
+  let r;
+  try { r = await window.chervil.wpPublish({ siteUrl: t.siteUrl, username: t.username, appPassword, title: entry.title || 'Chervil page', content }); }
+  catch (e) { r = { ok: false, error: errText(e, 'WordPress publish failed') }; }
+  if (!r || !r.ok) {
+    toast((r && r.error) || 'WordPress publish failed.');
+    addMessage(tab, 'bot', `Couldn’t publish to WordPress: ${(r && r.error) || 'unknown error'}`, 'error');
+    return;
+  }
+  addMessage(tab, 'bot', `Created a draft on ${t.name || 'WordPress'} — opening the editor (log in to WordPress if it prompts you). Review it there and hit Publish; Chervil never publishes for you.`);
+  if (r.editUrl) openShareComposer(r.editUrl, { width: 1100, height: 820 });
+  toast('Draft created in WordPress — review and Publish (log in if prompted).');
+}
+
+// Medium — killed its posting API but imports a story by URL (adds a canonical
+// link). Ensure the page is public (publish to getchervil.com), then open Medium's
+// importer pre-filled with that URL.
+async function publishToMedium(t, entry, tab) {
+  let url = entry.publishedUrl;
+  if (!url) {
+    if (!settings.publishToken || !window.chervil.publishPage) {
+      addMessage(tab, 'bot', 'Medium imports by URL, so the page must be published to getchervil.com first. Add a publish token in Settings → Publishing, then try again.', 'error');
+      return;
+    }
+    toast('Publishing your page so Medium can import it…');
+    let res;
+    try {
+      res = await window.chervil.publishPage({
+        html: withChervilEditButton(entry.html, chervilPageDoc(entry, tab)),
+        title: entry.title || 'Chervil page', kind: 'page', sourceId: entry.id,
+        token: settings.publishToken, baseUrl: settings.publishBase || 'https://getchervil.com',
+      });
+    } catch (e) { res = { ok: false, error: errText(e, 'Publish failed') }; }
+    if (res && res.ok && res.url) { entry.publishedUrl = res.url; if (res.id) entry.publishedId = res.id; scheduleSave(); url = res.url; }
+    else { addMessage(tab, 'bot', `Couldn’t publish for Medium import: ${(res && res.error) || 'unknown error'}`, 'error'); return; }
+  }
+  const importUrl = 'https://medium.com/p/import?url=' + encodeURIComponent(url);
+  openShareComposer(importUrl, { width: 900, height: 780 });
+  addMessage(tab, 'bot', 'Opened Medium’s importer with your page URL. Click Import, then review and Publish on Medium — it adds a canonical link back to your page.');
+}
+
+// Substack — no API; open the publication's new-post editor with the content on the
+// clipboard (rich HTML + plain text) for a single paste.
+async function publishToSubstack(t, entry, tab) {
+  if (!t.siteUrl) { toast('Add your Substack publication URL in Settings → Blogs.'); return; }
+  const contentHtml = blogContentHtml(entry);
+  let copied = false;
+  try {
+    if (navigator.clipboard && window.ClipboardItem) {
+      await navigator.clipboard.write([new ClipboardItem({
+        'text/html': new Blob([contentHtml], { type: 'text/html' }),
+        'text/plain': new Blob([stripText(entry.html)], { type: 'text/plain' }),
+      })]);
+      copied = true;
+    } else if (navigator.clipboard) {
+      await navigator.clipboard.writeText(stripText(entry.html)); copied = true;
+    }
+  } catch { copied = false; }
+  const base = String(t.siteUrl).replace(/\/+$/, '');
+  const editorUrl = base + '/publish/post';
+  const size = { width: 1000, height: 840 };
+  if (settings.blogAgent) fillBlogEditor(editorUrl, entry, t, size); // opt-in Sprig fill (in a tab)
+  else openShareComposer(editorUrl, size);
+  addMessage(tab, 'bot', copied
+    ? 'Opened your Substack editor and copied the post — paste it in (Ctrl+V), add a title, review, and Publish.'
+    : 'Opened your Substack editor — add your content and Publish when ready.');
+}
+
+// Opt-in agent auto-fill (settings.blogAgent). Best-effort: set the editor's title +
+// body then dispatch input events. Substack/Medium editors are contenteditable, so
+// we set textContent/innerHTML, NOT .value. It NEVER clicks Publish — RFC 0006
+// boundary, mirroring passwordFillScript. Gated by an explicit confirm + audited.
+function blogEditorFillScript(dataJson) {
+  return `(() => {
+    try {
+      const d = ${dataJson};
+      const fire = (el) => ['input','change','keyup'].forEach((t) => el.dispatchEvent(new Event(t, { bubbles: true })));
+      const vis = (el) => { const r = el.getBoundingClientRect(); return r.width > 40 && r.height > 12; };
+      let titleEl = document.querySelector('textarea[placeholder*="title" i], input[placeholder*="title" i], [contenteditable][data-placeholder*="title" i], [contenteditable][aria-label*="title" i], h1[contenteditable], h1 [contenteditable]');
+      let bodyEl = null, best = 0;
+      document.querySelectorAll('[contenteditable="true"], [contenteditable=""], textarea').forEach((el) => {
+        if (el === titleEl || !vis(el)) return;
+        const r = el.getBoundingClientRect(); const area = r.width * r.height;
+        if (area > best) { best = area; bodyEl = el; }
+      });
+      let filledTitle = false, filledBody = false;
+      if (titleEl && d.title) {
+        if (titleEl.isContentEditable) titleEl.textContent = d.title; else titleEl.value = d.title;
+        fire(titleEl); filledTitle = true;
+      }
+      if (bodyEl && d.html) {
+        if (bodyEl.isContentEditable) bodyEl.innerHTML = d.html; else bodyEl.value = d.html;
+        fire(bodyEl); filledBody = true;
+      }
+      return { ok: true, filledTitle, filledBody };
+    } catch (e) { return { ok: false, error: String(e && e.message || e) }; }
+  })()`;
+}
+
+function confirmBlogFill(target) {
+  return new Promise((resolve) => {
+    showActionSheet('Let Sprig fill this editor?',
+      `Sprig will put your page's title and body into the ${target.platform} editor. It will NOT publish — you review and click Publish.`,
+      [{ label: 'Fill the editor', primary: true, onClick: () => resolve(true) }],
+      () => resolve(false));
+  });
+}
+
+// Confirm FIRST, then open the editor in a tab and drive the webview to set
+// title+body (never submitting). Confirming before navigation avoids racing the
+// editor's dom-ready while the confirm modal is up (the old bug that left it empty).
+async function fillBlogEditor(url, entry, target, size) {
+  if (!(await confirmBlogFill(target))) { openShareComposer(url, size); return; }
+  newTab(true);
+  const editorTab = activeTab();
+  openUrlInTab(url); // navigation starts now — AFTER we're ready to listen
+  const wv = webviews.get(editorTab.id);
+  if (!wv) { toast('Couldn’t open the editor.'); return; }
+  let done = false;
+  const inject = async () => {
+    if (done) return; done = true;
+    try {
+      const data = JSON.stringify({ title: entry.title || '', html: blogContentHtml(entry) });
+      const r = await wv.executeJavaScript(blogEditorFillScript(data), true);
+      auditAction({ type: 'blog_editor_fill', target: target.siteUrl || target.platform, decision: 'allow', ok: !!(r && r.ok) });
+      toast((r && r.ok && (r.filledTitle || r.filledBody))
+        ? `Filled the ${target.platform} editor — review it and hit Publish.`
+        : `Opened the ${target.platform} editor — couldn’t auto-fill; paste your content and Publish.`);
+    } catch { /* best-effort */ }
+  };
+  // Fill once the editor SPA mounts. Cover both cases: dom-ready still to come, or
+  // the nav already finished before we attached (the `done` guard dedupes).
+  wv.addEventListener('dom-ready', () => setTimeout(inject, 2500), { once: true });
+  try { if (wv.isLoading && !wv.isLoading()) setTimeout(inject, 2500); } catch { /* ignore */ }
 }
 
 // Cloud living pages (RFC 0007 7.3): keep a PUBLISHED page current server-side on
@@ -9988,38 +10289,165 @@ function configuredShareNetworks() {
   return SHARE_NETWORKS.filter((n) => placeUrl(n.key));
 }
 
-async function draftShareText(net, title, url) {
-  const prompt = `I just published "${title}" — it's live at ${url}. Write ${net.flavor} announcing it to my followers. Match my voice, at most one tasteful hashtag, no preamble or quotes — reply with ONLY the post text, and do NOT include the link (it's appended automatically).`;
+// Shared drafting core: ask the model, strip wrapping quotes, and fit the post to
+// the platform's char budget (reserving room for the appended link). Returns '' on
+// failure so callers can fall back to the title.
+async function runDraft(prompt, url, limit) {
   try {
     const resp = await window.chervil.chat({ query: prompt, history: [], profile: settings.profile || null, config: providerConfig() });
     let text = ((resp && resp.ok && resp.text) || '').trim().replace(/^["“]+|["”]+$/g, '');
-    const room = net.limit - url.length - 2;
+    const room = limit - url.length - 2;
     if (text.length > room) text = text.slice(0, Math.max(0, room - 1)) + '…';
-    return text || title;
-  } catch { return title; }
+    return text;
+  } catch { return ''; }
+}
+async function draftShareText(net, title, url) {
+  const prompt = `I just published "${title}" — it's live at ${url}. Write ${net.flavor} announcing it to my followers. Match my voice, at most one tasteful hashtag, no preamble or quotes — reply with ONLY the post text, and do NOT include the link (it's appended automatically).`;
+  return (await runDraft(prompt, url, net.limit)) || title;
 }
 
 // The sheet re-offers itself after each share so several networks can be hit in
 // a row (✓ marks the ones already opened). `done` runs once it's dismissed.
 function offerShareToNetworks(title, url, done, shared = new Set()) {
   const nets = configuredShareNetworks();
-  if (!nets.length) { if (done) done(); return; }
   const actions = nets.map((n) => ({
     label: (shared.has(n.key) ? '✓ ' : '') + 'Share to ' + n.label,
     onClick: async () => {
       toast(`Sprig is drafting your ${n.label} post…`);
       const text = await draftShareText(n, title, url);
-      openUrlInNewTab(n.intent(text, url));
+      openShareComposer(n.intent(text, url), { width: 620, height: 680 });
       shared.add(n.key);
       offerShareToNetworks(title, url, done, shared);
     },
   }));
+  // Fedica + AddToAny need no registered place, so they're worth showing even with
+  // no Your-places networks configured — but honor the Settings → Sharing toggles.
+  if (settings.shareFedica !== false) actions.push(fedicaShareAction(title, url, done, shared));
+  if (settings.shareAddtoany !== false) actions.push(addToAnyShareAction(title, url, done, shared));
+  if (!actions.length) { if (done) done(); return; } // nothing enabled → skip the sheet
   showActionSheet(
     'Share to your networks',
-    'Sprig drafts a post for each network and opens its compose pre-filled — you review and hit Post there. Nothing is ever posted automatically.',
+    'Sprig drafts a post and opens each compose pre-filled — you review and hit Post there. Nothing is ever posted automatically.',
     actions,
     done
   );
+}
+
+// --- Fedica (social scheduler Rod uses to share posts) ----------------------
+// Fedica's own browser extension opens its composer PRE-FILLED via a real endpoint:
+//   https://fedica.com/browserplugin?value=<title + " " + pageURL>&host=<page host>
+// (reverse-engineered from the installed extension's popup.js — it builds `value`
+// from the page's og/twitter title + href). We reuse that exact endpoint, but fill
+// `value` with a Sprig-drafted post + the link instead of the bare title, so the
+// composer opens already composed — no copy/paste. Falls back to title + url (what
+// the vanilla extension does) when drafting is unavailable. Same boundary as the
+// other share intents: Sprig composes, the user posts. Never auto-submitted.
+const FEDICA_PLUGIN_URL = 'https://fedica.com/browserplugin';
+
+// Open a share composer either in a small popup window (default — like the Chrome/
+// Edge extensions) or a new tab, per settings.sharePopup. The popup rides the
+// default session, so logged-in cookies (Fedica etc.) carry over.
+function openShareComposer(url, { width = 620, height = 640 } = {}) {
+  if (settings.sharePopup !== false && window.chervil.openSharePopup) {
+    window.chervil.openSharePopup(url, { width, height });
+  } else {
+    openUrlInNewTab(url);
+  }
+}
+
+function fedicaComposerUrl(value, pageUrl) {
+  let host = '';
+  try { host = new URL(pageUrl).host; } catch { /* leave blank */ }
+  return FEDICA_PLUGIN_URL + '?value=' + encodeURIComponent(value) + '&host=' + encodeURIComponent(host);
+}
+
+// AddToAny — a universal "share to any service" page (100+ networks). No AddToAny
+// account needed; it just hands off to whichever network the user picks. The good
+// default for people who don't use Fedica.
+const ADDTOANY_SHARE_URL = 'https://www.addtoany.com/share';
+function addToAnyUrl(title, url) {
+  return ADDTOANY_SHARE_URL + '?linkurl=' + encodeURIComponent(url) + '&linkname=' + encodeURIComponent(title || url) + '&type=page';
+}
+function shareViaAddToAny(title, url) {
+  openShareComposer(addToAnyUrl(title, url), { width: 720, height: 680 });
+}
+
+// Resolve the shareable URL + real title for the current tab — a live website, or
+// a published Chervil page. Returns null when there's nothing public to share.
+function currentShareTarget() {
+  const tab = activeTab();
+  const entry = currentEntry(tab);
+  if (!entry) return null;
+  const url = entry.kind === 'navigate' ? entry.url : entry.publishedUrl;
+  if (!url) return null;
+  let title = entry.title || '';
+  if (entry.kind === 'navigate') {
+    const wv = webviews.get(tab.id);
+    try { title = (wv && wv.getTitle()) || tab.title || title; } catch { title = tab.title || title; }
+  }
+  return { url, title: title || url };
+}
+
+// Draft a short social post for any page (not just freshly-published ones — Fedica
+// is often used to share articles you're reading). Link is appended by the caller.
+async function draftSocialPost(title, url, { flavor = 'a punchy social post', limit = 280 } = {}) {
+  const prompt = `Write ${flavor} to share this page with my followers: "${title}" (${url}). Match my voice, at most one tasteful hashtag, no preamble or surrounding quotes — reply with ONLY the post text, and do NOT include the link (it's added separately). Keep it under ${limit} characters.`;
+  return (await runDraft(prompt, url, limit)) || title;
+}
+
+// Draft a post, then open Fedica's composer pre-filled with it (draft + link).
+async function shareToFedica(title, url) {
+  toast('Sprig is composing your Fedica post…');
+  const draft = await draftSocialPost(title, url, { flavor: 'a punchy social post', limit: 280 });
+  const value = ((draft && draft.trim()) ? draft.trim() : (title || 'Check this out')) + ' ' + url;
+  openShareComposer(fedicaComposerUrl(value, url), { width: 620, height: 640 });
+  toast('Fedica opened with your post ready — review and schedule.');
+}
+
+// Toolbar 📣 — a small "Share this page" hub: Fedica (composer pre-fill), AddToAny
+// (no account), plus any social networks registered in Your places.
+function openShareMenu() {
+  const t = currentShareTarget();
+  if (!t) { toast('Open a website — or publish this page — then share it.'); return; }
+  const actions = [];
+  if (settings.shareFedica !== false) actions.push({ label: '📣 Fedica — schedule this post', primary: true, onClick: () => shareToFedica(t.title, t.url) });
+  if (settings.shareAddtoany !== false) actions.push({ label: '🌐 Share anywhere (AddToAny)', onClick: () => shareViaAddToAny(t.title, t.url) });
+  for (const n of configuredShareNetworks()) {
+    actions.push({
+      label: 'Share to ' + n.label,
+      onClick: async () => {
+        toast(`Sprig is drafting your ${n.label} post…`);
+        const text = await draftSocialPost(t.title, t.url, { flavor: n.flavor, limit: n.limit });
+        openShareComposer(n.intent(text, t.url), { width: 620, height: 680 });
+      },
+    });
+  }
+  if (!actions.length) { toast('Turn on a share service in Settings → Sharing.'); return; }
+  showActionSheet('Share this page', 'Sprig composes the post; you review and post it. Nothing is shared automatically.', actions);
+}
+
+// A "Share to Fedica" row for the post-publish share sheet (mirrors the network rows).
+function fedicaShareAction(title, url, done, shared) {
+  return {
+    label: (shared.has('fedica') ? '✓ ' : '') + 'Share to Fedica',
+    onClick: async () => {
+      await shareToFedica(title, url);
+      shared.add('fedica');
+      offerShareToNetworks(title, url, done, shared);
+    },
+  };
+}
+
+// An "AddToAny" row for the post-publish share sheet — the no-account universal option.
+function addToAnyShareAction(title, url, done, shared) {
+  return {
+    label: (shared.has('addtoany') ? '✓ ' : '') + 'Share anywhere (AddToAny)',
+    onClick: () => {
+      shareViaAddToAny(title, url);
+      shared.add('addtoany');
+      offerShareToNetworks(title, url, done, shared);
+    },
+  };
 }
 
 async function publishCurrentPage(kind = 'page') {
@@ -10477,6 +10905,19 @@ for (const k of PLACES_FIELDS) {
     if (rows.length >= 2) rows[rows.length - 2].focus();
   });
 }
+{
+  const add = document.getElementById('blog-add-target');
+  if (add) add.addEventListener('click', () => {
+    blogTargets().push({ id: uid(), platform: 'wordpress', name: '', siteUrl: '', username: '' });
+    scheduleSave();
+    renderBlogTargets();
+    const rows = document.querySelectorAll('#blog-targets .blog-target-row');
+    const last = rows[rows.length - 1];
+    if (last) { const n = last.querySelector('input'); if (n) n.focus(); }
+  });
+  const agent = document.getElementById('blog-agent-toggle');
+  if (agent) agent.addEventListener('change', () => { settings.blogAgent = agent.checked; scheduleSave(); });
+}
 
 // Listening — "Hey Sprig"
 if (els.wakeToggle) els.wakeToggle.addEventListener('change', async () => {
@@ -10633,6 +11074,18 @@ if (els.adblockToggle) els.adblockToggle.addEventListener('change', async () => 
 if (els.spellcheckToggle) els.spellcheckToggle.addEventListener('change', async () => {
   settings.spellcheck = els.spellcheckToggle.checked;
   try { await window.chervil.setSpellcheck(settings.spellcheck); } catch { /* ignore */ }
+  scheduleSave();
+});
+if (els.sharePopupToggle) els.sharePopupToggle.addEventListener('change', () => {
+  settings.sharePopup = els.sharePopupToggle.checked;
+  scheduleSave();
+});
+if (els.shareFedicaToggle) els.shareFedicaToggle.addEventListener('change', () => {
+  settings.shareFedica = els.shareFedicaToggle.checked;
+  scheduleSave();
+});
+if (els.shareAddtoanyToggle) els.shareAddtoanyToggle.addEventListener('change', () => {
+  settings.shareAddtoany = els.shareAddtoanyToggle.checked;
   scheduleSave();
 });
 if (els.clearDataBtn) els.clearDataBtn.addEventListener('click', async () => {
@@ -10982,6 +11435,63 @@ if (window.chervil.onQuickPrompt) {
   });
 }
 
+// The floating quick-ask panel can run an inline chat (no page composed, no tab
+// opened). We run each turn here so it uses the exact in-app chat path (keys,
+// model, profile) and the conversation is already in the renderer for a later
+// "Open in Chervil" handoff. History mirrors the { role, content } shape chat uses.
+let quickChatHistory = [];
+if (window.chervil.onQuickChatRun) {
+  window.chervil.onQuickChatRun(async (payload) => {
+    const id = payload && payload.id;
+    const query = String((payload && payload.query) || '').trim();
+    if (!query) { window.chervil.sendQuickChatReply({ id, ok: false, error: 'Empty message.' }); return; }
+    try {
+      const resp = await window.chervil.chat({
+        query,
+        history: quickChatHistory.slice(-20),
+        profile: settings.profile || null,
+        config: providerConfig(),
+      });
+      if (resp && resp.ok) {
+        const text = resp.text || '…';
+        quickChatHistory.push({ role: 'user', content: query }, { role: 'assistant', content: text });
+        if (quickChatHistory.length > 40) quickChatHistory = quickChatHistory.slice(-40);
+        window.chervil.sendQuickChatReply({ id, ok: true, text, sources: resp.sources || [] });
+      } else {
+        window.chervil.sendQuickChatReply({ id, ok: false, error: (resp && resp.error) || 'Something went wrong.' });
+      }
+    } catch (e) {
+      window.chervil.sendQuickChatReply({ id, ok: false, error: String(e && e.message ? e.message : e) });
+    }
+  });
+}
+
+// "Open in Chervil" — adopt the floating conversation into a real chat tab so it
+// can continue with full context and history.
+if (window.chervil.onQuickOpenInApp) {
+  window.chervil.onQuickOpenInApp(() => {
+    const tab = newTab(true);
+    for (const m of quickChatHistory) {
+      addMessage(tab, m.role === 'user' ? 'user' : 'bot', m.content);
+      tab.history.push({ role: m.role, content: m.content });
+    }
+    if (quickChatHistory.length) {
+      const first = quickChatHistory[0].content;
+      tab.title = first.length > 40 ? first.slice(0, 37) + '…' : first;
+    }
+    quickChatHistory = []; // handed off into this tab — don't let a later handoff re-duplicate it
+    setChatMode(true); // continued messages stay in chat, matching the floating panel
+    renderTabs();
+    scheduleSave();
+    els.prompt.focus();
+  });
+}
+
+// "New chat" in the floating panel resets the shared history.
+if (window.chervil.onQuickClear) {
+  window.chervil.onQuickClear(() => { quickChatHistory = []; });
+}
+
 // "Ask Sprig about <selection>" from the right-click menu fills the composer.
 if (window.chervil.onContextAsk) {
   window.chervil.onContextAsk((text) => {
@@ -11028,6 +11538,7 @@ if (els.readAloudBtn) els.readAloudBtn.addEventListener('click', readPageAloud);
 if (els.snipBtn) els.snipBtn.addEventListener('click', startSnip);
 if (els.sendPhoneBtn) els.sendPhoneBtn.addEventListener('click', sendTabToPhone);
 if (els.emailPageBtn) els.emailPageBtn.addEventListener('click', emailCurrentPage);
+if (els.shareFedicaBtn) els.shareFedicaBtn.addEventListener('click', openShareMenu);
 if (els.pipBtn) els.pipBtn.addEventListener('click', () => togglePictureInPicture());
 
 // Show the running app version in Settings (from the preload bridge), and wire

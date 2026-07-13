@@ -35,6 +35,7 @@ let mainWindow = null;
 let primaryWcId = null; // webContents id of the persisting window; secondary windows are ephemeral
 let tray = null;
 let quickWindow = null;
+let quickChatMode = false; // the floating quick-ask is showing the inline chat panel (taller) vs the compact ask bar
 let isQuitting = false; // true only when truly quitting (tray → Quit); otherwise window close = hide-to-tray
 
 // Send a message to the main renderer (no-op if the window is gone). Used by menu
@@ -935,26 +936,39 @@ function createQuickWindow() {
   quickWindow.on('close', (e) => { if (!isQuitting) { e.preventDefault(); quickWindow.hide(); } });
 }
 
+// Compact ask bar vs the expanded inline-chat panel.
+const QUICK_ASK_H = 96;
+const QUICK_CHAT_H = 468;
+
 function showQuick() {
   if (!quickWindow || quickWindow.isDestroyed()) createQuickWindow();
   const area = screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).workArea;
   const w = 640;
+  const h = quickChatMode ? QUICK_CHAT_H : QUICK_ASK_H;
   quickWindow.setBounds({
     x: Math.round(area.x + (area.width - w) / 2),
     y: Math.round(area.y + area.height * 0.18),
     width: w,
-    height: 96,
+    height: h,
   });
   quickWindow.show();
   quickWindow.focus();
-  if (!quickWindow.webContents.isDestroyed()) quickWindow.webContents.send('chervil:quick-show');
+  if (!quickWindow.webContents.isDestroyed()) quickWindow.webContents.send('chervil:quick-show', { chat: quickChatMode });
+}
+
+// Grow/shrink the floating window in place when it flips between ask and chat.
+function resizeQuick() {
+  if (!quickWindow || quickWindow.isDestroyed() || !quickWindow.isVisible()) return;
+  const b = quickWindow.getBounds();
+  const h = quickChatMode ? QUICK_CHAT_H : QUICK_ASK_H;
+  if (b.height !== h) quickWindow.setBounds({ x: b.x, y: b.y, width: b.width, height: h });
 }
 
 function hideQuick() { if (quickWindow && !quickWindow.isDestroyed()) quickWindow.hide(); }
 
 function toggleQuick() {
   if (quickWindow && quickWindow.isVisible()) hideQuick();
-  else showQuick();
+  else { quickChatMode = false; showQuick(); } // hotkey / tray "Quick ask" always opens the compact ask bar
 }
 
 function createTray() {
@@ -993,11 +1007,100 @@ ipcMain.on('chervil:quick-submit', (_event, text) => {
   }
 });
 
+// Inline chat from the floating quick-ask panel. Rather than duplicate the
+// renderer's provider config (keys, model, profile, agent pins), we run the turn
+// THROUGH the main renderer's chat path and relay the reply back — so the quick
+// chat behaves exactly like the in-app chat and the conversation is already in the
+// renderer for a later "Open in Chervil" handoff. Request/response is matched by id.
+let quickChatSeq = 0;
+const quickChatPending = new Map();
+ipcMain.handle('chervil:quick-chat', (_event, payload) => new Promise((resolve) => {
+  if (!mainWindow || mainWindow.webContents.isDestroyed()) { resolve({ ok: false, error: 'Chervil isn’t ready yet.' }); return; }
+  const id = ++quickChatSeq;
+  // Don't leave the floating window spinning forever if the renderer never answers;
+  // clear this timer on the normal reply path so it doesn't linger 2 minutes.
+  const timer = setTimeout(() => {
+    if (quickChatPending.has(id)) { quickChatPending.delete(id); resolve({ ok: false, error: 'Sprig took too long to reply.' }); }
+  }, 120000);
+  quickChatPending.set(id, { resolve, timer });
+  mainWindow.webContents.send('chervil:quick-chat-run', { id, query: String((payload && payload.query) || '') });
+}));
+ipcMain.on('chervil:quick-chat-reply', (_event, res) => {
+  const r = res || {};
+  const pending = quickChatPending.get(r.id);
+  if (pending) { quickChatPending.delete(r.id); clearTimeout(pending.timer); pending.resolve(r); }
+});
+
+// The floating panel toggled between ask and chat — grow/shrink the window.
+ipcMain.on('chervil:quick-mode', (_event, chat) => {
+  quickChatMode = !!chat;
+  resizeQuick();
+});
+
+// "Open in Chervil" — hand the running quick conversation to the main window, then
+// reset the floating panel so a later handoff can't re-duplicate the same history.
+ipcMain.on('chervil:quick-open-in-app', () => {
+  hideQuick();
+  if (quickWindow && !quickWindow.webContents.isDestroyed()) quickWindow.webContents.send('chervil:quick-reset');
+  showMain();
+  if (mainWindow && !mainWindow.webContents.isDestroyed()) mainWindow.webContents.send('chervil:quick-open-in-app');
+});
+
+// "New chat" in the floating panel — clear the renderer's quick-chat history too.
+ipcMain.on('chervil:quick-clear', () => {
+  if (mainWindow && !mainWindow.webContents.isDestroyed()) mainWindow.webContents.send('chervil:quick-clear');
+});
+
+// Open a share composer (Fedica, AddToAny, …) in a small popup window like the
+// Chrome/Edge extensions do, instead of a full tab. It uses the DEFAULT session, so
+// it shares cookies with normal live tabs — the user's logged-in Fedica/etc. carries
+// over. A single popup is reused so repeated shares don't stack windows.
+let sharePopupWindow = null;
+ipcMain.on('chervil:open-share-popup', (_event, payload) => {
+  const url = String((payload && payload.url) || '');
+  if (!/^https?:\/\//i.test(url)) return;
+  const width = Math.max(360, Math.min(1200, Math.round((payload && payload.width) || 620)));
+  const height = Math.max(360, Math.min(1000, Math.round((payload && payload.height) || 640)));
+  if (sharePopupWindow && !sharePopupWindow.isDestroyed()) {
+    sharePopupWindow.setContentSize(width, height);
+    sharePopupWindow.loadURL(url);
+    sharePopupWindow.show();
+    sharePopupWindow.focus();
+    return;
+  }
+  sharePopupWindow = new BrowserWindow({
+    width,
+    height,
+    title: 'Share',
+    icon: path.join(__dirname, '..', 'build', 'icon.ico'),
+    autoHideMenuBar: true,
+    minimizable: false,
+    maximizable: false,
+    webPreferences: { contextIsolation: true, nodeIntegration: false }, // default session → logged-in cookies
+  });
+  // Fedica's composer (and many web editors) register a `beforeunload` guard for an
+  // unfinished post. Electron's default is to SILENTLY block the window close when
+  // that guard fires — so the ✕ appears dead. Bypass it so the user can always close
+  // the share popup (calling preventDefault here lets the unload proceed). This also
+  // keeps the reused-window loadURL() from being blocked when a composer is still open.
+  sharePopupWindow.webContents.on('will-prevent-unload', (event) => { event.preventDefault(); });
+  // Govern window.open()/target=_blank from the composer: this window rides the
+  // default (logged-in) session, so don't let a composer page spawn chromeless child
+  // windows on it. Route http(s) opens into a normal (governed) Chervil tab; deny the rest.
+  sharePopupWindow.webContents.setWindowOpenHandler(({ url: openUrl }) => {
+    if (/^https?:\/\//i.test(String(openUrl || ''))) openExternalHttpUrl(openUrl);
+    return { action: 'deny' };
+  });
+  sharePopupWindow.on('closed', () => { sharePopupWindow = null; });
+  sharePopupWindow.loadURL(url);
+});
+
 // --- "Hey Sprig" wake mode --------------------------------------------------
 // Wake-word detection runs in the main renderer (openWakeWord, on-device). When it
 // fires, the renderer pops the Quick-Ask bar as a "listening" affordance, then
 // captures + transcribes the spoken command itself and composes via the normal path.
 ipcMain.on('chervil:wake-listening', () => {
+  quickChatMode = false; // a spoken "Hey Sprig" request composes — show the compact ask bar, not the chat panel
   showQuick();
   if (quickWindow && !quickWindow.webContents.isDestroyed()) {
     quickWindow.webContents.send('chervil:quick-listening');
@@ -1549,6 +1652,37 @@ ipcMain.handle('chervil:publish-page', async (_event, payload) => {
       return { ok: false, error: data.error || `Publish failed (${res.status}).` };
     }
     return { ok: true, url: data.url, id: data.id, updated: data.updated };
+  } catch (err) {
+    return { ok: false, error: String(err && err.message ? err.message : err) };
+  }
+});
+
+// --- Publish a composed page to a self-hosted / wordpress.com blog via the WP
+// REST API (blog publishing). Auth = HTTP Basic with an Application Password
+// (WP 5.6+, generated by the user in wp-admin). Creates a DRAFT — the user reviews
+// + Publishes in WordPress. Runs in main → no CORS. The app password arrives from
+// the renderer (fetched from the encrypted vault) and is never logged.
+ipcMain.handle('chervil:wp-publish', async (_event, payload) => {
+  try {
+    const { siteUrl, username, appPassword, title, content } = payload || {};
+    if (!siteUrl || !username || !appPassword) return { ok: false, error: 'Missing WordPress site, username, or application password.' };
+    if (!content) return { ok: false, error: 'Nothing to publish.' };
+    const base = String(siteUrl).trim().replace(/\/+$/, '');
+    if (!/^https:\/\//i.test(base)) return { ok: false, error: 'Your WordPress site URL must start with https:// (Application Passwords require HTTPS).' };
+    const auth = 'Basic ' + Buffer.from(`${username}:${appPassword}`).toString('base64');
+    const res = await fetch(`${base}/wp-json/wp/v2/posts`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: auth },
+      body: JSON.stringify({ title: title || 'Chervil page', content, status: 'draft' }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      if (res.status === 401 || res.status === 403) return { ok: false, error: 'WordPress rejected the login — double-check the username and application password. (' + res.status + ')' };
+      if (res.status === 404) return { ok: false, error: 'No WordPress REST API at that URL — is it a WordPress site with the REST API enabled? (404)' };
+      return { ok: false, error: (data && data.message) || `WordPress publish failed (${res.status}).` };
+    }
+    const id = data && data.id;
+    return { ok: true, id, link: (data && data.link) || '', editUrl: id ? `${base}/wp-admin/post.php?post=${id}&action=edit` : '' };
   } catch (err) {
     return { ok: false, error: String(err && err.message ? err.message : err) };
   }
