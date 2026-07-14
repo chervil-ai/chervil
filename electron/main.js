@@ -18,7 +18,7 @@ const profileArg = process.argv.find((a) => a.startsWith('--profile-dir='));
 if (profileArg) app.setPath('userData', path.resolve(profileArg.slice('--profile-dir='.length)));
 
 const QRCode = require('qrcode');
-const { runAgent, runChat, runTranslate, runAgentTurn, runOrchestrator, runAppletAsk, runComposeApplet, runListModels, runAgentStep, runAgentPlan, runExtractSlides, runExtractDoc, runExtractSheets, runSynthesizeAgent } = require('../lib/agent');
+const { runAgent, runChat, runTranslate, runAgentTurn, runOrchestrator, runAppletAsk, runComposeApplet, runListModels, runAgentStep, runAgentPlan, runExtractSlides, runExtractDoc, runExtractSheets, runSynthesizeAgent, runWatchCheck } = require('../lib/agent');
 const { generateHeroImage, editImage } = require('../lib/images');
 const { buildEpub } = require('../lib/epub');
 const { getSkill } = require('../lib/skills');
@@ -1534,6 +1534,17 @@ ipcMain.handle('chervil:build-skill', async (_event, payload) => {
   }
 });
 
+// --- Page watchers: check one watched URL for a change / condition ----------
+ipcMain.handle('chervil:watch-check', async (_event, payload) => {
+  try {
+    const { url, condition, lastValue } = payload || {};
+    const res = await runWatchCheck({ url, condition, lastValue, config: providerConfigFrom(payload) });
+    return { ok: true, ...res };
+  } catch (err) {
+    return { ok: false, error: String(err && err.message ? err.message : err) };
+  }
+});
+
 // Re-render a stored skill artifact (lesson/quiz) to current HTML — a pure render
 // with NO model call. Lets the app refresh items built with an older renderer
 // (e.g. before interactive applets) on open, instead of replaying frozen markup.
@@ -1963,7 +1974,7 @@ ipcMain.handle('chervil:system-details', async () => {
 ipcMain.handle('chervil:notify', async (_event, payload) => {
   try {
     if (!Notification.isSupported()) return { ok: false, error: 'unsupported' };
-    const { title, body, tabId, entryId } = payload || {};
+    const { title, body, tabId, entryId, url } = payload || {};
     const n = new Notification({
       title: String(title || 'Chervil'),
       body: String(body || ''),
@@ -1976,7 +1987,7 @@ ipcMain.handle('chervil:notify', async (_event, payload) => {
         mainWindow.show();
         mainWindow.focus();
         if (!mainWindow.webContents.isDestroyed()) {
-          mainWindow.webContents.send('chervil:notification-click', { tabId, entryId });
+          mainWindow.webContents.send('chervil:notification-click', { tabId, entryId, url });
         }
       }
     });

@@ -104,6 +104,9 @@ contextBridge.exposeInMainWorld('chervil', {
   /** Re-render a stored skill artifact to current HTML (pure, no model call). */
   renderSkill: (payload) => ipcRenderer.invoke('chervil:render-skill', payload),
 
+  /** Check a watched page once → { ok, value, met, summary, changed }. */
+  watchCheck: (payload) => ipcRenderer.invoke('chervil:watch-check', payload),
+
   /** Render text/URL as a QR data URL for "send to phone". */
   qr: (text) => ipcRenderer.invoke('chervil:qr', text),
 

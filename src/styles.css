@@ -656,6 +656,7 @@ html, body {
 .sched-head { display: flex; align-items: center; justify-content: space-between; }
 .sched-title { font-size: 18px; font-weight: 700; }
 .sched-sub { color: var(--muted); font-size: 13px; margin: 8px 0 16px; }
+.sched-divider { height: 1px; background: var(--border); margin: 24px 0 4px; }
 .sched-form {
   display: flex;
   flex-direction: column;
@@ -892,6 +893,48 @@ html, body {
 
 #mode-badge { margin-left: 2px; }
 
+/* Overflow tray — holds the toolbar buttons that don't fit the current width.
+   Hidden until the ⋯ button opens it; positioned as a popover by reflowOmnibar. */
+#omni-overflow-tray { display: none; }
+#omni-overflow-tray.open {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  position: fixed;
+  z-index: 200;
+  min-width: 190px;
+  max-height: 70vh;
+  overflow-y: auto;
+  padding: 6px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: 0 12px 34px rgba(0, 0, 0, 0.45);
+}
+/* Buttons render as full-width labelled rows while inside the tray. */
+#omni-overflow-tray.open .omni-btn {
+  width: 100%;
+  height: 34px;
+  justify-content: flex-start;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 10px;
+  border-color: transparent;
+  background: transparent;
+  font-size: 15px;
+}
+#omni-overflow-tray.open .omni-btn:hover:not(:disabled) { background: #1b2030; border-color: transparent; }
+/* Emoji-only buttons carry their label in data-tray-label (set at init). */
+#omni-overflow-tray.open .omni-btn[data-tray-label]::after {
+  content: attr(data-tray-label);
+  font-size: 13px;
+  color: var(--text);
+}
+/* The .text buttons (Map, Library, …) already contain a .lbl span — show it. */
+#omni-overflow-tray.open .omni-btn.text { width: 100%; padding: 0 10px; }
+#omni-overflow-tray.open .omni-btn.text .lbl { display: inline; font-size: 13px; }
+
 #page-title {
   flex: 1 1 auto;
   min-width: 240px;
@@ -1048,6 +1091,36 @@ html, body {
   white-space: nowrap;
 }
 .remix-btn:hover { border-color: var(--accent); }
+
+/* In-page follow-up: a compact refine input living in the remix bar. */
+.followup { flex: 1 1 200px; min-width: 160px; max-width: 340px; display: flex; align-items: center; gap: 4px; }
+.followup[hidden] { display: none; }
+.followup input {
+  flex: 1 1 auto; min-width: 0;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+  border-radius: 999px;
+  padding: 6px 12px;
+  font-size: 12px;
+  font-family: inherit;
+  outline: none;
+}
+.followup input::placeholder { color: var(--muted); }
+.followup input:focus { border-color: var(--accent); background: var(--panel); }
+.followup-send {
+  flex: none;
+  border: 1px solid transparent;
+  background: linear-gradient(135deg, var(--accent), var(--accent-2));
+  color: #fff;
+  border-radius: 999px;
+  width: 28px; height: 28px;
+  font-size: 15px;
+  cursor: pointer;
+  display: grid; place-items: center;
+}
+.followup-send:hover { filter: brightness(1.08); }
+.followup-send:disabled, .followup input:disabled { opacity: 0.5; cursor: default; }
 .remix-btn.audio {
   border-color: transparent;
   background: linear-gradient(135deg, var(--accent), var(--accent-2));
@@ -1091,12 +1164,17 @@ html, body {
   font-size: 13px;
   color: var(--accent);
   cursor: pointer;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
   padding: 3px 0;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
 }
-.src-item:hover { text-decoration: underline; }
+.src-title { flex: 1 1 auto; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.src-item:hover .src-title { text-decoration: underline; }
+.src-age { flex: none; font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
+/* Freshness summary line above the source list. */
+.src-fresh { font-size: 12px; color: var(--muted); display: flex; align-items: center; gap: 6px; }
+.src-fresh .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); flex: none; }
 .src-empty { font-size: 12px; color: var(--muted); line-height: 1.45; }
 .remix-sep { flex: none; width: 1px; height: 18px; background: var(--border); margin: 0 2px; }
 .live-select {
@@ -1426,6 +1504,14 @@ html, body {
 .profile-input:focus { border-color: var(--accent); }
 
 /* ---------- Notifications toggle ---------- */
+/* Toolbar-buttons picker: flow the checkboxes into two columns when there's
+   room (collapses to one on a narrow settings panel). */
+#toolbar-prefs {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+  gap: 8px 24px;
+}
+
 .toggle-row {
   display: flex;
   align-items: flex-start;

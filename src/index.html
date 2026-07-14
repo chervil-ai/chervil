@@ -98,6 +98,8 @@
                   title="Learn mode — build an interactive lesson on a topic">🎓</button>
           <button id="quiz-toggle" type="button" class="deep-toggle" aria-pressed="false"
                   title="Quiz mode — build a graded quiz on a topic">❓</button>
+          <button id="compare-toggle" type="button" class="deep-toggle" aria-pressed="false"
+                  title="Compare mode — build a sourced, side-by-side comparison (e.g. iPhone 16 vs Pixel 9)">⚖️</button>
           <button id="chat-toggle" type="button" class="deep-toggle" aria-pressed="false"
                   title="Chat mode — plain conversation, no page composed">💬</button>
           <button id="send" type="submit" title="Send">↑</button>
@@ -143,10 +145,15 @@
             <button id="zoom-in" class="omni-btn" title="Zoom in (Ctrl+=)">+</button>
           </div>
           <button id="print-btn" class="omni-btn" title="Print (Ctrl+P)">🖨</button>
+          <button id="omni-overflow-btn" class="omni-btn" title="More toolbar actions" aria-haspopup="true" aria-expanded="false" hidden>⋯</button>
           <button id="settings-btn" class="omni-btn" title="Settings">⚙</button>
           <div id="mode-badge" class="badge">ready</div>
         </div>
       </div>
+
+      <!-- Overflow tray: toolbar buttons that don't fit the current window width
+           are moved in here and reached via the ⋯ button (see reflowOmnibar). -->
+      <div id="omni-overflow-tray" role="menu" aria-label="More toolbar actions"></div>
 
       <!-- Bookmarks bar (toggle: Settings → General, or Ctrl+Shift+B) -->
       <div id="bookmarks-bar" hidden></div>
@@ -195,6 +202,13 @@
         <!-- Remix bar: transform the current composed page -->
         <div id="remix-bar" hidden>
           <button id="remix-min" class="remix-btn remix-min" title="Minimize this bar">▾</button>
+          <!-- In-page follow-up: refine THIS composed page in place, without leaving it -->
+          <form id="followup-form" class="followup" autocomplete="off">
+            <input id="followup-input" type="text" spellcheck="false" autocomplete="off"
+                   placeholder="Ask a follow-up to refine this page…" title="Refine this page in place — e.g. “focus on the budget options”, “make it shorter”, “add a section on X”" />
+            <button id="followup-send" type="submit" class="followup-send" title="Refine this page (Enter)">↳</button>
+          </form>
+          <span class="remix-sep"></span>
           <span class="remix-label">Remix</span>
           <button class="remix-btn" data-remix="summary">Summarize</button>
           <button class="remix-btn" data-remix="simplify">Simplify</button>
@@ -935,7 +949,7 @@
   <div id="sched-view" class="sched-view">
     <div class="sched-panel">
       <div class="sched-head">
-        <span class="sched-title">⏰ Scheduled agents</span>
+        <span class="sched-title">⏰ Schedules &amp; watchers</span>
         <button id="sched-close" class="omni-btn" title="Close">✕</button>
       </div>
       <p class="sched-sub">Sprig runs a prompt on a schedule and notifies you when the page is ready. Runs in the background while Chervil sits in the tray.</p>
@@ -982,6 +996,30 @@
       </form>
 
       <div id="sched-list" class="sched-list"></div>
+
+      <!-- Page watchers: poll a URL and notify on change / condition -->
+      <div class="sched-divider"></div>
+      <div class="sched-head">
+        <span class="sched-title">👁 Page watchers</span>
+      </div>
+      <p class="sched-sub">Sprig watches a web page and pings you when something changes — a price drops, an item is back in stock, docs update. (Tip: on any live site just say “watch this page and tell me when…”.)</p>
+      <form id="watch-form" class="sched-form" autocomplete="off">
+        <input id="watch-url" type="text" placeholder="Page URL to watch — https://…" spellcheck="false" />
+        <textarea id="watch-cond" rows="2" placeholder="Tell me when… e.g. “the price drops below $500”, “it’s back in stock” (leave blank to watch for any change)"></textarea>
+        <div class="sched-row">
+          <label>Check
+            <select id="watch-interval">
+              <option value="900000">every 15 min</option>
+              <option value="1800000">every 30 min</option>
+              <option value="3600000" selected>hourly</option>
+              <option value="21600000">every 6 hours</option>
+              <option value="86400000">daily</option>
+            </select>
+          </label>
+          <button type="submit" class="sched-add">Watch page</button>
+        </div>
+      </form>
+      <div id="watch-list" class="sched-list"></div>
     </div>
   </div>
 

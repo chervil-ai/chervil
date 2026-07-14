@@ -9,6 +9,7 @@ const els = {
   deepToggle: document.getElementById('deep-toggle'),
   learnToggle: document.getElementById('learn-toggle'),
   quizToggle: document.getElementById('quiz-toggle'),
+  compareToggle: document.getElementById('compare-toggle'),
   chatToggle: document.getElementById('chat-toggle'),
   attachBtn: document.getElementById('attach-btn'),
   foldersBtn: document.getElementById('folders-btn'),
@@ -40,6 +41,9 @@ const els = {
   remixBar: document.getElementById('remix-bar'),
   remixMin: document.getElementById('remix-min'),
   remixHandle: document.getElementById('remix-handle'),
+  followupForm: document.getElementById('followup-form'),
+  followupInput: document.getElementById('followup-input'),
+  followupSend: document.getElementById('followup-send'),
   verifyBtn: document.getElementById('verify-btn'),
   refreshPageBtn: document.getElementById('refresh-page-btn'),
   sourcesBtn: document.getElementById('sources-btn'),
@@ -519,7 +523,7 @@ const MAX_BOOKMARK_TOMBSTONES = 1000;
 // Id-keyed delete tombstones for the other synced collections (composed pages,
 // trash, site history, agents, schedules), so those removals also survive the
 // cross-machine union-merge instead of resurrecting. { coll: [{ id, at }] }
-let deletionTombstones = { pages: [], trash: [], sites: [], agents: [], schedules: [] };
+let deletionTombstones = { pages: [], trash: [], sites: [], agents: [], schedules: [], watchers: [] };
 const MAX_DEL_TOMBSTONES = 1000;
 let siteHistory = []; // [{ id, url, title, at }] newest-first — real sites visited
 const MAX_SITE_HISTORY = 500;
@@ -550,6 +554,10 @@ let livingTimer = null;
 // Scheduled agents: run a prompt on a cron-like rule (interval / daily / weekly).
 //   schedule = { id, title, prompt, rule, deep, enabled, lastRun, tabId, entryId, running }
 let schedules = [];
+// Page watchers: poll an external URL and notify when its content/condition changes.
+//   watcher = { id, url, title, condition, intervalMs, enabled, running, lastRun,
+//               lastValue, lastSummary, lastChangedAt, triggered }
+let watchers = [];
 // Agent files: imported personas/configs that shape Sprig's behavior.
 //   agent = { id, name, description, persona, model, provider, mcp:[names], starters:[] }
 let agents = [];
@@ -2681,8 +2689,32 @@ function setRemixVisible(show) {
   const min = !!settings.remixMinimized;
   els.remixBar.hidden = !show || min;
   if (els.remixHandle) els.remixHandle.hidden = !show || !min;
-  if (show) { updateLiveControls(); updateSourcesButton(); }
+  if (show) { updateLiveControls(); updateSourcesButton(); updateFollowupDock(); }
   else { stopAudio(); els.sourcesPanel.hidden = true; }
+}
+
+// The in-page follow-up input refines a composed page in place. It only applies
+// to ask-composed pages — skill-built pages (lessons/quizzes/compare) and the
+// image editor aren't refined via the ask pipeline, so hide it there.
+function updateFollowupDock() {
+  if (!els.followupForm) return;
+  const cur = currentEntry(activeTab());
+  const refinable = !!(cur && cur.kind === 'page' && !cur.lesson && !cur.skill && !cur.imageEditor);
+  els.followupForm.hidden = !refinable;
+}
+
+// Send a follow-up: refine THIS page in place (force refine, never navigate away).
+function handleFollowup(e) {
+  if (e) e.preventDefault();
+  const tab = activeTab();
+  const cur = currentEntry(tab);
+  if (!cur || cur.kind !== 'page' || cur.lesson || cur.skill || cur.imageEditor) return;
+  const q = (els.followupInput.value || '').trim();
+  if (!q) return;
+  if (isTabBusy(tab.id) || agentRunning) { toast('Sprig is busy — try again in a moment.'); return; }
+  els.followupInput.value = '';
+  els.followupInput.blur();
+  submitQuery(q, { tab, refineMode: 'force', skipFollowup: true, allowNavigate: false, displayText: q });
 }
 
 // Collapse the floating remix bar to a small corner handle (and back). Persisted.
@@ -2698,6 +2730,7 @@ function expandRemix() {
   els.remixBar.hidden = false;
   updateLiveControls();
   updateSourcesButton();
+  updateFollowupDock();
   scheduleSave();
 }
 
@@ -2743,6 +2776,47 @@ function updateSourcesButton() {
   els.sourcesBtn.textContent = n ? `Sources (${n})` : 'Sources';
   // Dim when there's nothing to show (knowledge-only page).
   els.sourcesBtn.classList.toggle('dim', !n && !searched);
+  // Ambient freshness: surface the freshest-source recency in the tooltip.
+  const fresh = n ? freshnessSummary(cur.sources || []) : '';
+  els.sourcesBtn.title = fresh ? `Sources Sprig used — ${fresh}` : 'Sources Sprig used';
+}
+
+// Try to turn a web-search "page age" string (e.g. "April 30, 2025",
+// "2025-04-30", "3 days ago") into a Date, so we can show a consistent freshness
+// signal. Returns null when it can't be parsed (many results carry no date).
+function parseSourceAge(age) {
+  const s = String(age || '').trim();
+  if (!s) return null;
+  const rel = s.match(/^(\d+)\s+(day|week|month|year|hour|minute)s?\s+ago$/i);
+  if (rel) {
+    const n = Number(rel[1]); const now = Date.now();
+    const ms = { minute: 6e4, hour: 36e5, day: 864e5, week: 6048e5, month: 2592e6, year: 31536e6 }[rel[2].toLowerCase()];
+    return new Date(now - n * ms);
+  }
+  const t = Date.parse(s);
+  return Number.isFinite(t) ? new Date(t) : null;
+}
+
+// "3 days ago" / "2 months ago" from a Date, for the freshness label.
+function relativeAge(date) {
+  const diff = Date.now() - date.getTime();
+  if (diff < 0) return 'just now';
+  const day = 864e5;
+  if (diff < day) return 'today';
+  const d = Math.round(diff / day);
+  if (d < 7) return `${d}d ago`;
+  if (d < 30) return `${Math.round(d / 7)}w ago`;
+  if (d < 365) return `${Math.round(d / 30)}mo ago`;
+  return `${Math.round(d / 365)}y ago`;
+}
+
+// A one-line freshness summary from the sources' dates: how many are dated and
+// how recent the freshest one is. Returns '' when nothing is dated.
+function freshnessSummary(sources) {
+  const dated = sources.map((s) => parseSourceAge(s && s.age)).filter(Boolean);
+  if (!dated.length) return '';
+  const newest = new Date(Math.max(...dated.map((d) => d.getTime())));
+  return `Freshest source ${relativeAge(newest)} · ${dated.length} of ${sources.length} dated`;
 }
 
 function toggleSourcesPanel() {
@@ -2774,11 +2848,29 @@ function toggleSourcesPanel() {
     none.textContent = 'No live web sources — this page came from the model’s own knowledge. Use ✓ Verify to fact-check it against the web.';
     sec2.appendChild(none);
   } else {
+    const fresh = freshnessSummary(sources);
+    if (fresh) {
+      const f = document.createElement('div');
+      f.className = 'src-fresh';
+      f.innerHTML = '<span class="dot"></span>';
+      f.appendChild(document.createTextNode('🕒 ' + fresh));
+      sec2.appendChild(f);
+    }
     for (const s of sources) {
       const a = document.createElement('div');
       a.className = 'src-item';
-      a.textContent = s.title || s.url;
       a.title = s.url;
+      const t = document.createElement('span');
+      t.className = 'src-title';
+      t.textContent = s.title || s.url;
+      a.appendChild(t);
+      const dt = parseSourceAge(s.age);
+      if (dt) {
+        const age = document.createElement('span');
+        age.className = 'src-age';
+        age.textContent = relativeAge(dt);
+        a.appendChild(age);
+      }
       a.addEventListener('click', () => { els.sourcesPanel.hidden = true; handleLinkClick(s.url, s.title || ''); });
       sec2.appendChild(a);
     }
@@ -3023,15 +3115,16 @@ function intervalLabel(ms) {
 
 function startScheduler() {
   if (livingTimer) return;
-  if (!living.length && !schedules.length) return;
-  livingTimer = setInterval(schedulerTick, 30000); // check living pages + schedules every 30s
+  if (!living.length && !schedules.length && !watchers.length) return;
+  livingTimer = setInterval(schedulerTick, 30000); // check living pages + schedules + watchers every 30s
 }
 
-// Master 30s tick: drives both Living-page refresh and scheduled agents.
+// Master 30s tick: drives Living-page refresh, scheduled agents, and page watchers.
 function schedulerTick() {
-  if (!living.length && !schedules.length) { clearInterval(livingTimer); livingTimer = null; return; }
+  if (!living.length && !schedules.length && !watchers.length) { clearInterval(livingTimer); livingTimer = null; return; }
   tickLiving();
   tickSchedules();
+  tickWatchers();
 }
 
 function tickLiving() {
@@ -3106,6 +3199,107 @@ async function runSchedule(sch) {
   sch.running = false;
   renderSchedulesIfOpen();
   scheduleSave();
+}
+
+// --- Page watchers: poll a URL, notify when it changes / a condition is met --
+function tickWatchers() {
+  const now = Date.now();
+  for (const w of watchers.slice()) {
+    if (w.enabled && !w.running && now - (w.lastRun || 0) >= w.intervalMs) runWatcher(w);
+  }
+}
+
+// Create + start a watcher for a URL. Runs an immediate baseline check so there's
+// a value to compare against (and so a condition already true fires right away).
+function createWatcher(url, title, condition, intervalMs) {
+  if (!url) return null;
+  const w = {
+    id: uid(),
+    url,
+    title: title || hostOf(url),
+    condition: (condition || '').trim(),
+    intervalMs: intervalMs || 3600000, // hourly by default
+    enabled: true,
+    running: false,
+    lastRun: 0,
+    lastValue: '',
+    lastSummary: '',
+    lastChangedAt: 0,
+    triggered: false,
+  };
+  watchers.push(w);
+  startScheduler();
+  scheduleSave();
+  const what = w.condition ? `until “${w.condition}”` : 'for changes';
+  toast(`👁 Watching “${w.title}” ${what} — I’ll check ${watchIntervalLabel(w.intervalMs)} and let you know.`);
+  renderWatchersIfOpen();
+  runWatcher(w); // baseline
+  return w;
+}
+
+function watchIntervalLabel(ms) {
+  const m = { 900000: 'every 15 min', 1800000: 'every 30 min', 3600000: 'hourly', 21600000: 'every 6 hours', 86400000: 'daily' };
+  return m[ms] || 'periodically';
+}
+
+async function runWatcher(w) {
+  if (w.running) return;
+  w.running = true;
+  w.lastRun = Date.now();
+  renderWatchersIfOpen();
+  try {
+    const res = await window.chervil.watchCheck({
+      url: w.url,
+      condition: w.condition || '',
+      lastValue: w.lastValue || '',
+      config: providerConfig(),
+    });
+    if (res && res.ok) {
+      const prevValue = w.lastValue || '';
+      const conditionWatch = !!(w.condition && w.condition.trim());
+      let fire = false;
+      let note = '';
+      if (conditionWatch) {
+        // Edge-trigger: fire when the condition flips from unmet → met.
+        if (res.met && !w.triggered) { fire = true; note = res.summary || 'Your condition is now met.'; }
+        w.triggered = !!res.met;
+      } else if (res.value && prevValue && res.value.trim().toLowerCase() !== prevValue.trim().toLowerCase()) {
+        // Any-change watch: fire when the tracked value changes from a known baseline.
+        fire = true;
+        note = res.summary || `Changed to ${res.value}`;
+      }
+      if (res.value) w.lastValue = res.value;
+      if (res.summary) w.lastSummary = res.summary;
+      if (fire) {
+        w.lastChangedAt = Date.now();
+        toast(`👁 ${w.title}: ${note}`);
+        if (settings.notifications && window.chervil.notify) {
+          window.chervil.notify({ title: `Chervil · ${w.title}`, body: note, url: w.url });
+        }
+      }
+    }
+  } catch { /* transient failure — try again next tick */ }
+  w.running = false;
+  renderWatchersIfOpen();
+  scheduleSave();
+}
+
+// Detect a "watch this page / tell me when …" request on a live site. Returns
+// { condition } (condition '' = watch for any change) or null.
+function parseWatchIntent(text) {
+  const q = String(text || '').trim();
+  let m = q.match(/^(?:watch|monitor|keep an eye on|track)\s+(?:this\s+page|this\s+site|it|this)\b(.*)$/i);
+  if (m) {
+    const rest = m[1]
+      .replace(/^[\s,:.-]*(?:for|and)?\s*/i, '')
+      .replace(/^(?:tell|let|notify|ping|alert)\s+me(?:\s+know)?\s*/i, '')
+      .replace(/^(?:when|if|for)\s+/i, '')
+      .trim();
+    return { condition: rest };
+  }
+  m = q.match(/^(?:tell|let|notify|ping|alert)\s+me(?:\s+know)?\s+(?:when|if)\s+(.+)$/i);
+  if (m) return { condition: m[1].trim() };
+  return null;
 }
 
 // Quietly re-run a living page's query and replace its content in place. Runs
@@ -4126,7 +4320,7 @@ function updatePlaceholder() {
   if (onLiveSite && askPageArmed) els.prompt.placeholder = 'Ask about this page…';
   else if (settings.chatMode) els.prompt.placeholder = onLiveSite ? 'Chat about this page, or anything…' : 'Chat with Sprig…';
   else if (onLiveSite) els.prompt.placeholder = 'Hey Sprig, act here…';
-  else els.prompt.placeholder = skillMode === 'learn' ? 'What do you want to learn?' : skillMode === 'quiz' ? 'Quiz me on…' : deepMode ? 'Hey Sprig, research…' : 'Hey Sprig, ask…';
+  else els.prompt.placeholder = skillMode === 'learn' ? 'What do you want to learn?' : skillMode === 'quiz' ? 'Quiz me on…' : skillMode === 'compare' ? 'Compare… (e.g. iPhone 16 vs Pixel 9)' : deepMode ? 'Hey Sprig, research…' : 'Hey Sprig, ask…';
 }
 
 // Speak a short sample with the currently selected voice/speed (Settings test button).
@@ -4395,7 +4589,7 @@ function openMap() { renderMap(); els.mapView.classList.add('open'); }
 function closeMap() { els.mapView.classList.remove('open'); }
 
 // --- Scheduled agents UI ----------------------------------------------------
-function openSched() { populateSchedAgentSelect(); renderSchedules(); els.schedView.classList.add('open'); }
+function openSched() { populateSchedAgentSelect(); renderSchedules(); renderWatchers(); els.schedView.classList.add('open'); }
 function populateSchedAgentSelect() {
   const sel = document.getElementById('sched-agent');
   if (!sel) return;
@@ -4411,6 +4605,77 @@ function populateSchedAgentSelect() {
 }
 function closeSched() { els.schedView.classList.remove('open'); }
 function renderSchedulesIfOpen() { if (els.schedView && els.schedView.classList.contains('open')) renderSchedules(); }
+function renderWatchersIfOpen() { if (els.schedView && els.schedView.classList.contains('open')) renderWatchers(); }
+
+// The Page-watchers list in the Schedules panel.
+function renderWatchers() {
+  const list = document.getElementById('watch-list');
+  if (!list) return;
+  list.innerHTML = '';
+  if (!watchers.length) {
+    const e = document.createElement('div');
+    e.className = 'sched-empty';
+    e.textContent = 'No page watchers yet. Add a URL above, or say “watch this page…” on any live site.';
+    list.appendChild(e);
+    return;
+  }
+  for (const w of watchers) {
+    const item = document.createElement('div');
+    item.className = 'sched-item';
+    const main = document.createElement('div');
+    main.className = 'si-main';
+    const title = document.createElement('div');
+    title.className = 'si-title';
+    title.textContent = '👁 ' + (w.title || hostOf(w.url));
+    const when = document.createElement('div');
+    when.className = 'si-when';
+    const bits = [w.condition ? `until “${w.condition}”` : 'any change', watchIntervalLabel(w.intervalMs)];
+    if (!w.enabled) bits.push('paused');
+    if (w.running) bits.push('checking…');
+    if (w.lastValue) bits.push(`now: ${w.lastValue}`);
+    if (w.lastRun) bits.push('checked ' + relTime(w.lastRun));
+    when.textContent = bits.join(' · ');
+    main.appendChild(title);
+    main.appendChild(when);
+
+    const checkBtn = document.createElement('button');
+    checkBtn.className = 'si-btn';
+    checkBtn.textContent = 'Check now';
+    checkBtn.addEventListener('click', () => runWatcher(w));
+    const openBtn = document.createElement('button');
+    openBtn.className = 'si-btn';
+    openBtn.textContent = 'Open';
+    openBtn.addEventListener('click', () => { closeSched(); openUrlInTab(w.url); });
+    const tog = document.createElement('button');
+    tog.className = 'si-btn';
+    tog.textContent = w.enabled ? 'Pause' : 'Resume';
+    tog.addEventListener('click', () => { w.enabled = !w.enabled; if (w.enabled) startScheduler(); scheduleSave(); renderWatchers(); });
+    const del = document.createElement('button');
+    del.className = 'si-btn';
+    del.textContent = 'Delete';
+    del.addEventListener('click', () => { addTombstone('watchers', w.id); watchers = watchers.filter((x) => x.id !== w.id); scheduleSave(); renderWatchers(); });
+
+    item.appendChild(main);
+    item.appendChild(checkBtn);
+    item.appendChild(openBtn);
+    item.appendChild(tog);
+    item.appendChild(del);
+    list.appendChild(item);
+  }
+}
+
+function addWatcherFromForm() {
+  const urlEl = document.getElementById('watch-url');
+  const condEl = document.getElementById('watch-cond');
+  const intEl = document.getElementById('watch-interval');
+  const raw = (urlEl.value || '').trim();
+  if (!raw) { toast('Enter a page URL to watch.'); return; }
+  const url = /^https?:\/\//i.test(raw) ? raw : 'https://' + raw;
+  const intervalMs = parseInt(intEl.value, 10) || 3600000;
+  createWatcher(url, hostOf(url), (condEl.value || '').trim(), intervalMs);
+  urlEl.value = ''; condEl.value = '';
+  renderWatchers();
+}
 
 function ruleSummary(sch) {
   const r = sch.rule || {};
@@ -5202,6 +5467,8 @@ function setChatMode(on) {
 // Skill picker (sticky): when a skill mode is active, the next query builds that
 // skill ('learn' | 'quiz') instead of composing a page — same as its "/command".
 let skillMode = '';
+// Human labels for skills (toasts / tab titles), keyed by skill id.
+const SKILL_LABELS = { learn: 'lesson', quiz: 'quiz', compare: 'comparison' };
 function setSkillMode(id) {
   skillMode = skillMode === id ? '' : (id || ''); // clicking the active one turns it off
   if (els.learnToggle) {
@@ -5211,6 +5478,10 @@ function setSkillMode(id) {
   if (els.quizToggle) {
     els.quizToggle.classList.toggle('active', skillMode === 'quiz');
     els.quizToggle.setAttribute('aria-pressed', String(skillMode === 'quiz'));
+  }
+  if (els.compareToggle) {
+    els.compareToggle.classList.toggle('active', skillMode === 'compare');
+    els.compareToggle.setAttribute('aria-pressed', String(skillMode === 'compare'));
   }
   if (skillMode && deepMode) {
     deepMode = false;
@@ -5948,6 +6219,23 @@ function runFind(forward) {
   }
 }
 
+// Is this a bare "X vs Y" comparison request? Deliberately narrow: a short
+// "vs"/"versus" phrase (optionally led by "compare"), each side ≤6 words, no URL,
+// not a question-lead sentence — so it triggers the Compare skill only on clear
+// intent and never on chat/nav phrasings ("compare my open tabs", "why X vs Y…").
+function isComparisonQuery(text) {
+  const q = String(text || '').trim();
+  if (!q || q.length > 140) return false;
+  if (/\bhttps?:\/\//i.test(q) || /\b(my|these|those|the following)\b/i.test(q)) return false;
+  if (/^(why|how|what|when|where|should|is|are|do|does|can|which)\b/i.test(q)) return false;
+  const body = q.replace(/^\s*compare\s+/i, '');
+  const m = body.match(/^(.{1,70}?)\s+(?:vs\.?|versus)\s+(.{1,70})$/i);
+  if (!m) return false;
+  const a = m[1].trim(), b = m[2].trim().replace(/[?.!]+$/, '');
+  const words = (s) => s.split(/\s+/).filter(Boolean).length;
+  return !!a && !!b && words(a) <= 6 && words(b) <= 6;
+}
+
 function handleComposerSubmit(text, opts = {}) {
   const tab = activeTab();
   if (!tab || isTabBusy(tab.id) || agentRunning) return;
@@ -5963,9 +6251,11 @@ function handleComposerSubmit(text, opts = {}) {
   // toggle, builds that skill instead of composing a page.
   const learnCmd = query.match(/^\/learn\s+(.+)/is);
   const quizCmd = query.match(/^\/quiz\s+(.+)/is);
+  const compareCmd = query.match(/^\/compare\s+(.+)/is);
   if (learnCmd) { buildAndRenderSkill(tab, 'learn', learnCmd[1].trim(), 'lesson'); return; }
   if (quizCmd) { buildAndRenderSkill(tab, 'quiz', quizCmd[1].trim(), 'quiz'); return; }
-  if (skillMode) { buildAndRenderSkill(tab, skillMode, query, skillMode === 'learn' ? 'lesson' : 'quiz'); return; }
+  if (compareCmd) { buildAndRenderSkill(tab, 'compare', compareCmd[1].trim(), 'comparison'); return; }
+  if (skillMode) { buildAndRenderSkill(tab, skillMode, query, SKILL_LABELS[skillMode] || 'page'); return; }
 
   // On an image-editor tab the composer edits THE IMAGE — "add a red arrow at
   // the button" must not web-search and compose a new page (or chat). Explicit
@@ -6039,6 +6329,13 @@ function handleComposerSubmit(text, opts = {}) {
 
   if (!collectionCompose && cur && cur.kind === 'navigate') {
     if (/^\s*(auto-?fill|fill\s+(in|out)?\s*(the|this|my)?\s*form|fill\s+my\s+(details|info|information))\b/i.test(query)) { autofillCurrentForm(); return; }
+    // "Watch this page / tell me when …" → set up a page watcher on this URL.
+    const watch = parseWatchIntent(query);
+    if (watch) {
+      createWatcher(cur.url, tab.title || hostOf(cur.url), watch.condition);
+      els.prompt.value = ''; resetPromptHeight();
+      return;
+    }
     startAgent(query);
     return;
   }
@@ -6046,6 +6343,16 @@ function handleComposerSubmit(text, opts = {}) {
   // Deep Dive always composes a fresh research report (no in-place refine).
   if (deepMode) {
     submitQuery(query, { deep: true, skipFollowup: true, allowNavigate: false, attachments });
+    return;
+  }
+
+  // Natural-language comparison: a bare "X vs Y" (or "X versus Y") is a strong,
+  // unambiguous signal to build a sourced comparison instead of a prose page.
+  // Kept deliberately narrow (short sides, no attachments, not a question lead)
+  // so it never hijacks chat/nav/agent phrasings like "compare my open tabs".
+  // Checked after Deep Dive so an explicit research toggle still wins.
+  if (!attachments.length && isComparisonQuery(query)) {
+    buildAndRenderSkill(tab, 'compare', query, 'comparison');
     return;
   }
 
@@ -6079,8 +6386,10 @@ async function buildAndRenderSkill(tab, skillId, input, label) {
       skillHtmlVersion: SKILL_HTML_VERSION, // freshly rendered with the current renderer
     };
     // Learn keeps `lesson` + `sources` for the (currently lesson-specific)
-    // export/publish actions.
+    // export/publish actions. Compare keeps `sources` so the Sources button and
+    // sourced-page affordances work on a comparison too.
     if (skillId === 'learn') { entry.lesson = a; entry.sources = a.sources || []; }
+    if (skillId === 'compare') { entry.sources = a.sources || []; }
     pushEntry(tab, entry);
     if (!tab.title || tab.title === 'New Tab') tab.title = a.title || (label || skillId);
     if (activeTab() === tab) { renderTabs(); renderCurrentPage(); refreshComposer(); }
@@ -9095,6 +9404,7 @@ function applyToolbar() {
   if (els.pwFillToggle) els.pwFillToggle.checked = toolbarVisible('pwFill');
   if (els.cardFillToggle) els.cardFillToggle.checked = toolbarVisible('cardFill');
   if (typeof updatePwFillButton === 'function') updatePwFillButton();
+  if (typeof reflowOmnibar === 'function') reflowOmnibar(); // widths changed → recompute overflow
 }
 
 function setToolbarVisible(key, visible) {
@@ -9163,6 +9473,110 @@ function showToolbarMenu(x, y) {
     window.addEventListener('blur', closeToolbarMenu); // clicks into the page iframe/webview blur the window
   }, 0);
 }
+
+// --- Omnibar overflow -------------------------------------------------------
+// When the window is narrow (not maximized, or with the sidebar open), the
+// right-hand action cluster can't all fit. Instead of clipping buttons off the
+// right edge — where they're invisible AND unreachable (no scroll) — we move the
+// lowest-priority ones into a ⋯ popover so every action stays reachable.
+//
+// Order below = order we collapse: first entries leave the bar first. zoom is
+// omitted (its 3-button cluster doesn't belong in a vertical menu) and stays
+// inline along with Settings and the ⋯ button itself.
+const OMNI_OVERFLOW_ORDER = [
+  'pip-btn', 'reader-btn', 'read-aloud-btn', 'translate-btn', 'send-phone-btn',
+  'share-fedica-btn', 'email-page-btn', 'snip-btn', 'ask-page-btn', 'save-btn',
+  'sched-btn', 'agents-btn', 'map-btn', 'favorite-btn', 'bookmark-btn',
+  'history-btn', 'print-btn',
+];
+let omniOriginalOrder = null; // captured once, so we can restore inline order
+
+// Stamp a text label onto each emoji-only button so the tray can show it via
+// CSS ::after. The .text buttons (Map, Library, …) already have a visible label.
+function initOmniOverflow() {
+  const actions = document.getElementById('omni-actions');
+  if (!actions) return;
+  omniOriginalOrder = [...actions.children];
+  for (const b of (typeof TOOLBAR_BUTTONS !== 'undefined' ? TOOLBAR_BUTTONS : [])) {
+    const el = document.getElementById(b.id);
+    if (!el || el.classList.contains('text')) continue; // .text already labelled
+    el.dataset.trayLabel = b.label.replace(/\s*\(.*\)\s*$/, ''); // drop trailing "(emoji)"
+  }
+  // Clicking a tray action fires its normal handler, then closes the tray.
+  const tray = document.getElementById('omni-overflow-tray');
+  if (tray) tray.addEventListener('click', (e) => { if (e.target.closest('.omni-btn')) closeOmniTray(); });
+  const more = document.getElementById('omni-overflow-btn');
+  if (more) more.addEventListener('click', toggleOmniTray);
+  const bar = document.getElementById('omnibar');
+  if (bar && typeof ResizeObserver !== 'undefined') {
+    let raf = 0;
+    const ro = new ResizeObserver(() => { cancelAnimationFrame(raf); raf = requestAnimationFrame(reflowOmnibar); });
+    ro.observe(bar);
+  }
+  reflowOmnibar();
+}
+
+function reflowOmnibar() {
+  const actions = document.getElementById('omni-actions');
+  const bar = document.getElementById('omnibar');
+  const more = document.getElementById('omni-overflow-btn');
+  const tray = document.getElementById('omni-overflow-tray');
+  if (!actions || !bar || !more || !tray || !omniOriginalOrder) return;
+  closeOmniTray(); // buttons may move; don't leave a stale popover open
+
+  // 1. Pull everything back inline, in the original DOM order.
+  for (const node of omniOriginalOrder) actions.appendChild(node);
+  more.hidden = true;
+
+  // 2. If it all fits now, we're done.
+  const fits = () => bar.scrollWidth <= bar.clientWidth + 1;
+  if (fits()) return;
+
+  // 3. Move buttons into the tray, lowest-priority first, until it fits.
+  more.hidden = false;
+  for (const id of OMNI_OVERFLOW_ORDER) {
+    if (fits()) break;
+    const el = document.getElementById(id);
+    if (!el || el.offsetWidth === 0) continue; // skip hidden / user-disabled buttons
+    tray.appendChild(el);
+  }
+}
+
+let omniTrayOpen = false;
+function openOmniTray() {
+  const more = document.getElementById('omni-overflow-btn');
+  const tray = document.getElementById('omni-overflow-tray');
+  if (!more || !tray || !tray.children.length) return;
+  tray.classList.add('open');
+  const r = more.getBoundingClientRect();
+  const left = Math.max(6, Math.min(r.right - tray.offsetWidth, window.innerWidth - tray.offsetWidth - 8));
+  tray.style.left = left + 'px';
+  tray.style.top = (r.bottom + 4) + 'px';
+  more.setAttribute('aria-expanded', 'true');
+  omniTrayOpen = true;
+  setTimeout(() => {
+    document.addEventListener('mousedown', onOmniTrayOutside, true);
+    document.addEventListener('keydown', onOmniTrayEsc, true);
+    window.addEventListener('blur', closeOmniTray);
+  }, 0);
+}
+function closeOmniTray() {
+  const tray = document.getElementById('omni-overflow-tray');
+  const more = document.getElementById('omni-overflow-btn');
+  if (tray) tray.classList.remove('open');
+  if (more) more.setAttribute('aria-expanded', 'false');
+  omniTrayOpen = false;
+  document.removeEventListener('mousedown', onOmniTrayOutside, true);
+  document.removeEventListener('keydown', onOmniTrayEsc, true);
+  window.removeEventListener('blur', closeOmniTray);
+}
+function toggleOmniTray() { omniTrayOpen ? closeOmniTray() : openOmniTray(); }
+function onOmniTrayOutside(e) {
+  const tray = document.getElementById('omni-overflow-tray');
+  const more = document.getElementById('omni-overflow-btn');
+  if (tray && !tray.contains(e.target) && e.target !== more) closeOmniTray();
+}
+function onOmniTrayEsc(e) { if (e.key === 'Escape') closeOmniTray(); }
 
 function openSettings() {
   applySettingsToUI();
@@ -9307,7 +9721,7 @@ function scheduleSave() {
     const persistActiveId = persistTabs.some((t) => t.id === activeId)
       ? activeId
       : (persistTabs[0] && persistTabs[0].id) || null;
-    window.chervil.saveState({ tabs: persistTabs, activeId: persistActiveId, tabGroups, settings, library, bookmarks, bookmarkFolders, bookmarkTombstones, favorites, favoriteFolders, favoriteTombstones, collections, deletionTombstones, siteHistory, downloads, agentAudit, spaces, activeSpaceId, savedSpaces, activeSavedSpaceId, living, schedules, agents, activeAgentId, pipelines, pageStores })
+    window.chervil.saveState({ tabs: persistTabs, activeId: persistActiveId, tabGroups, settings, library, bookmarks, bookmarkFolders, bookmarkTombstones, favorites, favoriteFolders, favoriteTombstones, collections, deletionTombstones, siteHistory, downloads, agentAudit, spaces, activeSpaceId, savedSpaces, activeSavedSpaceId, living, schedules, watchers, agents, activeAgentId, pipelines, pageStores })
       .then((r) => { if (r && r.mtimeMs) lastStateMtimeMs = r.mtimeMs; }) // our own write — keep baseline current
       .catch(() => {});
   }, 500);
@@ -9346,6 +9760,7 @@ async function reconcileNow() {
   if (Array.isArray(m.savedSpaces)) savedSpaces = m.savedSpaces.filter((s) => s && s.id);
   if (Array.isArray(m.agents)) agents = m.agents;
   if (Array.isArray(m.schedules)) schedules = m.schedules;
+  if (Array.isArray(m.watchers)) watchers = m.watchers.filter((w) => w && w.url).map((w) => ({ ...w, running: false }));
   if (r.mtimeMs) lastStateMtimeMs = r.mtimeMs;               // we just absorbed it — don't also prompt to reload
   if (migrateSiteBookmarksToFavorites()) scheduleSave();     // relocate any sites that arrived from another machine
   ensureSavedSpaces();                                       // file any saved pages that arrived from another machine
@@ -9499,6 +9914,11 @@ async function init() {
     schedules = restored.schedules
       .filter((s) => s && s.prompt && s.rule)
       .map((s) => ({ ...s, running: false }));
+  }
+  if (restored && Array.isArray(restored.watchers)) {
+    watchers = restored.watchers
+      .filter((w) => w && w.url && w.intervalMs)
+      .map((w) => ({ ...w, running: false })); // keep lastRun so cadence resumes without a launch burst
   }
   if (restored && Array.isArray(restored.agents)) {
     agents = restored.agents.filter((a) => a && a.persona);
@@ -10643,6 +11063,7 @@ function recordSiteVisit(url, title, tab) {
 els.deepToggle.addEventListener('click', () => setDeepMode(!deepMode));
 els.learnToggle.addEventListener('click', () => setSkillMode('learn'));
 els.quizToggle.addEventListener('click', () => setSkillMode('quiz'));
+if (els.compareToggle) els.compareToggle.addEventListener('click', () => setSkillMode('compare'));
 if (els.chatToggle) els.chatToggle.addEventListener('click', () => setChatMode(!settings.chatMode));
 
 // File attachments: button, picker, and drag-and-drop.
@@ -10669,6 +11090,11 @@ if (els.folderAttach) els.folderAttach.addEventListener('click', attachSelectedF
     showToolbarMenu(e.clientX, e.clientY);
   });
 }
+
+// Collapse toolbar buttons that don't fit into the ⋯ overflow tray, and keep it
+// in sync as the window / sidebar resizes.
+initOmniOverflow();
+window.addEventListener('load', () => reflowOmnibar()); // re-measure once emoji metrics settle
 let dragDepth = 0;
 window.addEventListener('dragenter', (e) => { if (e.dataTransfer && [...e.dataTransfer.types].includes('Files')) { e.preventDefault(); dragDepth++; els.dropOverlay.hidden = false; } });
 window.addEventListener('dragover', (e) => { if (e.dataTransfer && [...e.dataTransfer.types].includes('Files')) e.preventDefault(); });
@@ -10760,6 +11186,7 @@ els.schedView.addEventListener('click', (e) => { if (e.target === els.schedView)
 document.getElementById('sched-close').addEventListener('click', closeSched);
 document.getElementById('sched-type').addEventListener('change', onSchedTypeChange);
 document.getElementById('sched-form').addEventListener('submit', (e) => { e.preventDefault(); addScheduleFromForm(); });
+{ const wf = document.getElementById('watch-form'); if (wf) wf.addEventListener('submit', (e) => { e.preventDefault(); addWatcherFromForm(); }); }
 els.agentsBtn.addEventListener('click', openAgents);
 els.agentsView.addEventListener('click', (e) => { if (e.target === els.agentsView) closeAgents(); });
 document.getElementById('agents-close').addEventListener('click', closeAgents);
@@ -10795,6 +11222,7 @@ els.sourcesBtn.addEventListener('click', toggleSourcesPanel);
 els.exportSelect.addEventListener('change', onExportSelect);
 els.remixMin.addEventListener('click', minimizeRemix);
 els.remixHandle.addEventListener('click', expandRemix);
+if (els.followupForm) els.followupForm.addEventListener('submit', handleFollowup);
 els.sourcesClose.addEventListener('click', () => { els.sourcesPanel.hidden = true; });
 els.liveSelect.addEventListener('change', onLiveSelectChange);
 els.voiceSelect.addEventListener('change', () => { settings.voiceURI = els.voiceSelect.value; scheduleSave(); });
@@ -11402,7 +11830,9 @@ window.chervil.onChunk(({ requestId, delta } = {}) => {
 
 // Clicking a background notification jumps to the page that updated.
 if (window.chervil.onNotificationClick) {
-  window.chervil.onNotificationClick(({ tabId, entryId } = {}) => {
+  window.chervil.onNotificationClick(({ tabId, entryId, url } = {}) => {
+    // A watcher notification carries the watched URL (no tab) → open it live.
+    if (url && !tabId) { openUrlInTab(url); return; }
     const tab = tabs.find((t) => t.id === tabId);
     if (!tab) return;
     if (entryId && tab.pages.some((p) => p.id === entryId)) tab.currentId = entryId;

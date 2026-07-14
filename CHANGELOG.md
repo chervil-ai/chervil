@@ -6,6 +6,47 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.19.0] — 2026-07-14
+
+Better than blue links. Chervil takes on the search engine head-on: ask it to
+**compare** two things and it builds a sourced, side-by-side table with a verdict;
+every composed page now **cites its sources inline** and shows how fresh they are;
+and Chervil can **watch a page** for you and ping you when something changes — a
+price drops, an item is back in stock, the docs update. Plus you can now **refine
+a page in place** with a follow-up, right from the page itself. And the toolbar no
+longer hides its buttons when the window isn't maximized.
+
+### Added
+- **Compare (a new skill).** Type `iPhone 16 vs Pixel 9` (or hit the new **⚖️**
+  button, or `/compare …`) and Sprig researches the live web and builds a
+  **side-by-side comparison** — your options as columns, the factors that matter as
+  rows, the winner of each row flagged, a **"bottom line"** verdict, and a **"best
+  for…"** guide. Every cell is grounded in real sources, not memory. Click a column
+  header to focus it, or toggle **Differences only**.
+- **Inline citations + source freshness.** When Sprig uses the web, composed pages
+  now carry **numbered citation chips** on the specific claims they support, with a
+  matching numbered Sources list. The **Sources** panel shows how recent each source
+  is and a freshness summary (e.g. "Freshest source 2 days ago · 4 of 6 dated"), so
+  you can see at a glance how current an answer is.
+- **Page watchers.** Ask Chervil to **watch a page and tell you when something
+  changes** — "watch this page and let me know when it's back in stock", "tell me
+  when the price drops below $500". Sprig checks it on a schedule in the background
+  and sends a notification (clicking it opens the page). Set one up by asking on any
+  live site, or from **⏰ Schedules & watchers** with a URL and a condition.
+- **In-page follow-up.** A composed page's action bar now has a **follow-up box** —
+  type "make it shorter", "focus on the budget options", "add a section on X" and
+  Sprig **refines the page in place** without you leaving it.
+
+### Changed
+- The **Toolbar buttons** picker in Settings now lays out in **two columns** so the
+  full list is easier to scan.
+
+### Fixed
+- **The toolbar no longer hides buttons when the window isn't maximized.** When the
+  top bar ran out of room, the right-most icons (Settings, Print, Zoom…) were pushed
+  off-screen and unreachable. They now collapse into a **⋯ "More"** menu that appears
+  only when needed, so every action stays reachable at any window size.
+
 ## [0.18.0] — 2026-07-13
 
 Chervil learns to publish. Compose a page, then send it straight to your blog —
@@ -861,7 +902,9 @@ First public, build-in-public alpha. Run from source; no packaged installer yet.
 - API keys encrypted at rest via OS-native storage; never round-tripped through
   the UI.
 
-[Unreleased]: https://github.com/chervil-ai/chervil/compare/v0.13.0...HEAD
+[Unreleased]: https://github.com/chervil-ai/chervil/compare/v0.19.0...HEAD
+[0.19.0]: https://github.com/chervil-ai/chervil/compare/v0.18.0...v0.19.0
+[0.18.0]: https://github.com/chervil-ai/chervil/compare/v0.17.0...v0.18.0
 [0.13.0]: https://github.com/chervil-ai/chervil/compare/v0.12.0...v0.13.0
 [0.1.5]: https://github.com/chervil-ai/chervil/compare/v0.1.4...v0.1.5
 [0.1.0]: https://github.com/chervil-ai/chervil/releases/tag/v0.1.0
