@@ -18,6 +18,9 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   ⚖️ Compare toggle was added, the row of composer buttons could overflow a narrow
   chat sidebar and push **Send** off the edge; the buttons now wrap to a second row
   instead. (You can also just widen the sidebar now — see above.)
+- **No more empty gap when the vertical tab rail is hidden.** Making the rail
+  resizable gave it a fixed width, which left a blank strip on the left when you
+  hid the tabs; the rail's column now collapses to zero when hidden, as before.
 
 ## [0.19.0] — 2026-07-14
 

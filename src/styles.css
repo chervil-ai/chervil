@@ -218,10 +218,12 @@ body.resizing #web-views { pointer-events: none; }
 .tab { transition: background 0.12s ease; }
 
 /* ---------- Hidden tab strip (Ctrl+Shift+\) ---------- */
-/* The strip's grid track is auto, so display:none reclaims the space in both
-   layouts. Bumping the screen edge adds .tabs-peek, which floats the strip
-   back over the page until the pointer leaves it. */
+/* Hiding the strip reclaims its space in both layouts: in horizontal tabs the
+   row track is auto (collapses on display:none); in vertical tabs the column is a
+   fixed --vtabs-w, so we explicitly collapse it to 0 here. Bumping the screen edge
+   adds .tabs-peek, which floats the strip (position:fixed) back over the page. */
 #app.tabs-hidden #tabstrip { display: none; }
+#app.vtabs.tabs-hidden { grid-template-columns: 0 1fr; }
 #app.tabs-hidden.tabs-peek #tabstrip {
   display: flex;
   position: fixed;
