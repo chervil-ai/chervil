@@ -413,7 +413,8 @@ html, body {
 .composer-tools {
   display: flex;
   align-items: center;
-  gap: 6px;
+  flex-wrap: wrap;      /* never clip the Send button — wrap toggles to a new row when narrow */
+  gap: 6px 5px;
 }
 
 #prompt {
