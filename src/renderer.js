@@ -1486,6 +1486,77 @@ function toggleSidebar() {
   scheduleSave();
 }
 
+// ---- Resizable panes: drag the chat-sidebar / vertical-tab-rail seams -------
+const SIDEBAR_W = { min: 300, max: 560 };
+const VTABS_W = { min: 140, max: 320 };
+
+// Push the saved pane widths (persisted in settings, synced across machines)
+// onto the CSS variables. No-op for a pane the user hasn't resized (keeps the
+// stylesheet default). Called on load and after a sync pulls new settings.
+function applyPaneSizes() {
+  const root = document.documentElement;
+  if (Number.isFinite(settings.sidebarW)) {
+    root.style.setProperty('--sidebar-w', Math.max(SIDEBAR_W.min, Math.min(SIDEBAR_W.max, settings.sidebarW)) + 'px');
+  }
+  if (Number.isFinite(settings.vtabsW)) {
+    root.style.setProperty('--vtabs-w', Math.max(VTABS_W.min, Math.min(VTABS_W.max, settings.vtabsW)) + 'px');
+  }
+}
+
+function setupPaneResize(handleId, opts) {
+  const handle = document.getElementById(handleId);
+  if (!handle) return;
+  const root = document.documentElement;
+  let dragging = false;
+  const onMove = (e) => {
+    if (!dragging) return;
+    const rect = opts.container().getBoundingClientRect();
+    let w = e.clientX - rect.left;
+    // Dragging the sidebar well below its minimum snaps it collapsed instead.
+    if (opts.collapseBelow && w < opts.min - 60) {
+      endDrag();
+      if (!settings.sidebarCollapsed) toggleSidebar();
+      return;
+    }
+    w = Math.max(opts.min, Math.min(opts.max, Math.round(w)));
+    root.style.setProperty(opts.varName, w + 'px');
+    settings[opts.settingKey] = w;
+  };
+  const endDrag = () => {
+    if (!dragging) return;
+    dragging = false;
+    document.body.classList.remove('resizing');
+    document.removeEventListener('mousemove', onMove, true);
+    document.removeEventListener('mouseup', endDrag, true);
+    scheduleSave();
+  };
+  handle.addEventListener('mousedown', (e) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    dragging = true;
+    document.body.classList.add('resizing');
+    document.addEventListener('mousemove', onMove, true);
+    document.addEventListener('mouseup', endDrag, true);
+  });
+  // Double-click the seam → reset to the stylesheet default width.
+  handle.addEventListener('dblclick', () => {
+    root.style.removeProperty(opts.varName);
+    delete settings[opts.settingKey];
+    scheduleSave();
+  });
+}
+
+function initPaneResize() {
+  setupPaneResize('sidebar-resize', {
+    container: () => els.main, varName: '--sidebar-w', settingKey: 'sidebarW',
+    min: SIDEBAR_W.min, max: SIDEBAR_W.max, collapseBelow: true,
+  });
+  setupPaneResize('vtabs-resize', {
+    container: () => document.getElementById('app'), varName: '--vtabs-w', settingKey: 'vtabsW',
+    min: VTABS_W.min, max: VTABS_W.max,
+  });
+}
+
 // Tabs-bar toggle mirrors the sidebar glyph, but with the TOP row filled —
 // HIDE = strip currently shown (top filled); SHOW = hidden (outline + top line).
 const TABSBAR_ICON_HIDE = '<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="M3 9 V6.5 A2.5 2.5 0 0 1 5.5 4 H18.5 A2.5 2.5 0 0 1 21 6.5 V9 Z" fill="currentColor" stroke="none"/><path d="M3 9h18"/></svg>';
@@ -9765,6 +9836,7 @@ async function reconcileNow() {
   if (migrateSiteBookmarksToFavorites()) scheduleSave();     // relocate any sites that arrived from another machine
   ensureSavedSpaces();                                       // file any saved pages that arrived from another machine
   updateBookmarkStar();
+  applyPaneSizes();                                          // a pane width may have been resized on another machine
   if (els.libraryDrawer.classList.contains('open')) renderDrawer();
   renderBookmarksBar();
   renderFavoritesBar();
@@ -9938,6 +10010,8 @@ async function init() {
   applyTabLayout();
   applySidebarCollapsed();
   applyTabsBarHidden();
+  applyPaneSizes();   // restore any user-set sidebar / tab-rail widths
+  initPaneResize();   // wire the drag-to-resize seams (once)
   applyToolbar(); // honor the user's chosen top-bar buttons
   if (migrateSiteBookmarksToFavorites()) scheduleSave(); // websites belong in Favorites now, not Saved Pages
   applyBookmarksBar(); // restore the bookmarks bar (if enabled) + its contents

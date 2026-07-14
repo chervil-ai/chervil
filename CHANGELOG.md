@@ -6,6 +6,19 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- **Resizable panes.** Drag the seam on the right edge of the **chat sidebar** (or,
+  in vertical-tabs layout, the **tab rail**) to set its width — **double-click the
+  seam to reset** to the default. Widths are remembered and sync across your
+  machines. Dragging the sidebar well past its minimum snaps it closed (the same as
+  Ctrl+\\).
+
+### Fixed
+- **The composer no longer clips its Send button on a narrow sidebar.** After the
+  ⚖️ Compare toggle was added, the row of composer buttons could overflow a narrow
+  chat sidebar and push **Send** off the edge; the buttons now wrap to a second row
+  instead. (You can also just widen the sidebar now — see above.)
+
 ## [0.19.0] — 2026-07-14
 
 Better than blue links. Chervil takes on the search engine head-on: ask it to

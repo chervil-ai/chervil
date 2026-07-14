@@ -16,7 +16,8 @@
   --radius-lg: 14px;   /* cards */
   --radius-xl: 20px;   /* modals, large panels */
   --scrollbar: #2b3147;
-  --sidebar-w: 380px;
+  --sidebar-w: 380px;  /* chat sidebar — user-resizable (drag the seam) */
+  --vtabs-w: 212px;    /* vertical tab rail — user-resizable */
 }
 
 * { box-sizing: border-box; }
@@ -61,6 +62,7 @@ html, body {
   display: grid;
   grid-template-rows: auto auto 1fr; /* tabstrip · (select bar) · main */
   height: 100vh;
+  position: relative; /* positioning context for the vertical-tab resizer */
 }
 #tabstrip { grid-row: 1; }
 #tab-select-bar { grid-row: 2; }
@@ -70,6 +72,7 @@ html, body {
   grid-template-columns: var(--sidebar-w) 1fr;
   min-height: 0;
   grid-row: 3;
+  position: relative; /* positioning context for the sidebar resizer */
   transition: grid-template-columns 0.22s ease;
 }
 
@@ -82,6 +85,42 @@ html, body {
   overflow: hidden;
   pointer-events: none;
 }
+
+/* ---------- Draggable pane resizers (chat sidebar + vertical tab rail) ------ */
+.resize-handle {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 10px;
+  z-index: 40;
+  cursor: col-resize;
+  transform: translateX(-5px); /* center the grab strip on the seam */
+}
+.resize-handle::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 5px;
+  width: 2px;
+  background: transparent;
+  border-radius: 2px;
+  transition: background 0.12s;
+}
+.resize-handle:hover::after,
+body.resizing .resize-handle::after { background: var(--accent); }
+#sidebar-resize { left: var(--sidebar-w); }
+#main.sidebar-collapsed #sidebar-resize { display: none; } /* nothing to drag when hidden */
+#vtabs-resize { left: var(--vtabs-w); display: none; }
+#app.vtabs #vtabs-resize { display: block; }
+#app.vtabs.tabs-hidden #vtabs-resize { display: none; }
+
+/* While dragging a seam: seam cursor everywhere, no text selection, and let the
+   drag pass over the page iframe / live webviews (which would otherwise eat it). */
+body.resizing { cursor: col-resize; user-select: none; }
+body.resizing #main { transition: none; } /* live-resize, not the collapse animation */
+body.resizing #page-frame,
+body.resizing #web-views { pointer-events: none; }
 
 /* ---------- Tab strip ---------- */
 #tabstrip {
@@ -203,7 +242,7 @@ html, body {
 /* ---------- Vertical tabs (side rail) ---------- */
 #app.vtabs {
   grid-template-rows: 1fr auto;
-  grid-template-columns: auto 1fr;
+  grid-template-columns: var(--vtabs-w) 1fr;
 }
 #app.vtabs #tabstrip { grid-row: 1; grid-column: 1; }
 #app.vtabs #main { grid-row: 1 / span 2; grid-column: 2; }
@@ -222,7 +261,7 @@ html, body {
 #app.vtabs #tabstrip {
   flex-direction: column;
   align-items: stretch;
-  width: 212px;
+  width: var(--vtabs-w);
   min-height: 0; /* let the rail scroll inside its grid cell instead of growing */
   padding: 8px;
   gap: 5px;
