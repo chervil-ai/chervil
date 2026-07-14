@@ -6,6 +6,11 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.19.1] — 2026-07-14
+
+A small follow-up: you can now **resize the chat sidebar and the vertical tab
+rail** by dragging their edges — plus two fixes to layout regressions from 0.19.0.
+
 ### Added
 - **Resizable panes.** Drag the seam on the right edge of the **chat sidebar** (or,
   in vertical-tabs layout, the **tab rail**) to set its width — **double-click the
@@ -918,7 +923,8 @@ First public, build-in-public alpha. Run from source; no packaged installer yet.
 - API keys encrypted at rest via OS-native storage; never round-tripped through
   the UI.
 
-[Unreleased]: https://github.com/chervil-ai/chervil/compare/v0.19.0...HEAD
+[Unreleased]: https://github.com/chervil-ai/chervil/compare/v0.19.1...HEAD
+[0.19.1]: https://github.com/chervil-ai/chervil/compare/v0.19.0...v0.19.1
 [0.19.0]: https://github.com/chervil-ai/chervil/compare/v0.18.0...v0.19.0
 [0.18.0]: https://github.com/chervil-ai/chervil/compare/v0.17.0...v0.18.0
 [0.13.0]: https://github.com/chervil-ai/chervil/compare/v0.12.0...v0.13.0
