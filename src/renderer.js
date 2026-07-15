@@ -1766,18 +1766,21 @@ function normalizeStatus(v) {
       phase: v.phase || 'working',
       text: v.text || 'Sprig is working…',
       detail: v.detail || '',
+      note: v.note || '',
       sources: v.sources || 0,
     };
   }
   const text = String(v || 'Sprig is working…');
-  return { phase: /retrying/i.test(text) ? 'retrying' : 'working', text, detail: '', sources: 0 };
+  return { phase: /retrying/i.test(text) ? 'retrying' : 'working', text, detail: '', note: '', sources: 0 };
 }
 
-// The secondary line under the status: what's actually being looked at, and how
-// much has been found. Both are optional — an empty line just collapses.
+// The secondary line under the status: what's being looked at, and how much has
+// been done. `detail` is a quoted thing (a search query, a hostname); `note` is
+// free text (a running count). All optional — an empty line just collapses.
 function statusDetailText(s) {
   const parts = [];
   if (s.detail) parts.push(`“${s.detail}”`);
+  if (s.note) parts.push(s.note);
   if (s.sources > 0) parts.push(`${s.sources} source${s.sources === 1 ? '' : 's'} found`);
   return parts.join(' · ');
 }
