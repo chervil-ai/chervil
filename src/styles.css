@@ -380,6 +380,40 @@ body.resizing #web-views { pointer-events: none; }
   gap: 8px;
 }
 
+/* The status bubble carries a primary line ("searching the web…") plus an
+   optional second line naming what's being looked at. The dot stays vertically
+   centred on the first line rather than the growing block. */
+.msg.bot.status:has(.status-detail:not(.empty)) { align-items: flex-start; }
+.msg.bot.status:has(.status-detail:not(.empty)) .dot-pulse { margin-top: 5px; }
+
+.status-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.status-line {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+/* Counts up while a run is in flight. Deliberately not a progress bar: the model
+   decides how many searches to run, so there's no honest total to fill toward. */
+.status-elapsed {
+  font-variant-numeric: tabular-nums;
+  font-size: 11px;
+  opacity: 0.55;
+}
+.status-detail {
+  font-size: 12px;
+  opacity: 0.7;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 42ch;
+}
+.status-detail.empty { display: none; }
+
 .msg.bot.error {
   border-color: #5a2a33;
   background: #1e1216;

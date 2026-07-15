@@ -581,7 +581,7 @@ const LIVE_INTERVALS = [
 ];
 
 // Transient per-tab generation state, kept OFF the tab object so persistence stays clean.
-//   runState: tabId -> { genId, statusText, streamBuffer }
+//   runState: tabId -> { genId, statusText, status, startedAt, streamBuffer }
 const runState = new Map();
 const reqToTab = new Map(); // requestId -> tabId
 const cancelledRequests = new Set(); // requestIds the user stopped — their results are ignored
@@ -590,6 +590,12 @@ let saveTimer = null;
 let previewTimer = null; // throttles the active tab's streamed preview
 let previewScrollY = 0;  // scroll position to restore across streaming re-renders
 let activeStatusEl = null;
+let statusTimer = null;    // ticks the elapsed counter in the status bubble
+let statusStartedAt = 0;   // when the active run began (for elapsed)
+
+// Don't show the elapsed counter until a run is slow enough to be worth timing —
+// a number flickering 1s/2s on a fast reply is noise.
+const ELAPSED_AFTER_SECS = 3;
 
 const MAX_PAGES_PER_TAB = 50;
 const MAX_LIBRARY = 100;
@@ -791,7 +797,7 @@ function injectIntoHead(html, snippet) {
 function runStateFor(tabId) {
   let rs = runState.get(tabId);
   if (!rs) {
-    rs = { genId: null, statusText: '', streamBuffer: '' };
+    rs = { genId: null, statusText: '', status: null, startedAt: 0, streamBuffer: '' };
     runState.set(tabId, rs);
   }
   return rs;
@@ -1647,7 +1653,7 @@ function renderConversation() {
   if (!tab) return;
   for (const m of tab.conversation) appendMessageEl(m.role, m.text, m.cls, m.sources);
   const rs = runState.get(tab.id);
-  if (rs && rs.genId) setStatus(rs.statusText || 'Thinking…');
+  if (rs && rs.genId) setStatus(rs.status || rs.statusText || 'Thinking…', rs.startedAt);
   els.conversation.scrollTop = els.conversation.scrollHeight;
 }
 
@@ -1751,27 +1757,97 @@ function addMessage(tab, role, text, cls = '', sources = null) {
   scheduleSave();
 }
 
+// Status arrives from the provider either as a plain string (older call sites) or
+// as a structured { phase, text, detail, sources }. Normalize both into one shape
+// so the UI has a phase to work with instead of sniffing the text.
+function normalizeStatus(v) {
+  if (v && typeof v === 'object') {
+    return {
+      phase: v.phase || 'working',
+      text: v.text || 'Sprig is working…',
+      detail: v.detail || '',
+      sources: v.sources || 0,
+    };
+  }
+  const text = String(v || 'Sprig is working…');
+  return { phase: /retrying/i.test(text) ? 'retrying' : 'working', text, detail: '', sources: 0 };
+}
+
+// The secondary line under the status: what's actually being looked at, and how
+// much has been found. Both are optional — an empty line just collapses.
+function statusDetailText(s) {
+  const parts = [];
+  if (s.detail) parts.push(`“${s.detail}”`);
+  if (s.sources > 0) parts.push(`${s.sources} source${s.sources === 1 ? '' : 's'} found`);
+  return parts.join(' · ');
+}
+
+// Elapsed seconds tick independently of the model, so a long quiet stretch (a
+// server-side search can run for a while with nothing to report) still visibly
+// moves. It counts up rather than filling a bar: the number of searches is the
+// model's call, so there's no honest denominator to show a percentage against.
+function renderElapsed() {
+  if (!activeStatusEl || !statusStartedAt) return;
+  const el = activeStatusEl.querySelector('.status-elapsed');
+  if (!el) return;
+  const secs = Math.floor((Date.now() - statusStartedAt) / 1000);
+  el.textContent = secs >= ELAPSED_AFTER_SECS ? `${secs}s` : '';
+}
+
 // Transient status bubble (not persisted), shown for the active tab.
-function setStatus(text) {
+// `startedAt` keeps the elapsed clock anchored to when the run began, so it
+// survives tab switches and status changes rather than restarting.
+function setStatus(v, startedAt = 0) {
+  const s = normalizeStatus(v);
   if (!activeStatusEl) {
     const row = document.createElement('div');
     row.className = 'bot-row';
     activeStatusEl = document.createElement('div');
     activeStatusEl.className = 'msg bot status';
+
     const dot = document.createElement('span');
     dot.className = 'dot-pulse';
-    const span = document.createElement('span');
+
+    const body = document.createElement('span');
+    body.className = 'status-body';
+    const line = document.createElement('span');
+    line.className = 'status-line';
+    const text = document.createElement('span');
+    text.className = 'status-text';
+    const elapsed = document.createElement('span');
+    elapsed.className = 'status-elapsed';
+    line.appendChild(text);
+    line.appendChild(elapsed);
+    const detail = document.createElement('span');
+    detail.className = 'status-detail';
+    body.appendChild(line);
+    body.appendChild(detail);
+
     activeStatusEl.appendChild(dot);
-    activeStatusEl.appendChild(span);
+    activeStatusEl.appendChild(body);
     row.appendChild(sprigAvatar());
     row.appendChild(activeStatusEl);
     els.conversation.appendChild(row);
+
+    statusStartedAt = startedAt || Date.now();
+    if (statusTimer) clearInterval(statusTimer);
+    statusTimer = setInterval(renderElapsed, 1000);
   }
-  activeStatusEl.querySelector('span:last-child').textContent = text;
+  if (startedAt) statusStartedAt = startedAt;
+
+  activeStatusEl.dataset.phase = s.phase;
+  activeStatusEl.querySelector('.status-text').textContent = s.text;
+  const detailEl = activeStatusEl.querySelector('.status-detail');
+  const detailText = statusDetailText(s);
+  detailEl.textContent = detailText;
+  detailEl.classList.toggle('empty', !detailText);
+  renderElapsed();
   els.conversation.scrollTop = els.conversation.scrollHeight;
 }
 
 function clearStatus() {
+  if (statusTimer) { clearInterval(statusTimer); statusTimer = null; }
+  statusStartedAt = 0;
   if (activeStatusEl) {
     (activeStatusEl.closest('.bot-row') || activeStatusEl).remove();
     activeStatusEl = null;
@@ -4496,6 +4572,8 @@ function stopActiveCompose() {
   if (window.chervil.abort) window.chervil.abort(requestId); // best-effort network cancel
   rs.genId = null;
   rs.statusText = '';
+  rs.status = null;
+  rs.startedAt = 0;
   rs.streamBuffer = '';
   reqToTab.delete(requestId);
   if (previewTimer) { clearTimeout(previewTimer); previewTimer = null; }
@@ -6442,10 +6520,50 @@ async function buildAndRenderSkill(tab, skillId, input, label) {
   if (!window.chervil.buildSkill) { toast('This build isn’t available in this build.'); return; }
   els.prompt.value = '';
   refreshComposer();
-  toast(`Sprig is building your ${label || skillId}…`);
+
+  // A skill build is a real generation, not a fire-and-forget toast: it registers
+  // run state like a compose does, so the tab spins, Stop works, the status bubble
+  // reports live progress, and a second build can't be fired over the top of it.
+  const requestId = uid();
+  const rs = runStateFor(tab.id);
+  rs.genId = requestId;
+  rs.startedAt = Date.now();
+  rs.status = normalizeStatus({ phase: 'working', text: `Sprig is building your ${label || skillId}…` });
+  rs.statusText = rs.status.text;
+  rs.streamBuffer = '';
+  reqToTab.set(requestId, tab.id);
+
+  const isActive = () => activeTab() === tab;
+  const finish = () => {
+    rs.genId = null;
+    rs.status = null;
+    rs.statusText = '';
+    rs.startedAt = 0;
+    rs.streamBuffer = '';
+    reqToTab.delete(requestId);
+    if (isActive()) { clearStatus(); setBadge('', 'ready'); setSendBusy(false); }
+  };
+
+  if (isActive()) {
+    setStatus(rs.status, rs.startedAt);
+    setBadge('working', 'working');
+    setSendBusy(true);
+  }
+  renderTabs();
+
   try {
-    const resp = await window.chervil.buildSkill({ skill: skillId, input, level: 'beginner', config: providerConfig() });
-    if (!resp || !resp.ok) { toast((resp && resp.error) || 'Couldn’t build it.'); return; }
+    const resp = await window.chervil.buildSkill({ skill: skillId, input, level: 'beginner', requestId, config: providerConfig() });
+
+    // The user stopped this build while it was in flight — ignore its result.
+    if (cancelledRequests.has(requestId)) { cancelledRequests.delete(requestId); return; }
+    finish();
+
+    if (!resp || !resp.ok) {
+      toast((resp && resp.error) || 'Couldn’t build it.');
+      renderTabs();
+      if (isActive()) refreshComposer();
+      return;
+    }
     const a = resp.artifact || {};
     const entry = {
       kind: 'page',
@@ -6463,9 +6581,13 @@ async function buildAndRenderSkill(tab, skillId, input, label) {
     if (skillId === 'compare') { entry.sources = a.sources || []; }
     pushEntry(tab, entry);
     if (!tab.title || tab.title === 'New Tab') tab.title = a.title || (label || skillId);
-    if (activeTab() === tab) { renderTabs(); renderCurrentPage(); refreshComposer(); }
+    renderTabs();
+    if (isActive()) { renderCurrentPage(); refreshComposer(); }
     scheduleSave();
   } catch (e) {
+    if (cancelledRequests.has(requestId)) { cancelledRequests.delete(requestId); return; }
+    finish();
+    renderTabs();
     toast(`Build error: ${(e && e.message) || e}`);
   }
 }
@@ -6698,6 +6820,8 @@ async function chatSubmit(tab, text) {
   const rs = runStateFor(tab.id);
   rs.genId = requestId;
   rs.statusText = 'Sprig is typing…';
+  rs.status = normalizeStatus({ phase: 'working', text: rs.statusText });
+  rs.startedAt = Date.now();
 
   addMessage(tab, 'user', query);
   if (tab.title === 'New Tab') tab.title = query.length > 40 ? query.slice(0, 37) + '…' : query;
@@ -6707,7 +6831,7 @@ async function chatSubmit(tab, text) {
   tab.history.push({ role: 'user', content: query });
 
   const isActive = () => tab.id === activeId;
-  if (isActive()) { setStatus(rs.statusText); setBadge('working', 'working'); setSendBusy(true); }
+  if (isActive()) { setStatus(rs.status, rs.startedAt); setBadge('working', 'working'); setSendBusy(true); }
 
   // Send what the user is looking at as context — a Chervil-composed page's HTML,
   // or the extracted text of the live site in the webview — so chat can answer
@@ -6734,7 +6858,7 @@ async function chatSubmit(tab, text) {
       tabsContext,
       config: providerConfig(),
     });
-    rs.genId = null; rs.statusText = '';
+    rs.genId = null; rs.statusText = ''; rs.status = null; rs.startedAt = 0;
     if (isActive()) clearStatus();
     if (!resp || !resp.ok) {
       addMessage(tab, 'bot', (resp && resp.error) || 'Something went wrong.', 'error');
@@ -6744,7 +6868,7 @@ async function chatSubmit(tab, text) {
       tab.history.push({ role: 'assistant', content: reply });
     }
   } catch (e) {
-    rs.genId = null; rs.statusText = '';
+    rs.genId = null; rs.statusText = ''; rs.status = null; rs.startedAt = 0;
     if (isActive()) clearStatus();
     addMessage(tab, 'bot', String(e && e.message ? e.message : e), 'error');
   } finally {
@@ -6798,6 +6922,8 @@ async function submitQuery(text, opts = {}) {
   const rs = runStateFor(tab.id);
   rs.genId = requestId;
   rs.statusText = verify ? 'Sprig is fact-checking…' : deep ? 'Sprig is researching deeply…' : 'Sprig is thinking…';
+  rs.status = normalizeStatus({ phase: verify ? 'verifying' : deep ? 'researching' : 'working', text: rs.statusText });
+  rs.startedAt = Date.now();
   rs.streamBuffer = '';
   if (tab.id === activeId) previewScrollY = 0;
   reqToTab.set(requestId, tab.id);
@@ -6820,7 +6946,7 @@ async function submitQuery(text, opts = {}) {
   tab.history.push({ role: 'user', content: query });
 
   if (isActive()) {
-    setStatus(rs.statusText);
+    setStatus(rs.status, rs.startedAt);
     setBadge('working', verify ? 'verifying' : deep ? 'researching' : 'working');
     setSendBusy(true);
     setRemixVisible(false);
@@ -6864,6 +6990,8 @@ async function submitQuery(text, opts = {}) {
     rs.genId = null;
     rs.streamBuffer = '';
     rs.statusText = '';
+    rs.status = null;
+    rs.startedAt = 0;
     reqToTab.delete(requestId);
     if (isActive()) clearStatus();
 
@@ -6948,6 +7076,8 @@ async function submitQuery(text, opts = {}) {
     rs.genId = null;
     rs.streamBuffer = '';
     rs.statusText = '';
+    rs.status = null;
+    rs.startedAt = 0;
     reqToTab.delete(requestId);
     // If the user stopped this request, swallow the resulting abort error.
     if (cancelledRequests.has(requestId)) { cancelledRequests.delete(requestId); return; }
@@ -11874,18 +12004,34 @@ async function handleAppletTool(source, msg) {
   }
 }
 
+// Badge label per status phase. Kind stays 'working' except where a dedicated
+// style already exists, so the badge tracks the same story as the status bubble.
+const BADGE_FOR_PHASE = {
+  searching: ['working', 'searching'],
+  reading: ['working', 'reading'],
+  composing: ['working', 'composing'],
+  researching: ['working', 'researching'],
+  verifying: ['working', 'verifying'],
+  retrying: ['working', 'reconnecting'],
+};
+
 // Streamed status updates, routed to the originating tab.
 window.chervil.onStatus(({ requestId, status } = {}) => {
   const tabId = reqToTab.get(requestId);
   if (!tabId) return;
   const rs = runStateFor(tabId);
-  if (/retrying/i.test(status)) {
+  const s = normalizeStatus(status);
+  if (s.phase === 'retrying') {
     rs.streamBuffer = '';
     if (tabId === activeId && previewTimer) { clearTimeout(previewTimer); previewTimer = null; }
-    if (tabId === activeId) setBadge('working', 'reconnecting');
   }
-  rs.statusText = status;
-  if (tabId === activeId) setStatus(status);
+  rs.status = s;
+  rs.statusText = s.text;
+  if (tabId === activeId) {
+    setStatus(s, rs.startedAt);
+    const badge = BADGE_FOR_PHASE[s.phase];
+    if (badge) setBadge(badge[0], badge[1]);
+  }
 });
 
 // Streamed HTML deltas, routed to the originating tab.
@@ -11896,7 +12042,8 @@ window.chervil.onChunk(({ requestId, delta } = {}) => {
   rs.streamBuffer += delta;
   if (tabId === activeId && hasDoctype(rs.streamBuffer)) {
     rs.statusText = 'Sprig is composing your page…';
-    setStatus(rs.statusText);
+    rs.status = normalizeStatus({ phase: 'composing', text: rs.statusText, sources: rs.status ? rs.status.sources : 0 });
+    setStatus(rs.status, rs.startedAt);
     setBadge('working', 'composing');
     scheduleStreamRender(tabId);
   }

@@ -1237,7 +1237,8 @@ app.on('window-all-closed', () => {
  * The renderer asks a question; we run the agent and stream progress back.
  * Returns the final result object: a generated page or a navigation directive.
  */
-// In-flight ask() requests, keyed by requestId, so the renderer can abort them.
+// In-flight ask() and build-skill() requests, keyed by requestId, so the renderer
+// can abort them (Stop). Shared so one abort channel covers both.
 const askAborters = new Map();
 
 ipcMain.handle('chervil:ask', async (event, payload) => {
@@ -1520,17 +1521,35 @@ ipcMain.handle('chervil:translate', async (_event, payload) => {
 // --- Skills: build any registered skill (RFC 0003) -------------------------
 // Generic build: getSkill → build → optional enrich (Learn's media verify) →
 // toHtml. Replaces the old lesson-specific build-lesson handler.
-ipcMain.handle('chervil:build-skill', async (_event, payload) => {
+ipcMain.handle('chervil:build-skill', async (event, payload) => {
+  const { skill: skillId, input, level, goals, requestId } = payload || {};
+  const send = (channel, data) => {
+    if (!event.sender.isDestroyed()) event.sender.send(channel, data);
+  };
+  // Skills report progress over the same status channel as ask(), tagged with
+  // requestId so the renderer routes it to the originating tab.
+  const onStatus = (status) => send('chervil:status', { requestId, status });
+
+  // A Compare does live web research and can run for a while — it needs the same
+  // Stop affordance as a compose.
+  const aborter = new AbortController();
+  if (requestId) askAborters.set(requestId, aborter);
+
   try {
-    const { skill: skillId, input, level, goals } = payload || {};
     const skill = getSkill(skillId);
     if (!skill) return { ok: false, error: 'Unknown skill.' };
     const config = providerConfigFrom(payload);
-    const artifact = await skill.build({ input, level, goals, config });
-    if (skill.enrich) await skill.enrich(artifact, config);
+    const artifact = await skill.build({ input, level, goals, config, onStatus, signal: aborter.signal });
+    if (skill.enrich) {
+      onStatus({ phase: 'composing', text: 'Sprig is checking the media…' });
+      await skill.enrich(artifact, config);
+    }
+    onStatus({ phase: 'composing', text: 'Sprig is laying out the page…' });
     return { ok: true, kind: skill.id, artifact, html: skill.toHtml(artifact) };
   } catch (err) {
     return { ok: false, error: String(err && err.message ? err.message : err) };
+  } finally {
+    if (requestId) askAborters.delete(requestId);
   }
 });
 
