@@ -6,6 +6,17 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.19.3] — 2026-07-15
+
+The rest of the story: **Learn** and **Quiz** now show their work too, finishing
+what 0.19.2 started with Compare.
+
+### Added
+- **Live progress for Learn and Quiz.** Building a lesson now tells you where it
+  is — **"planning your lesson"**, then **"2 of 3 modules written"** as each module
+  lands. A quiz counts its questions as it writes them. Both also show the elapsed
+  timer, and both can now be **stopped** mid-build like any other page.
+
 ## [0.19.2] — 2026-07-15
 
 Sprig now **shows his work**. Asking for a comparison used to go quiet for a
@@ -949,7 +960,8 @@ First public, build-in-public alpha. Run from source; no packaged installer yet.
 - API keys encrypted at rest via OS-native storage; never round-tripped through
   the UI.
 
-[Unreleased]: https://github.com/chervil-ai/chervil/compare/v0.19.2...HEAD
+[Unreleased]: https://github.com/chervil-ai/chervil/compare/v0.19.3...HEAD
+[0.19.3]: https://github.com/chervil-ai/chervil/compare/v0.19.2...v0.19.3
 [0.19.2]: https://github.com/chervil-ai/chervil/compare/v0.19.1...v0.19.2
 [0.19.1]: https://github.com/chervil-ai/chervil/compare/v0.19.0...v0.19.1
 [0.19.0]: https://github.com/chervil-ai/chervil/compare/v0.18.0...v0.19.0
