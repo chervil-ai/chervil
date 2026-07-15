@@ -6,6 +6,32 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.19.2] — 2026-07-15
+
+Sprig now **shows his work**. Asking for a comparison used to go quiet for a
+long stretch — long enough to wonder whether it had stopped — because the
+Compare build did all its research behind a single closed door. Now you can
+watch it happen: what it's searching for, how much it's found, and how long
+it's been at it. And you can stop it.
+
+### Added
+- **Live progress while Sprig works.** The status line now names what's actually
+  happening — **"searching the web"** with the real search query, **"reading
+  sources"** with a running count of what it's found, then **"composing"** — plus
+  an **elapsed timer** so you can always see it's still going, even during a long
+  quiet stretch. (No percentage bar: Sprig decides how many searches a question
+  needs, so any percentage would be made up — and a bar stuck at 40% is more
+  worrying than an honest clock.)
+- **Stop a Compare.** A comparison now behaves like any other page Sprig composes:
+  the tab shows its spinner, **Send becomes Stop** (or press **Esc**), and it can
+  be cancelled mid-build. Starting a comparison no longer lets a second one be
+  fired over the top of it.
+
+### Fixed
+- **Compare no longer goes dark.** It announced itself, then showed nothing at all
+  until the finished page appeared — it looked like it had stalled. The build now
+  reports progress the whole way through.
+
 ## [0.19.1] — 2026-07-14
 
 A small follow-up: you can now **resize the chat sidebar and the vertical tab
@@ -923,7 +949,8 @@ First public, build-in-public alpha. Run from source; no packaged installer yet.
 - API keys encrypted at rest via OS-native storage; never round-tripped through
   the UI.
 
-[Unreleased]: https://github.com/chervil-ai/chervil/compare/v0.19.1...HEAD
+[Unreleased]: https://github.com/chervil-ai/chervil/compare/v0.19.2...HEAD
+[0.19.2]: https://github.com/chervil-ai/chervil/compare/v0.19.1...v0.19.2
 [0.19.1]: https://github.com/chervil-ai/chervil/compare/v0.19.0...v0.19.1
 [0.19.0]: https://github.com/chervil-ai/chervil/compare/v0.18.0...v0.19.0
 [0.18.0]: https://github.com/chervil-ai/chervil/compare/v0.17.0...v0.18.0
