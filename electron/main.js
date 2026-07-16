@@ -3027,7 +3027,7 @@ ipcMain.handle('chervil:index-list', withIndex((idx, p) => ({
   trash: p.withTrash ? idx.listTrash({ limit: p.limit || 200 }) : undefined,
 })));
 ipcMain.handle('chervil:index-search', withIndex((idx, p) => ({
-  items: idx.search(p.query || '', { limit: p.limit || 20, kind: p.kind || null, includeBody: !!p.includeBody }),
+  items: idx.search(p.query || '', { limit: p.limit || 20, kind: p.kind || null, includeBody: !!p.includeBody, any: !!p.any }),
 })));
 ipcMain.handle('chervil:index-trash', withIndex((idx, p) => { idx.trash(p.id); return {}; }));
 ipcMain.handle('chervil:index-restore', withIndex((idx, p) => { idx.restore(p.id); return {}; }));

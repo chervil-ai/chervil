@@ -538,6 +538,10 @@ let agentAudit = []; // [{ at, type, target, decision, ok }] — agent action au
 const MAX_AGENT_AUDIT = 500;
 let drawerTab = 'history';
 let librarySearch = ''; // filter text for the Library drawer list (all tabs)
+// Full-text hits for the Activity tab, from the page index (RFC 0013, phase 1b).
+// Held here because renderDrawer is synchronous and the index is an IPC round-trip.
+let libraryFts = { q: '', items: null };
+let libraryFtsTimer = null;
 // History multi-select (bulk delete) state.
 let librarySelectMode = false;
 let selectedLibraryIds = new Set();
@@ -6609,6 +6613,11 @@ function handleComposerSubmit(text, opts = {}) {
 
   if (settings.followupMode === 'ask' && cur && cur.kind === 'page') {
     promptRefineChoice(query, attachments);
+  } else if (!attachments.length && !(cur && cur.kind === 'page')) {
+    // A fresh ask can be answered instantly from a page you already have
+    // (RFC 0013, phase 2a). Deliberately NOT when a composed page is on screen:
+    // there the query may mean "refine this", and the cache must not hijack it.
+    askWithCache(tab, query);
   } else {
     submitQuery(query, { attachments });
   }
@@ -6695,6 +6704,134 @@ async function buildAndRenderSkill(tab, skillId, input, label) {
 }
 
 // Inline "Refine this page / New page" choice for the 'ask' follow-up mode.
+// ---- Instant answers from your own pages (RFC 0013, phase 2a) ----
+//
+// Composing takes ~20 seconds and costs tokens. Asking something you've already
+// asked shouldn't. When a question is a near-duplicate of one you've asked before,
+// show the page you already have — visibly labelled, one click from a fresh one.
+// Never silently: a cached answer the user can't identify as cached is a lie.
+
+// A cached page can never stand in for a question whose answer moves. This is
+// deliberately about the QUESTION, not the page's age — "today's news" is stale
+// the moment it's composed, and no TTL makes it safe to reuse.
+const LIVE_QUERY_RE = /\b(latest|today|todays|tonight|yesterday|now|current|currently|this (?:week|month|year|morning|evening)|so far|recent|recently|news|headlines|score|scores|price|prices|cost|stock|shares|weather|forecast|temperature|open now|hours|schedule|fixtures|standings|live|update|updates|released?|launch(?:ed|ing)?|upcoming|deadline|status|who is|whos the|remaining|left)\b/i;
+
+// Beyond this, even an evergreen page has usually drifted enough that silently
+// reusing it is the wrong default. Refresh stays one click away either way.
+const MAX_CACHE_AGE_MS = 90 * 24 * 60 * 60 * 1000;
+const CACHE_SIMILARITY = 0.7;
+
+const CACHE_STOP = new Set(['a', 'an', 'the', 'of', 'for', 'to', 'in', 'on', 'at', 'is', 'are', 'was',
+  'what', 'whats', 'how', 'why', 'when', 'which', 'who', 'do', 'does', 'did', 'me', 'my', 'i', 'please',
+  'tell', 'give', 'show', 'explain', 'about', 'and', 'or', 'with', 'can', 'you', 'sprig', 'hey', 'a', 'some']);
+
+// The content words of a question, deduped and order-independent — so "sourdough
+// starter guide" and "guide to sourdough starters" land on the same key.
+//
+// Every non-stopword token counts, including one-character ones. Dropping short
+// tokens looks harmless and isn't: it's often the ONLY thing distinguishing two
+// questions ("widget 1" vs "widget 2", "learn C" vs "learn R"), which would score
+// as identical and serve the wrong cached answer.
+function queryKey(q) {
+  return [...new Set(
+    String(q || '').toLowerCase().replace(/[^a-z0-9\s]/g, ' ').split(/\s+/)
+      .filter((w) => w && !CACHE_STOP.has(w))
+      .map((w) => w.replace(/(?:ies|es|s)$/, '')) // crude stem: starters/starter, guides/guide
+  )].sort();
+}
+
+function jaccard(a, b) {
+  const A = new Set(a), B = new Set(b);
+  if (!A.size || !B.size) return 0;
+  let inter = 0;
+  for (const x of A) if (B.has(x)) inter++;
+  return inter / (A.size + B.size - inter);
+}
+
+// The best near-duplicate of `query` among pages you've already composed, or null.
+async function findCachedAnswer(query) {
+  if (!libraryFromIndex || !window.chervil.index) return null;
+  if (LIVE_QUERY_RE.test(query)) return null;
+  const key = queryKey(query);
+  if (key.length < 2) return null;   // one content word is too thin to match on
+  try {
+    // Retrieve on the CONTENT words with OR: the whole point is that the wording
+    // differs, so an all-terms match over the raw question finds nothing. This is
+    // a wide net on purpose — the similarity gate below is what actually decides.
+    const res = await window.chervil.index.search({ query: key.join(' '), kind: 'composed', limit: 8, any: true });
+    if (!res || !res.ok || !res.items || !res.items.length) return null;
+    let best = null;
+    for (const it of res.items) {
+      if (!it.query) continue;
+      if (Date.now() - (it.createdAt || 0) > MAX_CACHE_AGE_MS) continue;
+      if (LIVE_QUERY_RE.test(it.query)) continue;  // it was a live ask when made
+      const score = jaccard(key, queryKey(it.query));
+      if (score >= CACHE_SIMILARITY && (!best || score > best.score)) best = { item: it, score };
+    }
+    return best ? best.item : null;
+  } catch {
+    return null;
+  }
+}
+
+// Serve a cached page into `tab`, with an unmissable note saying where it came
+// from and a Refresh that composes it again for real.
+async function serveCachedAnswer(tab, query, hit) {
+  let full = hit;
+  if (!full.html) {
+    try {
+      const res = await window.chervil.index.get(hit.id);
+      if (res && res.ok && res.item) full = res.item;
+    } catch { /* fall through */ }
+  }
+  if (!full.html) { submitQuery(query, { tab }); return; }  // couldn't load it — just compose
+
+  els.prompt.value = '';
+  resetPromptHeight();
+  addMessage(tab, 'user', query);
+
+  pushEntry(tab, {
+    kind: 'page',
+    title: full.title || query,
+    query: full.query || query,
+    html: full.html,
+    sources: full.sources || [],
+    storeKey: full.storeKey,
+  });
+  if (!tab.title || tab.title === 'New Tab') tab.title = full.title || query;
+  renderTabs();
+  renderCurrentPage();
+  scheduleSave();
+
+  const wrap = document.createElement('div');
+  wrap.className = 'msg bot refine-choice';
+  const p = document.createElement('div');
+  p.textContent = `From your pages — you asked this ${relTime(full.createdAt)}. Nothing was searched or composed.`;
+  wrap.appendChild(p);
+  const row = document.createElement('div');
+  row.className = 'choice-row';
+  const refresh = document.createElement('button');
+  refresh.textContent = '↻ Answer it fresh';
+  row.appendChild(refresh);
+  wrap.appendChild(row);
+  els.conversation.appendChild(wrap);
+  els.conversation.scrollTop = els.conversation.scrollHeight;
+  refresh.addEventListener('click', () => {
+    wrap.remove();
+    // skipFollowup so the cached page now on screen isn't treated as context to
+    // refine; skipUserMessage because the question is already in the transcript.
+    submitQuery(query, { tab, skipFollowup: true, skipUserMessage: true });
+  });
+}
+
+// Try the cache, else compose. Callers use this instead of submitQuery for a
+// fresh ask; every other path (refine, remix, skills, deep) bypasses it.
+async function askWithCache(tab, query) {
+  const hit = await findCachedAnswer(query);
+  if (hit) { serveCachedAnswer(tab, query, hit); return; }
+  submitQuery(query, { tab });
+}
+
 function promptRefineChoice(query, attachments = []) {
   const tab = activeTab();
   els.prompt.value = '';
@@ -7763,6 +7900,50 @@ function emptyTrash() {
   scheduleSave();
 }
 
+// Search your own pages by content (RFC 0013, phase 1b). Debounced so typing
+// doesn't fire an IPC round-trip per keystroke; a stale response is dropped rather
+// than allowed to overwrite the results for what you're now typing.
+function scheduleLibraryFts() {
+  if (libraryFtsTimer) clearTimeout(libraryFtsTimer);
+  const q = librarySearch.trim();
+  if (!q || !libraryFromIndex || !window.chervil.index) { libraryFts = { q: '', items: null }; return; }
+  libraryFtsTimer = setTimeout(async () => {
+    libraryFtsTimer = null;
+    try {
+      const res = await window.chervil.index.search({ query: q, kind: 'composed', limit: 60 });
+      if (!res || !res.ok || librarySearch.trim() !== q) return; // superseded by newer typing
+      libraryFts = { q, items: res.items || [] };
+      renderDrawer();
+    } catch { /* keep the title filter */ }
+  }, 180);
+}
+
+// Match markers the index wraps hits in (see pageIndex.search). Control
+// characters, chosen so a page's own punctuation can never be mistaken for a
+// marker — and built with fromCharCode so no invisible literal ends up in source.
+const MARK_START = String.fromCharCode(0x01);
+const MARK_END = String.fromCharCode(0x02);
+
+// Render a search snippet with its matches highlighted. Builds real nodes rather
+// than innerHTML: this is page text from the open web and is never trusted.
+function snippetNode(text) {
+  const el = document.createElement('div');
+  el.className = 'lib-snippet';
+  let rest = String(text || '');
+  while (rest) {
+    const i = rest.indexOf(MARK_START);
+    if (i < 0) { el.appendChild(document.createTextNode(rest)); break; }
+    if (i > 0) el.appendChild(document.createTextNode(rest.slice(0, i)));
+    const j = rest.indexOf(MARK_END, i + 1);
+    if (j < 0) { el.appendChild(document.createTextNode(rest.slice(i + 1))); break; }
+    const m = document.createElement('mark');
+    m.textContent = rest.slice(i + 1, j);
+    el.appendChild(m);
+    rest = rest.slice(j + 1);
+  }
+  return el;
+}
+
 function relTime(ts) {
   if (!ts) return '';
   const s = Math.max(0, Math.floor((Date.now() - ts) / 1000));
@@ -8782,7 +8963,16 @@ function renderDrawer() {
 
   // Free-text filter across the visible list (title/url/query/filename).
   const q = librarySearch.trim().toLowerCase();
-  if (q) items = items.filter((it) => libItemText(it).includes(q));
+  // Activity searches page CONTENT via the index (RFC 0013, phase 1b) — the other
+  // tabs stay a title/url filter, since sites/downloads have no indexed body. The
+  // index round-trip is async while this render is sync, so hits arrive via
+  // `libraryFts` and re-render; until then (and whenever the index is
+  // unavailable) the title filter below is what shows.
+  const ftsHits = (q && drawerTab === 'history' && libraryFts.items && libraryFts.q.toLowerCase() === q)
+    ? libraryFts.items
+    : null;
+  if (ftsHits) items = ftsHits;                 // BM25 order, not newest-first — that's the point
+  else if (q) items = items.filter((it) => libItemText(it).includes(q));
 
   // Bookmarks (unsearched): group by folder — sort so folder headers can be
   // inserted between groups, with Unfiled last.
@@ -8892,6 +9082,9 @@ function renderDrawer() {
             ? (item.ok ? `${item.path} · ${relTime(item.at)}` : `${item.state || 'failed'} · ${relTime(item.at)}`)
             : relTime(item.createdAt);
     main.appendChild(title);
+    // A content search shows the matching passage, so you can tell WHY a page came
+    // back rather than guessing from its title (RFC 0013, phase 1b).
+    if (item.snippet) main.appendChild(snippetNode(item.snippet));
     main.appendChild(meta);
     if (isSiteRow) { const fav = faviconImg(item.url, 'lib-favicon'); if (fav) row.appendChild(fav); }
     row.appendChild(main);
@@ -11941,7 +12134,11 @@ if (els.libNewCollection) els.libNewCollection.addEventListener('click', createC
 els.libTabTrash.addEventListener('click', () => { drawerTab = 'trash'; renderDrawer(); });
 if (els.clearSites) els.clearSites.addEventListener('click', clearSiteHistory);
 if (els.clearDownloads) els.clearDownloads.addEventListener('click', clearDownloads);
-if (els.libSearch) els.libSearch.addEventListener('input', () => { librarySearch = els.libSearch.value; renderDrawer(); });
+if (els.libSearch) els.libSearch.addEventListener('input', () => {
+  librarySearch = els.libSearch.value;
+  scheduleLibraryFts();
+  renderDrawer();
+});
 if (els.libNewFolder) els.libNewFolder.addEventListener('click', () => (drawerTab === 'favorites' ? createFavoriteFolder() : createBookmarkFolder()));
 if (els.libCollapseAll) els.libCollapseAll.addEventListener('click', toggleCollapseAll);
 if (els.bookmarksBarToggle) els.bookmarksBarToggle.addEventListener('change', () => { settings.bookmarksBar = els.bookmarksBarToggle.checked; applyBookmarksBar(); scheduleSave(); });
