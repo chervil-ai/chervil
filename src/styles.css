@@ -1984,6 +1984,24 @@ body.resizing #web-views { pointer-events: none; }
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
+/* An offer to pull together a subject you've been reading around (Bet 3). Sits on
+   the new-tab screen and waits — deliberately calm, not a notification. */
+.dossier-offer {
+  width: 100%;
+  box-sizing: border-box;
+  margin: 0 0 14px;
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--accent) 7%, transparent);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  text-align: left;
+}
+.dossier-offer-text { font-size: 14px; line-height: 1.5; color: var(--text); }
+.dossier-offer-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+
 .lib-snippet mark {
   background: color-mix(in srgb, var(--accent) 26%, transparent);
   color: inherit;

@@ -674,6 +674,19 @@
           <button id="index-delete-all" type="button" class="lib-btn">Delete everything</button>
         </span>
         <small class="field-note">These really delete — the rows are removed and the file compacted, not just hidden from the list.</small>
+
+        <h3 style="margin-top:22px;">Noticing what you’re researching</h3>
+        <p class="group-hint">When you read around the same subject across a few different sites, Chervil can offer to pull it all together into one page — what you found, where your sources disagree, and what you haven’t looked at yet.<br /><br />
+        Noticing is <strong>free and local</strong> (no AI is involved in spotting the topic). Sprig <strong>never writes the page on its own</strong> — you get a quiet card offering it, and nothing is composed, and nothing is spent, until you click it. Needs “keep the text of websites I read” above.</p>
+        <label class="toggle-row">
+          <input id="dossier-offers-toggle" type="checkbox" />
+          <span>Offer to pull together subjects I’ve been reading about. The offer appears on the new-tab screen — no popup, no sound, no notification.</span>
+        </label>
+        <div class="field">
+          <span class="field-label">Offer after <span id="dossier-min-pages-val" class="field-note"></span></span>
+          <input id="dossier-min-pages" type="range" min="3" max="10" step="1" />
+          <small class="field-note">How much reading on one subject before Chervil offers. <strong>Higher = only when you’ve really been digging</strong> — raise this if it offers things you didn’t care about. Lower = offers sooner. It always needs at least two different websites, so reading one site a lot never counts as researching a subject.</small>
+        </div>
       </section>
 
       <section class="setting-group" data-sgroup="voice">

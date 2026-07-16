@@ -1243,7 +1243,7 @@ app.on('window-all-closed', () => {
 const askAborters = new Map();
 
 ipcMain.handle('chervil:ask', async (event, payload) => {
-  const { query, history, requestId, pageContext, allowNavigate, refineMode, spaceContext, recallContext, deep, verify, profile, pageStyle, attachments, mcpServers, agent } =
+  const { query, history, requestId, pageContext, allowNavigate, refineMode, spaceContext, recallContext, recallMode, deep, verify, profile, pageStyle, attachments, mcpServers, agent } =
     payload || {};
   const send = (channel, data) => {
     if (!event.sender.isDestroyed()) event.sender.send(channel, data);
@@ -1267,6 +1267,7 @@ ipcMain.handle('chervil:ask', async (event, payload) => {
       refineMode: refineMode || null,
       spaceContext: spaceContext || null,
       recallContext: recallContext || null,
+      recallMode: recallMode === 'synthesize' ? 'synthesize' : 'find',
       deep: deep === true,
       verify: verify === true,
       profile: typeof profile === 'string' ? profile : null,
@@ -3035,6 +3036,14 @@ ipcMain.handle('chervil:index-restore', withIndex((idx, p) => { idx.restore(p.id
 ipcMain.handle('chervil:index-remove', withIndex((idx, p) => { idx.remove(p.id); return {}; }));
 ipcMain.handle('chervil:index-empty-trash', withIndex((idx) => { idx.emptyTrash(); return {}; }));
 ipcMain.handle('chervil:index-stats', withIndex((idx) => ({ stats: idx.stats() })));
+ipcMain.handle('chervil:index-topics', withIndex((idx, p) => ({
+  topics: idx.topics({
+    sinceMs: Number(p.sinceMs) || (Date.now() - 14 * 24 * 60 * 60 * 1000),
+    minPages: Math.max(2, Number(p.minPages) || 4),
+    minHosts: Math.max(1, Number(p.minHosts) || 2),
+    limit: Math.max(1, Number(p.limit) || 8),
+  }),
+})));
 ipcMain.handle('chervil:index-evict-over', withIndex((idx, p) => {
   idx.evictVisitedOver(Math.max(0, Number(p.max) || 5000));
   return {};

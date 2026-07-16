@@ -203,6 +203,9 @@ const els = {
   adblockToggle: document.getElementById('adblock-toggle'),
   // Your Web (RFC 0013)
   indexSitesToggle: document.getElementById('index-sites-toggle'),
+  dossierOffersToggle: document.getElementById('dossier-offers-toggle'),
+  dossierMinPages: document.getElementById('dossier-min-pages'),
+  dossierMinPagesVal: document.getElementById('dossier-min-pages-val'),
   indexExcludes: document.getElementById('index-excludes'),
   indexExcludesSave: document.getElementById('index-excludes-save'),
   indexStats: document.getElementById('index-stats'),
@@ -456,6 +459,13 @@ let settings = {
   indexSites: false,         // keep the readable text of sites you visit, so Sprig can answer from your own reading
   indexExcludes: [],         // hosts never captured (substring match), e.g. ["bank.com", "myhealth"]
   indexMaxSites: 5000,       // captured-site budget; oldest are evicted past this (text-only, so ~hundreds of MB at worst)
+  // Ambient dossiers (Bet 3). Default OFF. When on, Chervil notices you've been
+  // reading around a subject and OFFERS to pull it together — it never composes
+  // unprompted. Same shape as wakeConfirm: an ambient trigger with a guessed
+  // threshold WILL fire wrong sometimes, so a wrong fire must cost one dismissible
+  // card, not tokens spent behind your back.
+  dossierOffers: false,      // offer to pull together a topic you've been reading around
+  dossierMinPages: 5,        // how many pages on one subject before offering (the sensitivity dial)
   adblock: false,            // block common ad/tracker hosts in embedded sites (main-process filter)
   spellcheck: true,          // red squiggles + right-click suggestions in text fields (app + embedded sites)
   sharePopup: true,          // open share composers (Fedica, AddToAny…) in a popup window vs a tab
@@ -532,6 +542,12 @@ function providerConfig(agentOverride) {
 // unavailable or hasn't migrated yet, and state stays the source of truth.
 let library = { history: [], trash: [] };
 let libraryFromIndex = false;
+// Ambient dossier offers (Bet 3): topics Chervil has noticed and is offering to
+// pull together, plus the ones you've said no to. Dismissals MUST persist — an
+// offer that comes back after you dismissed it is the whole reason people turn
+// ambient features off.
+let dossierOffers = [];    // [{ id, term, related, pageCount, hostCount, at }]
+let dossierDismissed = []; // [{ term, at }] — never offer this subject again
 // "Saved Pages" (internally still `bookmarks`): composed Chervil pages the user
 // saved, on the ribbon button. Sites live in Favorites, not here. [{ id, key, kind:'page', query, title, at, folder?, tab }]
 let bookmarks = [];
@@ -1978,6 +1994,38 @@ function renderSuggestions() {
   if (!els.suggestions) return;
   els.suggestions.innerHTML = '';
 
+  // A subject Chervil noticed you reading around (Bet 3). This is the ONLY place
+  // an offer appears: it waits on the new-tab screen until you happen to look. No
+  // notification, no popup, no sound — you didn't ask for this, so it doesn't get
+  // to interrupt. Nothing is composed or spent unless you click Pull it together.
+  for (const o of dossierOffers.slice(0, 2)) {
+    const card = document.createElement('div');
+    card.className = 'dossier-offer';
+
+    const text = document.createElement('div');
+    text.className = 'dossier-offer-text';
+    const subject = [o.term, ...(o.related || []).slice(0, 1)].join(' ');
+    const strong = document.createElement('strong');
+    strong.textContent = subject;
+    text.append('You’ve been reading about ', strong, ` — ${o.pageCount} pages across ${o.hostCount} sites. Want me to pull it together?`);
+    card.appendChild(text);
+
+    const row = document.createElement('div');
+    row.className = 'dossier-offer-actions';
+    const yes = document.createElement('button');
+    yes.className = 'lib-btn primary';
+    yes.textContent = 'Pull it together';
+    yes.addEventListener('click', () => acceptDossierOffer(o.id));
+    const no = document.createElement('button');
+    no.className = 'lib-btn';
+    no.textContent = 'Not interested';
+    no.title = 'Chervil won’t offer this subject again';
+    no.addEventListener('click', () => dismissDossierOffer(o.id));
+    row.append(yes, no);
+    card.appendChild(row);
+    els.suggestions.appendChild(card);
+  }
+
   // Your places — one-click tiles above the idea chips (no data-q: they
   // navigate directly instead of going through the composer).
   const p = settings.places || {};
@@ -3339,16 +3387,25 @@ function intervalLabel(ms) {
 
 function startScheduler() {
   if (livingTimer) return;
-  if (!living.length && !schedules.length && !watchers.length) return;
+  if (!schedulerHasWork()) return;
   livingTimer = setInterval(schedulerTick, 30000); // check living pages + schedules + watchers every 30s
+}
+
+// Anything for the tick to do? Dossier scanning counts — it's the only consumer
+// with no records of its own, so without this the tick would never start (or would
+// stop itself) while ambient offers are on.
+function schedulerHasWork() {
+  return !!(living.length || schedules.length || watchers.length || dossierOffersEnabled());
 }
 
 // Master 30s tick: drives Living-page refresh, scheduled agents, and page watchers.
 function schedulerTick() {
-  if (!living.length && !schedules.length && !watchers.length) { clearInterval(livingTimer); livingTimer = null; return; }
+  if (!schedulerHasWork()) { clearInterval(livingTimer); livingTimer = null; return; }
   tickLiving();
   tickSchedules();
   tickWatchers();
+  // Rate-limits itself to DOSSIER_SCAN_MS internally; this tick is every 30s.
+  scanForDossierTopics().catch(() => {});
 }
 
 function tickLiving() {
@@ -6632,10 +6689,18 @@ function handleComposerSubmit(text, opts = {}) {
     return;
   }
 
-  // "What was that laptop review I read last month?" — answer from the user's own
-  // reading, not the web (RFC 0013, phase 1d). Checked before the answer cache:
-  // recall is a question ABOUT their history, not a repeat of an earlier question,
-  // so serving a cached page here would answer the wrong thing entirely.
+  // Questions about the user's own reading (RFC 0013). Both are checked before the
+  // answer cache: they ask ABOUT the user's history rather than repeating an
+  // earlier question, so a cached page would answer something else entirely.
+  //
+  // Dossier first — "summarize what I've read about X" satisfies the recall test
+  // too, and synthesizing everything is the stronger reading of it than re-finding
+  // one page.
+  if (!attachments.length && isDossierQuery(query)) {
+    buildDossier(tab, query);
+    return;
+  }
+  // "What was that laptop review I read last month?" — re-find it in their reading.
   if (!attachments.length && isRecallQuery(query)) {
     askFromYourWeb(tab, query);
     return;
@@ -6748,10 +6813,13 @@ async function buildAndRenderSkill(tab, skillId, input, label) {
 // recommendation, and "I read" alone can't tell it from "what I read last week".
 // A preceding modal makes it hypothetical or future — never a memory.
 const NOT_PAST = '(?<!\\b(?:should|shall|could|would|can|will|might|must|may|wanna|gonna)\\s)';
+// "I've read" is at least as common as "I read", and the contraction has to be
+// spelled out — \bi\s+ won't match it, since what follows the "i" is an apostrophe.
+const I_PAST = "(?:i|we)(?:'ve|'d|\\s+have|\\s+had)?";
 const RECALL_RE = new RegExp([
-  NOT_PAST + '\\b(?:i|we)\\s+(?:already\\s+|previously\\s+|recently\\s+)?(?:read|saw|found|looked at|visited|browsed|opened|was reading|were reading|had open)\\b',
+  NOT_PAST + '\\b' + I_PAST + '\\s+(?:already\\s+|previously\\s+|recently\\s+|just\\s+)?(?:read|saw|seen|found|looked at|visited|browsed|opened|was reading|were reading|had open)\\b',
   '\\bthat\\s+(?:article|page|post|site|thing|review|piece|story|link|blog|paper|guide|recipe|video)\\b.{0,40}\\b(?:i|we)\\b',
-  '\\b(?:remind me|what was)\\b.{0,30}\\b(?:i|we)\\s+(?:read|saw|looked)',
+  '\\b(?:remind me|what was)\\b.{0,30}\\b' + I_PAST + '\\s+(?:read|saw|seen|looked)',
   '\\bfrom\\s+my\\s+(?:reading|history|pages|browsing)\\b',
   '\\bin\\s+(?:my|the)\\s+(?:pages|reading|history|library)\\b',
   '\\bdid\\s+i\\s+(?:read|see|visit|open)\\b',
@@ -6764,11 +6832,36 @@ function isRecallQuery(text) {
   return RECALL_RE.test(q);
 }
 
+// "Pull together what I've read about X" — the manual half of the dossier (Bet 3).
+// Same corpus as recall, different job: synthesize across everything rather than
+// re-find one page. Requires BOTH a gathering verb and a possessive reference to
+// the user's own reading, so it can't swallow an ordinary "summarize tariffs".
+const DOSSIER_VERB = /\b(?:synthesi[sz]e|pull\s+together|round\s+up|bring\s+together|tie\s+together|make\s+sense\s+of|brief\s+me\s+on|dossier|write\s+up|sum\s+up|summari[sz]e|recap|what\s+do\s+i\s+know|what\s+have\s+i\s+learned)\b/i;
+const DOSSIER_MINE = /\b(?:my|i've|i\s+have|i)\s*(?:been\s+)?(?:reading|read|research|researched|browsing|browsed|found|collected|gathered|looked\s+at|seen)\b|\bmy\s+(?:reading|research|pages|history|notes)\b|\bfrom\s+(?:my|everything\s+i)\b/i;
+
+function isDossierQuery(text) {
+  const q = String(text || '').trim();
+  if (!q || q.length > 300) return false;
+  return DOSSIER_VERB.test(q) && DOSSIER_MINE.test(q);
+}
+
+// The topic being asked about, with the framing words stripped — "pull together
+// what I've read about mirrorless cameras" → "mirrorless cameras". Retrieval works
+// far better on the subject than on the whole sentence.
+function dossierTopic(text) {
+  // The leading .* is greedy on purpose: it forces the LAST preposition to win.
+  // "brief me ON everything I've read ABOUT tariffs" must yield "tariffs", and a
+  // lazy/leftmost match would hand back "everything I've read about tariffs".
+  const m = String(text || '').match(/^.*\b(?:about|on|regarding|concerning|around)\s+(.{2,120})$/i);
+  const topic = (m ? m[1] : String(text || '')).replace(/[?.!]+$/, '').trim();
+  return topic || String(text || '').trim();
+}
+
 // Format retrieved pages for the model. Excerpts, not whole pages: five 1,200-char
 // windows is plenty to recognise the right page and answer from it, and keeps the
 // turn cheap — the point is re-finding, not re-reading.
-function buildRecallContext(hits) {
-  return hits.slice(0, 5).map((h, i) => {
+function buildRecallContext(hits, { limit = 5 } = {}) {
+  return hits.slice(0, limit).map((h, i) => {
     const where = h.kind === 'visited' ? (hostOf(h.url) || h.url) : 'a page Sprig composed for me';
     const when = relTime(h.createdAt);
     const body = String(h.body || '').slice(0, 1200);
@@ -6778,7 +6871,109 @@ function buildRecallContext(hits) {
       `  When: ${when}${h.kind === 'visited' && h.visits > 1 ? ` · read ${h.visits} times` : ''}`,
       `  Excerpt: ${body}`,
     ].join('\n');
-  }).join('\n\n').slice(0, 12000);
+  }).join('\n\n').slice(0, 24000);
+}
+
+// ---- Ambient dossier offers (Bet 3, the automatic half) ----
+//
+// Chervil notices you've been reading around a subject and OFFERS to pull it
+// together. It never composes on its own. That's the same call as wakeConfirm: an
+// ambient trigger with a guessed threshold will fire wrong sometimes, so a wrong
+// fire costs one dismissible card — not tokens spent behind your back, and not a
+// surprise page about something you didn't care about.
+//
+// Detection itself is free and local (term clustering in SQLite — see
+// pageIndex.topics), so having this on costs nothing until you accept an offer.
+
+const DOSSIER_SCAN_MS = 20 * 60 * 1000;  // how often to look; reading habits don't change by the minute
+let lastDossierScan = 0;
+
+function dossierOffersEnabled() {
+  return !!(settings.dossierOffers && settings.indexSites && libraryFromIndex && window.chervil.index);
+}
+
+async function scanForDossierTopics({ force = false } = {}) {
+  if (!dossierOffersEnabled()) return;
+  if (!force && Date.now() - lastDossierScan < DOSSIER_SCAN_MS) return;
+  lastDossierScan = Date.now();
+  const minPages = Math.max(3, Number(settings.dossierMinPages) || 5);
+  let topics = [];
+  try {
+    const res = await window.chervil.index.topics({
+      sinceMs: Date.now() - 14 * 24 * 60 * 60 * 1000,
+      minPages,
+      minHosts: 2,   // reading one site a lot is a habit, not a subject
+      limit: 4,
+    });
+    if (res && res.ok) topics = res.topics || [];
+  } catch { return; }
+
+  let added = false;
+  for (const t of topics) {
+    if (dossierOffers.some((o) => o.term === t.term)) continue;      // already offered
+    if (dossierDismissed.some((d) => d.term === t.term)) continue;   // they said no — that's final
+    dossierOffers.push({
+      id: uid(), term: t.term, related: t.related || [],
+      pageCount: t.pageCount, hostCount: t.hostCount, at: Date.now(),
+    });
+    added = true;
+  }
+  if (dossierOffers.length > 3) dossierOffers = dossierOffers.slice(-3); // never a wall of cards
+  if (added) { scheduleSave(); if (!els.overlay.hidden) renderSuggestions(); }
+}
+
+function acceptDossierOffer(id) {
+  const o = dossierOffers.find((x) => x.id === id);
+  if (!o) return;
+  dossierOffers = dossierOffers.filter((x) => x.id !== id);
+  scheduleSave();
+  const tab = activeTab() || newTab(true);
+  const topic = [o.term, ...(o.related || []).slice(0, 1)].join(' ');
+  buildDossier(tab, `Pull together what I've read about ${topic}.`, topic);
+}
+
+function dismissDossierOffer(id) {
+  const o = dossierOffers.find((x) => x.id === id);
+  if (!o) return;
+  dossierOffers = dossierOffers.filter((x) => x.id !== id);
+  // Remember the no. Re-offering a dismissed subject is exactly how an ambient
+  // feature earns its way into being switched off for good.
+  dossierDismissed.push({ term: o.term, at: Date.now() });
+  if (dossierDismissed.length > 200) dossierDismissed = dossierDismissed.slice(-200);
+  scheduleSave();
+  renderSuggestions();
+}
+
+// Pull together everything the user has read on a topic (Bet 3, manual half).
+// Retrieves wider than recall — synthesis needs breadth, where re-finding needs
+// precision — and asks the model to synthesize rather than locate.
+async function buildDossier(tab, query, topicText) {
+  const topic = topicText || dossierTopic(query);
+  if (!libraryFromIndex || !window.chervil.index) { submitQuery(query, { tab }); return; }
+  let hits = [];
+  try {
+    const words = contentWords(topic);   // unstemmed — the index stores real words
+    const res = await window.chervil.index.search({
+      query: words.length ? words.join(' ') : topic, limit: 10, includeBody: true, any: true,
+    });
+    if (res && res.ok) hits = res.items || [];
+  } catch { /* fall through */ }
+  // Two pages isn't a dossier. Say so rather than dressing up a thin pile as a
+  // synthesis — the whole value here is breadth the user couldn't see themselves.
+  if (hits.length < 2) {
+    addMessage(tab, 'bot', hits.length
+      ? `I've only got one page on “${topic}” in your reading — not enough to pull together. Composing a fresh page instead.`
+      : `I couldn’t find anything about “${topic}” in your pages or the sites you’ve read. Composing a fresh page instead.`, 'note');
+    submitQuery(query, { tab });
+    return;
+  }
+  submitQuery(`Pull together everything I've read about ${topic}.`, {
+    tab,
+    displayText: query,
+    recallContext: buildRecallContext(hits, { limit: 10 }),
+    recallMode: 'synthesize',
+    skipFollowup: true,
+  });
 }
 
 // Retrieve from the index and compose an answer grounded in it. On a miss we still
@@ -6786,11 +6981,11 @@ function buildRecallContext(hits) {
 // pretends to be from the user's history.
 async function askFromYourWeb(tab, query) {
   if (!libraryFromIndex || !window.chervil.index) { submitQuery(query, { tab }); return; }
-  const key = queryKey(query);
-  if (!key.length) { submitQuery(query, { tab }); return; }
+  const words = contentWords(query);   // unstemmed — the index stores real words
+  if (!words.length) { submitQuery(query, { tab }); return; }
   let hits = [];
   try {
-    const res = await window.chervil.index.search({ query: key.join(' '), limit: 5, includeBody: true, any: true });
+    const res = await window.chervil.index.search({ query: words.join(' '), limit: 5, includeBody: true, any: true });
     if (res && res.ok) hits = res.items || [];
   } catch { /* fall through to a plain compose */ }
   if (!hits.length) {
@@ -6830,11 +7025,23 @@ const CACHE_STOP = new Set(['a', 'an', 'the', 'of', 'for', 'to', 'in', 'on', 'at
 // questions ("widget 1" vs "widget 2", "learn C" vs "learn R"), which would score
 // as identical and serve the wrong cached answer.
 function queryKey(q) {
+  return [...new Set(contentWords(q).map((w) => w.replace(/(?:ies|es|s)$/, '')))].sort(); // crude stem: starters/starter
+}
+
+// The same content words WITHOUT stemming — for retrieval.
+//
+// queryKey's stemming is right for comparing two questions (both sides are stemmed
+// the same way) and WRONG for querying the index, which stores real words and whose
+// tokenizer doesn't stem: "mirrorless" would go in as "mirrorles" and match
+// nothing, and so would "monads", "tariffs" — anything ending in s. Retrieval must
+// ask for the words as they were actually written.
+// (A future option is FTS5's `porter` tokenizer, which would stem index and query
+// alike — but that means rebuilding the FTS table, so it's a migration, not a fix.)
+function contentWords(q) {
   return [...new Set(
     String(q || '').toLowerCase().replace(/[^a-z0-9\s]/g, ' ').split(/\s+/)
       .filter((w) => w && !CACHE_STOP.has(w))
-      .map((w) => w.replace(/(?:ies|es|s)$/, '')) // crude stem: starters/starter, guides/guide
-  )].sort();
+  )];
 }
 
 function jaccard(a, b) {
@@ -6855,7 +7062,8 @@ async function findCachedAnswer(query) {
     // Retrieve on the CONTENT words with OR: the whole point is that the wording
     // differs, so an all-terms match over the raw question finds nothing. This is
     // a wide net on purpose — the similarity gate below is what actually decides.
-    const res = await window.chervil.index.search({ query: key.join(' '), kind: 'composed', limit: 8, any: true });
+    // Unstemmed (see contentWords): `key` is for comparing, not for querying.
+    const res = await window.chervil.index.search({ query: contentWords(query).join(' '), kind: 'composed', limit: 8, any: true });
     if (!res || !res.ok || !res.items || !res.items.length) return null;
     let best = null;
     for (const it of res.items) {
@@ -7308,6 +7516,7 @@ async function submitQuery(text, opts = {}) {
       refineMode,
       spaceContext: opts.spaceContext || null,
       recallContext: opts.recallContext || null,
+      recallMode: opts.recallMode || 'find',
       deep,
       verify,
       profile: settings.profile || null,
@@ -10352,7 +10561,7 @@ function scheduleSave() {
     // runs on a 500ms debounce from ~100 call sites including every message and
     // every checkbox click inside a page. Omitting it is the perf fix (RFC 0013).
     // Until the migration has run, keep writing it so a downgrade loses nothing.
-    const state = { tabs: persistTabs, activeId: persistActiveId, tabGroups, settings, bookmarks, bookmarkFolders, bookmarkTombstones, favorites, favoriteFolders, favoriteTombstones, collections, deletionTombstones, siteHistory, downloads, agentAudit, spaces, activeSpaceId, savedSpaces, activeSavedSpaceId, living, schedules, watchers, agents, activeAgentId, pipelines, pageStores };
+    const state = { tabs: persistTabs, activeId: persistActiveId, tabGroups, settings, bookmarks, bookmarkFolders, bookmarkTombstones, favorites, favoriteFolders, favoriteTombstones, collections, deletionTombstones, siteHistory, downloads, agentAudit, spaces, activeSpaceId, savedSpaces, activeSavedSpaceId, living, schedules, watchers, agents, activeAgentId, pipelines, pageStores, dossierOffers, dossierDismissed };
     if (!libraryFromIndex) state.library = library;
     window.chervil.saveState(state)
       .then((r) => { if (r && r.mtimeMs) lastStateMtimeMs = r.mtimeMs; }) // our own write — keep baseline current
@@ -10533,6 +10742,8 @@ async function init() {
     };
   }
   await migrateAndHydrateIndex();
+  if (restored && Array.isArray(restored.dossierOffers)) dossierOffers = restored.dossierOffers.filter((o) => o && o.term);
+  if (restored && Array.isArray(restored.dossierDismissed)) dossierDismissed = restored.dossierDismissed.filter((d) => d && d.term);
   if (restored && Array.isArray(restored.bookmarks)) bookmarks = restored.bookmarks;
   if (restored && Array.isArray(restored.bookmarkFolders)) bookmarkFolders = restored.bookmarkFolders.filter((f) => typeof f === 'string');
   if (restored && Array.isArray(restored.bookmarkTombstones)) bookmarkTombstones = restored.bookmarkTombstones;
@@ -12218,11 +12429,46 @@ async function renderIndexStats() {
   } catch { els.indexStats.textContent = ''; }
 }
 
+function dossierMinPagesLabel(n) {
+  return `${n} pages on one subject`;
+}
+
 function renderIndexSettings() {
   if (els.indexSitesToggle) els.indexSitesToggle.checked = !!settings.indexSites;
   if (els.indexExcludes) els.indexExcludes.value = (settings.indexExcludes || []).join(', ');
+  if (els.dossierOffersToggle) {
+    els.dossierOffersToggle.checked = !!settings.dossierOffers;
+    // Noticing what you're researching needs something to notice.
+    els.dossierOffersToggle.disabled = !settings.indexSites;
+  }
+  if (els.dossierMinPages) {
+    const n = Math.max(3, Number(settings.dossierMinPages) || 5);
+    els.dossierMinPages.value = String(n);
+    if (els.dossierMinPagesVal) els.dossierMinPagesVal.textContent = dossierMinPagesLabel(n);
+  }
   renderIndexStats();
 }
+
+if (els.dossierOffersToggle) els.dossierOffersToggle.addEventListener('change', () => {
+  settings.dossierOffers = els.dossierOffersToggle.checked;
+  scheduleSave();
+  if (settings.dossierOffers) {
+    startScheduler();                     // the tick may not be running yet
+    scanForDossierTopics({ force: true }); // look now rather than in 20 minutes
+    toast('Chervil will offer to pull together subjects you read around. It never writes a page on its own.');
+  } else {
+    dossierOffers = [];                   // don't leave stale cards on the new-tab screen
+    renderSuggestions();
+    toast('Chervil won’t offer dossiers.');
+  }
+});
+
+if (els.dossierMinPages) els.dossierMinPages.addEventListener('input', () => {
+  const n = parseInt(els.dossierMinPages.value, 10);
+  settings.dossierMinPages = n;
+  if (els.dossierMinPagesVal) els.dossierMinPagesVal.textContent = dossierMinPagesLabel(n);
+  scheduleSave();
+});
 
 if (els.indexSitesToggle) els.indexSitesToggle.addEventListener('change', () => {
   settings.indexSites = els.indexSitesToggle.checked;

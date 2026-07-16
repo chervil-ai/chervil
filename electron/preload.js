@@ -82,6 +82,8 @@ contextBridge.exposeInMainWorld('chervil', {
     remove: (id) => ipcRenderer.invoke('chervil:index-remove', { id }),
     emptyTrash: () => ipcRenderer.invoke('chervil:index-empty-trash'),
     stats: () => ipcRenderer.invoke('chervil:index-stats'),
+    /** What has the user been reading about lately? Local term clustering — no model. */
+    topics: (payload) => ipcRenderer.invoke('chervil:index-topics', payload || {}),
     /** Trim captured sites back to a budget, oldest first. Never touches composed pages. */
     evictOver: (max) => ipcRenderer.invoke('chervil:index-evict-over', { max }),
     forgetSite: (host) => ipcRenderer.invoke('chervil:index-forget-site', { host }),
