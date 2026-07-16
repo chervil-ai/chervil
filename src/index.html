@@ -121,10 +121,17 @@
         <button id="back-btn" class="omni-btn" title="Back" disabled>‹</button>
         <button id="fwd-btn" class="omni-btn" title="Forward" disabled>›</button>
         <button id="reload-btn" class="omni-btn" title="Reload page" disabled>⟳</button>
-        <input id="page-title" class="omnibox" value="Welcome to Chervil" spellcheck="false"
-               autocomplete="off" autocapitalize="off"
-               title="Enter a URL, ask Sprig, or type a command (/learn, /quiz) — Ctrl+L to focus"
-               placeholder="Search, ask Sprig, or enter a URL…" />
+        <!-- The omnibox is the pill; #mode-badge rides inside it as the leading
+             chip (where a browser puts context) instead of trailing the button
+             cluster. The wrapper carries the pill so the chip can sit within it —
+             an <input> can't have children. -->
+        <div id="omni-wrap">
+          <div id="mode-badge" class="badge">ready</div>
+          <input id="page-title" class="omnibox" value="Welcome to Chervil" spellcheck="false"
+                 autocomplete="off" autocapitalize="off"
+                 title="Enter a URL, ask Sprig, or type a command (/learn, /quiz) — Ctrl+L to focus"
+                 placeholder="Search, ask Sprig, or enter a URL…" />
+        </div>
         <div id="omni-actions">
           <button id="map-btn" class="omni-btn text" title="Thinking canvas — map of this tab's pages">⌗ <span class="lbl">Map</span></button>
           <button id="history-btn" class="omni-btn text" title="Library — Saved Pages, Activity, Favorites, History, Downloads &amp; Trash">🕘 <span class="lbl">Library</span></button>
@@ -152,7 +159,6 @@
           <button id="print-btn" class="omni-btn" title="Print (Ctrl+P)">🖨</button>
           <button id="omni-overflow-btn" class="omni-btn" title="More toolbar actions" aria-haspopup="true" aria-expanded="false" hidden>⋯</button>
           <button id="settings-btn" class="omni-btn" title="Settings">⚙</button>
-          <div id="mode-badge" class="badge">ready</div>
         </div>
       </div>
 
@@ -204,86 +210,15 @@
           </div>
         </div>
 
-        <!-- Remix bar: transform the current composed page -->
-        <div id="remix-bar" hidden>
-          <button id="remix-min" class="remix-btn remix-min" title="Minimize this bar">▾</button>
-          <!-- In-page follow-up: refine THIS composed page in place, without leaving it -->
-          <form id="followup-form" class="followup" autocomplete="off">
-            <input id="followup-input" type="text" spellcheck="false" autocomplete="off"
-                   placeholder="Ask a follow-up to refine this page…" title="Refine this page in place — e.g. “focus on the budget options”, “make it shorter”, “add a section on X”" />
-            <button id="followup-send" type="submit" class="followup-send" title="Refine this page (Enter)">↳</button>
-          </form>
-          <span class="remix-sep"></span>
-          <span class="remix-label">Remix</span>
-          <button class="remix-btn" data-remix="summary">Summarize</button>
-          <button class="remix-btn" data-remix="simplify">Simplify</button>
-          <button class="remix-btn" data-remix="deeper">Go deeper</button>
-          <button class="remix-btn" data-remix="slides">Slides</button>
-          <button class="remix-btn" data-remix="keypoints">Key points</button>
-          <button id="audio-btn" class="remix-btn audio">🔊 Audio</button>
-          <span class="remix-sep"></span>
-          <button id="refresh-page-btn" class="remix-btn" title="Re-run this page's query and update it in place">↻ Refresh</button>
-          <button id="verify-btn" class="remix-btn verify" title="Fact-check this page against the live web">✓ Verify</button>
-          <button id="sources-btn" class="remix-btn" title="Sources Sprig used">Sources</button>
-          <select id="export-select" class="live-select" title="Export or share this page as a file">
-            <option value="">⤓ Export…</option>
-            <option value="share">🔗 Shareable page (.chervil)</option>
-            <option value="pdf">PDF (.pdf)</option>
-            <option value="png">Image — PNG (.png)</option>
-            <option value="jpg">Image — JPG (.jpg)</option>
-            <option value="gif">Animated GIF (.gif)</option>
-            <option value="pptx">PowerPoint (.pptx)</option>
-            <option value="docx">Word (.docx)</option>
-            <option value="xlsx">Excel (.xlsx)</option>
-            <option value="epub">📚 eBook — EPUB / Kindle (.epub)</option>
-            <option value="print-book">🖨 Print-ready PDF — book (.pdf)</option>
-            <option value="lesson">📱 Mobile lesson (.html)</option>
-            <option value="lesson-publish">🌐 Publish to web (Pro)</option>
-          </select>
-          <span class="remix-sep"></span>
-          <select id="live-select" class="live-select" title="Keep this page auto-updated">
-            <option value="off">⏱ Live: off</option>
-            <option value="300000">every 5 min</option>
-            <option value="900000">every 15 min</option>
-            <option value="1800000">every 30 min</option>
-            <option value="3600000">every hour</option>
-            <option value="21600000">every 6 hours</option>
-          </select>
-          <span id="live-status" class="live-status" hidden></span>
-        </div>
-
-        <!-- Collapsed remix-bar handle (re-expands the bar) -->
-        <button id="remix-handle" class="remix-handle" hidden title="Show page actions">✦ Remix</button>
-
-        <!-- Sources / "show your work" panel -->
-        <div id="sources-panel" hidden>
-          <div class="sources-head">
-            <span class="sources-title">Grounding</span>
-            <button id="sources-close" class="modal-close" title="Close">✕</button>
-          </div>
-          <div id="sources-list"></div>
-        </div>
-
-        <!-- Audio player (appears while narrating) -->
-        <div id="audio-bar" hidden>
-          <span id="audio-title">🔊 Reading this page</span>
-          <button id="audio-toggle" class="audio-ctrl">Pause</button>
-          <button id="audio-stop" class="audio-ctrl">Stop</button>
-        </div>
-      </div>
-    </main>
-    </div>
-  </div>
-
-  <!-- Settings modal -->
-  <div id="settings-modal" class="modal">
-    <div class="modal-card">
-      <header class="modal-head">
-        <h2>Settings</h2>
-        <button id="settings-close" class="modal-close" title="Close">✕</button>
-      </header>
-
-      <nav id="settings-tabs" class="settings-tabs">
+        <!-- Settings, as a page rather than a dialog (a browser opens settings in a
+             tab). It lives HERE, in the main document, and not in #page-frame:
+             that frame is sandboxed without allow-same-origin, and Settings needs
+             direct access to `settings`, els.* and IPC. Weakening the sandbox for
+             a settings screen would be a bad trade, so this is a third viewport
+             view alongside the frame and the overlay — same idea as #overlay. -->
+        <div id="settings-view" hidden>
+          <nav id="settings-nav" aria-label="Settings sections">
+            <div class="settings-nav-head">Settings</div>
         <button class="settings-tab active" data-sgroup="general">General</button>
         <button class="settings-tab" data-sgroup="browser">Browser</button>
         <button class="settings-tab" data-sgroup="ai">AI</button>
@@ -291,7 +226,9 @@
         <button class="settings-tab" data-sgroup="publishing">Publishing &amp; Sync</button>
         <button class="settings-tab" data-sgroup="security">Security</button>
         <button class="settings-tab" data-sgroup="you">You</button>
-      </nav>
+          </nav>
+          <div id="settings-content">
+
 
       <section class="setting-group" data-sgroup="general">
         <h3>When you click a link in a composed page</h3>
@@ -440,7 +377,7 @@
 
       <section class="setting-group" data-sgroup="general">
         <h3>Toolbar buttons</h3>
-        <p class="group-hint">Choose which buttons show on the top bar. (You can also <strong>right-click the top bar</strong> for a quick toggle.)</p>
+        <p class="group-hint">Chervil keeps the top bar short, like a browser should — everything else lives in the <strong>⋯ menu</strong> at the end of the bar. Tick a button to give it a permanent seat on the bar instead. <strong>Nothing is ever removed:</strong> unticked just means it’s in the ⋯ menu. (You can also <strong>right-click the top bar</strong> for a quick toggle.)</p>
         <div id="toolbar-prefs"></div>
       </section>
 
@@ -652,6 +589,43 @@
         </label>
       </section>
 
+      <section class="setting-group" data-sgroup="security">
+        <h3>Your Web — search what you’ve read</h3>
+        <p class="group-hint">Chervil already keeps the pages <strong>it composes</strong> for you, so you can search them in the Library. It can also keep the <strong>text of the websites you read</strong> — then you can ask Sprig things like “what was that laptop review I read last month?” and get an answer from your own reading, instantly and for free.<br /><br />
+        This is <strong>local and private</strong>. The index is a file on this computer, it is <strong>never synced and never uploaded</strong>, and no AI ever sees a page just because you read it — the text only reaches your AI provider if you ask a question it answers, exactly like attaching a file. It’s <strong>off unless you turn it on.</strong></p>
+        <label class="toggle-row">
+          <input id="index-sites-toggle" type="checkbox" />
+          <span>Keep the text of websites I read, so I can search and ask about them later. <strong>Private tabs are never included</strong>, and neither is any page behind a login or paywall.</span>
+        </label>
+        <label class="field-label" for="index-excludes">Never keep these sites</label>
+        <span class="field-row">
+          <input id="index-excludes" type="text" placeholder="mybank.com, myhealth.org, webmail" spellcheck="false" />
+          <button id="index-excludes-save" type="button" class="lib-btn">Save</button>
+        </span>
+        <small class="field-note">Comma-separated. Any address containing one of these is skipped entirely.</small>
+        <p id="index-stats" class="group-hint">—</p>
+        <span class="field-row">
+          <button id="index-forget-hour" type="button" class="lib-btn">Forget the last hour</button>
+          <button id="index-forget-day" type="button" class="lib-btn">Forget today</button>
+          <button id="index-forget-site" type="button" class="lib-btn">Forget a site…</button>
+          <button id="index-delete-all" type="button" class="lib-btn">Delete everything</button>
+        </span>
+        <small class="field-note">These really delete — the rows are removed and the file compacted, not just hidden from the list.</small>
+
+        <h3 style="margin-top:22px;">Noticing what you’re researching</h3>
+        <p class="group-hint">When you read around the same subject across a few different sites, Chervil can offer to pull it all together into one page — what you found, where your sources disagree, and what you haven’t looked at yet.<br /><br />
+        Noticing is <strong>free and local</strong> (no AI is involved in spotting the topic). Sprig <strong>never writes the page on its own</strong> — you get a quiet card offering it, and nothing is composed, and nothing is spent, until you click it. Needs “keep the text of websites I read” above.</p>
+        <label class="toggle-row">
+          <input id="dossier-offers-toggle" type="checkbox" />
+          <span>Offer to pull together subjects I’ve been reading about. The offer appears on the new-tab screen — no popup, no sound, no notification.</span>
+        </label>
+        <div class="field">
+          <span class="field-label">Offer after <span id="dossier-min-pages-val" class="field-note"></span></span>
+          <input id="dossier-min-pages" type="range" min="3" max="10" step="1" />
+          <small class="field-note">How much reading on one subject before Chervil offers. <strong>Higher = only when you’ve really been digging</strong> — raise this if it offers things you didn’t care about. Lower = offers sooner. It always needs at least two different websites, so reading one site a lot never counts as researching a subject.</small>
+        </div>
+      </section>
+
       <section class="setting-group" data-sgroup="voice">
         <h3>Listening — “Hey Sprig”</h3>
         <p class="group-hint">Let Chervil listen for a wake word and pop the Quick-Ask bar so you can speak a request hands-free. Detection runs <strong>fully on-device</strong> and free (<a href="https://github.com/dscripka/openWakeWord" target="_blank" rel="noreferrer">openWakeWord</a>, no account or key) — your mic audio never leaves the machine until you actually speak a command, which is then transcribed by your configured voice-input service above.</p>
@@ -797,9 +771,81 @@
         · <button id="docs-link-btn" type="button" class="link-btn">Documentation</button>
         <span id="update-status" class="update-status"></span>
       </p>
+          </div>
+        </div>
+
+        <!-- Remix bar: transform the current composed page -->
+        <div id="remix-bar" hidden>
+          <button id="remix-min" class="remix-btn remix-min" title="Minimize this bar">▾</button>
+          <!-- In-page follow-up: refine THIS composed page in place, without leaving it -->
+          <form id="followup-form" class="followup" autocomplete="off">
+            <input id="followup-input" type="text" spellcheck="false" autocomplete="off"
+                   placeholder="Ask a follow-up to refine this page…" title="Refine this page in place — e.g. “focus on the budget options”, “make it shorter”, “add a section on X”" />
+            <button id="followup-send" type="submit" class="followup-send" title="Refine this page (Enter)">↳</button>
+          </form>
+          <span class="remix-sep"></span>
+          <span class="remix-label">Remix</span>
+          <button class="remix-btn" data-remix="summary">Summarize</button>
+          <button class="remix-btn" data-remix="simplify">Simplify</button>
+          <button class="remix-btn" data-remix="deeper">Go deeper</button>
+          <button class="remix-btn" data-remix="slides">Slides</button>
+          <button class="remix-btn" data-remix="keypoints">Key points</button>
+          <button id="audio-btn" class="remix-btn audio">🔊 Audio</button>
+          <span class="remix-sep"></span>
+          <button id="refresh-page-btn" class="remix-btn" title="Re-run this page's query and update it in place">↻ Refresh</button>
+          <button id="verify-btn" class="remix-btn verify" title="Fact-check this page against the live web">✓ Verify</button>
+          <button id="sources-btn" class="remix-btn" title="Sources Sprig used">Sources</button>
+          <select id="export-select" class="live-select" title="Export or share this page as a file">
+            <option value="">⤓ Export…</option>
+            <option value="share">🔗 Shareable page (.chervil)</option>
+            <option value="pdf">PDF (.pdf)</option>
+            <option value="png">Image — PNG (.png)</option>
+            <option value="jpg">Image — JPG (.jpg)</option>
+            <option value="gif">Animated GIF (.gif)</option>
+            <option value="pptx">PowerPoint (.pptx)</option>
+            <option value="docx">Word (.docx)</option>
+            <option value="xlsx">Excel (.xlsx)</option>
+            <option value="epub">📚 eBook — EPUB / Kindle (.epub)</option>
+            <option value="print-book">🖨 Print-ready PDF — book (.pdf)</option>
+            <option value="lesson">📱 Mobile lesson (.html)</option>
+            <option value="lesson-publish">🌐 Publish to web (Pro)</option>
+          </select>
+          <span class="remix-sep"></span>
+          <select id="live-select" class="live-select" title="Keep this page auto-updated">
+            <option value="off">⏱ Live: off</option>
+            <option value="300000">every 5 min</option>
+            <option value="900000">every 15 min</option>
+            <option value="1800000">every 30 min</option>
+            <option value="3600000">every hour</option>
+            <option value="21600000">every 6 hours</option>
+          </select>
+          <span id="live-status" class="live-status" hidden></span>
+        </div>
+
+        <!-- Collapsed remix-bar handle (re-expands the bar) -->
+        <button id="remix-handle" class="remix-handle" hidden title="Show page actions">✦ Remix</button>
+
+        <!-- Sources / "show your work" panel -->
+        <div id="sources-panel" hidden>
+          <div class="sources-head">
+            <span class="sources-title">Grounding</span>
+            <button id="sources-close" class="modal-close" title="Close">✕</button>
+          </div>
+          <div id="sources-list"></div>
+        </div>
+
+        <!-- Audio player (appears while narrating) -->
+        <div id="audio-bar" hidden>
+          <span id="audio-title">🔊 Reading this page</span>
+          <button id="audio-toggle" class="audio-ctrl">Pause</button>
+          <button id="audio-stop" class="audio-ctrl">Stop</button>
+        </div>
+      </div>
+    </main>
     </div>
   </div>
 
+  <!-- Settings modal -->
   <!-- Data folders modal: designate folders and pull files into a query -->
   <div id="folders-modal" class="modal">
     <div class="modal-card">

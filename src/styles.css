@@ -15,6 +15,11 @@
   --radius-md: 10px;   /* buttons, fields */
   --radius-lg: 14px;   /* cards */
   --radius-xl: 20px;   /* modals, large panels */
+  /* The window frame behind the tab strip. Darker than --panel so the active tab,
+     which shares --panel with the toolbar, reads as one continuous surface lifted
+     out of the frame — that silhouette is most of what makes a browser look like
+     a browser. */
+  --frame: #080a0e;
   --scrollbar: #2b3147;
   --sidebar-w: 380px;  /* chat sidebar — user-resizable (drag the seam) */
   --vtabs-w: 212px;    /* vertical tab rail — user-resizable */
@@ -128,8 +133,9 @@ body.resizing #web-views { pointer-events: none; }
   align-items: stretch;
   gap: 4px;
   padding: 6px 8px 0;
-  background: #080a0e;
-  border-bottom: 1px solid var(--border);
+  background: var(--frame);
+  /* No divider: the active tab has to flow into the toolbar without a line
+     cutting between them. That join is the whole effect. */
   overflow-x: auto;
 }
 #tabstrip::-webkit-scrollbar { height: 0; }
@@ -143,16 +149,21 @@ body.resizing #web-views { pointer-events: none; }
   max-width: 220px;
   min-width: 120px;
   padding: 8px 10px 8px 12px;
-  background: var(--panel);
-  border: 1px solid var(--border);
-  border-bottom: none;
+  /* Inactive tabs are just labels on the frame — no fill, no outline. Outlining
+     every tab is what made the strip read as a row of cards instead of tabs. */
+  background: transparent;
+  border: 0;
   border-radius: 9px 9px 0 0;
   color: var(--muted);
   font-size: 13px;
   cursor: pointer;
   user-select: none;
 }
-.tab.active { background: var(--panel-2); color: var(--text); }
+.tab:hover:not(.active) { background: rgba(255, 255, 255, 0.05); }
+/* --panel is exactly #omnibar's background, so the active tab and the toolbar are
+   one surface with no seam — the browser silhouette. Don't give this its own
+   colour: if it drifts from the toolbar the join reappears as a visible step. */
+.tab.active { background: var(--panel); color: var(--text); }
 .tab .tab-title {
   flex: 1;
   white-space: nowrap;
@@ -231,7 +242,7 @@ body.resizing #web-views { pointer-events: none; }
   left: 0;
   right: 0;
   z-index: 500;
-  background: #080a0e;
+  background: var(--frame);
   padding-bottom: 6px;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
 }
@@ -277,9 +288,12 @@ body.resizing #web-views { pointer-events: none; }
   flex-direction: column;
   gap: 5px;
 }
+/* The rail has no toolbar to merge into, so tabs stay self-contained cards here —
+   restore the fill the horizontal tabs just dropped. */
 #app.vtabs .tab {
   max-width: none;
   min-width: 0;
+  background: var(--panel);
   border: 1px solid var(--border);
   border-radius: 8px;
 }
@@ -955,7 +969,7 @@ body.resizing #web-views { pointer-events: none; }
    shrink further and tighten the cluster so nothing is pushed offscreen. */
 @container omnibar (max-width: 720px) {
   #omni-actions { gap: 4px; padding-left: 8px; }
-  #omnibar #page-title { min-width: 120px; }
+  #omnibar #omni-wrap { min-width: 120px; }
   #mode-badge { display: none; }
 }
 /* Minimum window (900px) with the sidebar open leaves the bar very narrow —
@@ -964,10 +978,8 @@ body.resizing #web-views { pointer-events: none; }
   #omnibar { gap: 8px; }
   #omnibar .omni-btn, #omni-actions .omni-btn.text { width: 28px; height: 28px; font-size: 14px; }
   #omni-actions { gap: 2px; padding-left: 6px; margin-left: 2px; }
-  #omnibar #page-title { min-width: 80px; padding: 7px 9px; }
+  #omnibar #omni-wrap { min-width: 80px; height: 30px; padding: 0 4px 0 9px; }
 }
-
-#mode-badge { margin-left: 2px; }
 
 /* Overflow tray — holds the toolbar buttons that don't fit the current width.
    Hidden until the ⋯ button opens it; positioned as a popover by reflowOmnibar. */
@@ -1010,27 +1022,64 @@ body.resizing #web-views { pointer-events: none; }
 /* The .text buttons (Map, Library, …) already contain a .lbl span — show it. */
 #omni-overflow-tray.open .omni-btn.text { width: 100%; padding: 0 10px; }
 #omni-overflow-tray.open .omni-btn.text .lbl { display: inline; font-size: 13px; }
+/* Zoom is a cluster, not a button — in the menu it reads as one row (− 100% +),
+   the way Chrome's ⋮ menu presents it, rather than three stacked full-width rows. */
+#omni-overflow-tray.open .omni-zoom {
+  display: flex;
+  width: 100%;
+  gap: 4px;
+  padding: 2px 6px;
+  box-sizing: border-box;
+}
+#omni-overflow-tray.open .omni-zoom .omni-btn {
+  width: auto;
+  flex: 1;
+  height: 30px;
+  justify-content: center;
+}
 
-#page-title {
+/* Omnibox — a browser address bar, not a form field.
+   The pill lives on the wrapper so the mode chip can sit inside it. A resting
+   fill with no visible border is what makes a browser's top bar read as calm:
+   the bar is a surface with one soft well in it, rather than a row of outlined
+   inputs. Border and ring appear only on focus. */
+#omni-wrap {
   flex: 1 1 auto;
   min-width: 240px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 34px;
+  box-sizing: border-box;
+  padding: 0 6px 0 12px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.06);
+  transition: background 0.12s, border-color 0.12s, box-shadow 0.12s;
+}
+#omni-wrap:hover { background: rgba(255, 255, 255, 0.09); }
+#omni-wrap:focus-within {
+  background: var(--panel);
+  border-color: var(--accent);
+  /* Was a hard-coded green that predated --accent going blue; derive it so the
+     ring can never drift from the accent again. */
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 20%, transparent);
+}
+#page-title {
+  flex: 1 1 auto;
+  min-width: 0;
   font-size: 14px;
   color: var(--text);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  /* Omnibox: an editable address/ask bar */
-  border: 1px solid var(--border);
-  background: var(--panel-2);
-  border-radius: 10px;
-  padding: 7px 12px;
+  border: 0;
+  background: transparent;
+  padding: 0;
   font-family: inherit;
   outline: none;
-  transition: border-color 0.12s, background 0.12s;
 }
 #page-title::placeholder { color: var(--muted); }
-#page-title:hover { border-color: var(--accent); }
-#page-title:focus { border-color: var(--accent); background: var(--panel); box-shadow: 0 0 0 3px rgba(123, 224, 163, 0.12); }
 
 .badge {
   font-size: 11px;
@@ -1041,6 +1090,19 @@ body.resizing #web-views { pointer-events: none; }
   border-radius: 999px;
   padding: 3px 10px;
 }
+/* Inside the omnibox it's the leading chip — the place a browser puts context
+   about what you're looking at. Order matters visually, so it never wraps or
+   shrinks the address itself. */
+#mode-badge {
+  flex: none;
+  margin: 0;
+  border: 0;
+  padding: 2px 8px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.07);
+  font-weight: 600;
+}
+#mode-badge:empty { display: none; }
 .badge.live { color: #7be0a3; border-color: #2c5a40; }
 .badge.page { color: var(--accent); border-color: #2e3a66; }
 .badge.working { color: #ffd479; border-color: #5a4a2a; }
@@ -1888,10 +1950,72 @@ body.resizing #web-views { pointer-events: none; }
 .account-actions .lib-btn { cursor: pointer; }
 
 /* Settings topic tabs */
-.settings-tabs { display: flex; gap: 4px; flex-wrap: wrap; margin-bottom: 16px; border-bottom: 1px solid var(--border); }
-.settings-tab { background: transparent; border: 0; border-bottom: 2px solid transparent; color: var(--muted); font-size: 13px; font-weight: 600; padding: 8px 12px; cursor: pointer; }
-.settings-tab:hover { color: var(--text); }
-.settings-tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+/* ---------- Settings, as a page ----------
+   A browser opens settings in a tab, not a dialog. Two columns: a nav rail that
+   stays put, and a content column that scrolls — so the sections have room to
+   breathe instead of being squeezed into a modal. */
+#settings-view {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  display: grid;
+  grid-template-columns: 248px 1fr;
+  background: var(--bg);
+  overflow: hidden;
+}
+#settings-view[hidden] { display: none; }
+
+#settings-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 22px 12px;
+  border-right: 1px solid var(--border);
+  overflow-y: auto;
+}
+.settings-nav-head {
+  font-size: 20px;
+  font-weight: 600;
+  color: var(--text);
+  padding: 0 12px 18px;
+}
+/* Rail items: a pill highlight on the active one, the way Chrome's settings nav
+   reads. The old horizontal underline tabs don't survive the move. */
+.settings-tab {
+  background: transparent;
+  border: 0;
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 13.5px;
+  font-weight: 500;
+  text-align: left;
+  padding: 9px 14px;
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s;
+}
+.settings-tab:hover { color: var(--text); background: rgba(255, 255, 255, 0.05); }
+.settings-tab.active {
+  color: var(--text);
+  background: color-mix(in srgb, var(--accent) 20%, transparent);
+  font-weight: 600;
+}
+
+#settings-content {
+  overflow-y: auto;
+  padding: 22px 0 80px;
+}
+/* Cards, centred with a comfortable measure — settings shouldn't stretch to a
+   1600px window's full width. */
+#settings-content .setting-group {
+  max-width: 720px;
+  margin: 0 auto 14px;
+  padding: 20px 22px;
+  border: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--panel);
+}
+#settings-content .settings-version { max-width: 720px; margin: 6px auto 0; padding: 0 22px; }
 
 /* History multi-select bar (mirrors #tab-select-bar) */
 #lib-select-bar { display: flex; align-items: center; gap: 8px; padding: 8px 12px; background: rgba(123, 224, 163, 0.10); border-bottom: 1px solid var(--border); font-size: 12px; color: var(--text); }
@@ -1972,6 +2096,42 @@ body.resizing #web-views { pointer-events: none; }
 }
 .lib-main:hover .lib-title { color: var(--accent); }
 .lib-meta { font-size: 12px; color: var(--muted); margin-top: 2px; }
+/* The matching passage from a page-content search (RFC 0013). Two lines max so a
+   long match can't push the rest of the results off screen. */
+.lib-snippet {
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 4px;
+  line-height: 1.45;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+/* An offer to pull together a subject you've been reading around (Bet 3). Sits on
+   the new-tab screen and waits — deliberately calm, not a notification. */
+.dossier-offer {
+  width: 100%;
+  box-sizing: border-box;
+  margin: 0 0 14px;
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--accent) 7%, transparent);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  text-align: left;
+}
+.dossier-offer-text { font-size: 14px; line-height: 1.5; color: var(--text); }
+.dossier-offer-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+
+.lib-snippet mark {
+  background: color-mix(in srgb, var(--accent) 26%, transparent);
+  color: inherit;
+  border-radius: 3px;
+  padding: 0 2px;
+}
 .lib-actions { flex: none; display: flex; gap: 6px; }
 .lib-btn {
   padding: 6px 11px;

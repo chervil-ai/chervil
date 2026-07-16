@@ -105,8 +105,9 @@ const els = {
   save: document.getElementById('save-btn'),
   // Settings
   settingsBtn: document.getElementById('settings-btn'),
-  settingsModal: document.getElementById('settings-modal'),
-  settingsClose: document.getElementById('settings-close'),
+  settingsView: document.getElementById('settings-view'),
+  settingsNav: document.getElementById('settings-nav'),
+  settingsContent: document.getElementById('settings-content'),
   providerKeyRow: document.getElementById('provider-key-row'),
   providerKeyLabel: document.getElementById('provider-key-label'),
   apiKeyInput: document.getElementById('api-key-input'),
@@ -201,6 +202,18 @@ const els = {
   importAddressBtn: document.getElementById('import-address-btn'),
   importAddressStatus: document.getElementById('import-address-status'),
   adblockToggle: document.getElementById('adblock-toggle'),
+  // Your Web (RFC 0013)
+  indexSitesToggle: document.getElementById('index-sites-toggle'),
+  dossierOffersToggle: document.getElementById('dossier-offers-toggle'),
+  dossierMinPages: document.getElementById('dossier-min-pages'),
+  dossierMinPagesVal: document.getElementById('dossier-min-pages-val'),
+  indexExcludes: document.getElementById('index-excludes'),
+  indexExcludesSave: document.getElementById('index-excludes-save'),
+  indexStats: document.getElementById('index-stats'),
+  indexForgetHour: document.getElementById('index-forget-hour'),
+  indexForgetDay: document.getElementById('index-forget-day'),
+  indexForgetSite: document.getElementById('index-forget-site'),
+  indexDeleteAll: document.getElementById('index-delete-all'),
   adblockStat: document.getElementById('adblock-stat'),
   spellcheckToggle: document.getElementById('spellcheck-toggle'),
   sharePopupToggle: document.getElementById('share-popup-toggle'),
@@ -356,6 +369,11 @@ function attachWebviewEvents(wv, tabId) {
     try { wv.setZoomFactor(zoomForTab(t)); } catch { /* not ready */ }
     try { wv.setAudioMuted(!!(t && t.muted)); } catch { /* not ready */ }
   });
+  // Your Web (RFC 0013): once a page has settled, keep its readable text so you can
+  // search what you've read. Off unless the user turned it on; scheduleSiteCapture
+  // owns the gates. did-stop-loading rather than dom-ready — client-rendered pages
+  // have nothing to read at dom-ready.
+  wv.addEventListener('did-stop-loading', () => scheduleSiteCapture(tabId, wv));
   // Audio badge: any tab (active or background) shows 🔊 while its site plays.
   wv.addEventListener('media-started-playing', () => {
     try { if (wv.isCurrentlyAudible && !wv.isCurrentlyAudible()) return; } catch { /* assume audible */ }
@@ -435,6 +453,20 @@ let settings = {
   bookmarksBar: false,       // show the bookmarks strip under the omnibar (Ctrl+Shift+B)
   favoritesBar: false,       // show the favorites strip (★ sites) under the omnibar
   collapsedFolders: [],      // ["favorites:Name" | "bookmarks:Name"] folder groups the user collapsed in the Library
+  // Your Web (RFC 0013). DEFAULT OFF, deliberately: keeping the text of every
+  // site you read is the most sensitive thing Chervil does, and "it was quietly
+  // recording my browsing" is an unrecoverable first impression. Composed pages
+  // are indexed regardless — you knowingly made those.
+  indexSites: false,         // keep the readable text of sites you visit, so Sprig can answer from your own reading
+  indexExcludes: [],         // hosts never captured (substring match), e.g. ["bank.com", "myhealth"]
+  indexMaxSites: 5000,       // captured-site budget; oldest are evicted past this (text-only, so ~hundreds of MB at worst)
+  // Ambient dossiers (Bet 3). Default OFF. When on, Chervil notices you've been
+  // reading around a subject and OFFERS to pull it together — it never composes
+  // unprompted. Same shape as wakeConfirm: an ambient trigger with a guessed
+  // threshold WILL fire wrong sometimes, so a wrong fire must cost one dismissible
+  // card, not tokens spent behind your back.
+  dossierOffers: false,      // offer to pull together a topic you've been reading around
+  dossierMinPages: 5,        // how many pages on one subject before offering (the sensitivity dial)
   adblock: false,            // block common ad/tracker hosts in embedded sites (main-process filter)
   spellcheck: true,          // red squiggles + right-click suggestions in text fields (app + embedded sites)
   sharePopup: true,          // open share composers (Fedica, AddToAny…) in a popup window vs a tab
@@ -505,7 +537,18 @@ function providerConfig(agentOverride) {
 
 // Auto-collected library of composed pages, plus a trash bin.
 //   item = { id, createdAt, title, query, html, sources, conversation, history, spaceId }
+// Library rows. Once the index has taken over (RFC 0013) these are LIGHT rows —
+// no html/conversation/history — and the session state file stops carrying pages
+// entirely. `libraryFromIndex` gates that switchover: false means the index is
+// unavailable or hasn't migrated yet, and state stays the source of truth.
 let library = { history: [], trash: [] };
+let libraryFromIndex = false;
+// Ambient dossier offers (Bet 3): topics Chervil has noticed and is offering to
+// pull together, plus the ones you've said no to. Dismissals MUST persist — an
+// offer that comes back after you dismissed it is the whole reason people turn
+// ambient features off.
+let dossierOffers = [];    // [{ id, term, related, pageCount, hostCount, at }]
+let dossierDismissed = []; // [{ term, at }] — never offer this subject again
 // "Saved Pages" (internally still `bookmarks`): composed Chervil pages the user
 // saved, on the ribbon button. Sites live in Favorites, not here. [{ id, key, kind:'page', query, title, at, folder?, tab }]
 let bookmarks = [];
@@ -533,6 +576,10 @@ let agentAudit = []; // [{ at, type, target, decision, ok }] — agent action au
 const MAX_AGENT_AUDIT = 500;
 let drawerTab = 'history';
 let librarySearch = ''; // filter text for the Library drawer list (all tabs)
+// Full-text hits for the Activity tab, from the page index (RFC 0013, phase 1b).
+// Held here because renderDrawer is synchronous and the index is an IPC round-trip.
+let libraryFts = { q: '', items: null };
+let libraryFtsTimer = null;
 // History multi-select (bulk delete) state.
 let librarySelectMode = false;
 let selectedLibraryIds = new Set();
@@ -606,6 +653,19 @@ const DOCTYPE_RE = /<!DOCTYPE html>|<html[\s>]/i;
 //   2. Expose a live tool bridge — window.chervil.ask(...) — so a composed page can
 //      call Sprig at runtime and build interactive "applets".
 const CHERVIL_RUNTIME = `<script>(function(){
+  // 0. Broken-image cleanup. An <img> whose src 404s — or was never a real
+  // picture — renders as a broken icon with its alt text sprawled across the
+  // layout. Drop it (and a figure that held only it) so the page degrades to
+  // clean prose. Resource errors don't bubble, so this listens in capture.
+  document.addEventListener('error', function(e){
+    var el = e.target;
+    if(!el || el.tagName !== 'IMG' || !el.closest) return;
+    if(el.closest('.chervil-hero')) return;   // the hero block has its own fallback
+    var fig = el.closest('figure');
+    var host = (fig && fig.querySelectorAll('img').length === 1) ? fig : el;
+    if(host.parentNode) host.parentNode.removeChild(host);
+  }, true);
+
   // 1. Link interception.
   document.addEventListener('click', function(e){
     var a = e.target && e.target.closest ? e.target.closest('a') : null;
@@ -1935,6 +1995,38 @@ function renderSuggestions() {
   if (!els.suggestions) return;
   els.suggestions.innerHTML = '';
 
+  // A subject Chervil noticed you reading around (Bet 3). This is the ONLY place
+  // an offer appears: it waits on the new-tab screen until you happen to look. No
+  // notification, no popup, no sound — you didn't ask for this, so it doesn't get
+  // to interrupt. Nothing is composed or spent unless you click Pull it together.
+  for (const o of dossierOffers.slice(0, 2)) {
+    const card = document.createElement('div');
+    card.className = 'dossier-offer';
+
+    const text = document.createElement('div');
+    text.className = 'dossier-offer-text';
+    const subject = [o.term, ...(o.related || []).slice(0, 1)].join(' ');
+    const strong = document.createElement('strong');
+    strong.textContent = subject;
+    text.append('You’ve been reading about ', strong, ` — ${o.pageCount} pages across ${o.hostCount} sites. Want me to pull it together?`);
+    card.appendChild(text);
+
+    const row = document.createElement('div');
+    row.className = 'dossier-offer-actions';
+    const yes = document.createElement('button');
+    yes.className = 'lib-btn primary';
+    yes.textContent = 'Pull it together';
+    yes.addEventListener('click', () => acceptDossierOffer(o.id));
+    const no = document.createElement('button');
+    no.className = 'lib-btn';
+    no.textContent = 'Not interested';
+    no.title = 'Chervil won’t offer this subject again';
+    no.addEventListener('click', () => dismissDossierOffer(o.id));
+    row.append(yes, no);
+    card.appendChild(row);
+    els.suggestions.appendChild(card);
+  }
+
   // Your places — one-click tiles above the idea chips (no data-q: they
   // navigate directly instead of going through the composer).
   const p = settings.places || {};
@@ -1982,9 +2074,32 @@ function hideWebviews() {
   for (const wv of webviews.values()) wv.hidden = true;
 }
 
+// The exact srcdoc currently parsed into the page frame, so a tab switch back to
+// an unchanged composed page can skip re-injecting it (see renderPageHtml).
+// Cleared wherever the frame is emptied, so it can never claim a stale document
+// is still live.
+let liveSrcdoc = '';
+
+// Settings is the fourth thing that can occupy the viewport, beside the page
+// frame, the webviews and the welcome overlay. It lives in the main document
+// rather than in #page-frame because that frame is sandboxed without
+// allow-same-origin, and Settings needs `settings`, els.* and IPC directly.
+function renderSettingsView(entry) {
+  hideWebviews();
+  els.frame.hidden = true;
+  els.frame.removeAttribute('srcdoc');
+  liveSrcdoc = '';
+  els.overlay.hidden = true;
+  els.settingsView.hidden = false;
+  refreshSettingsUI();
+  setSettingsTab((entry && entry.settingsGroup) || 'general');
+}
+
 function showOverlay() {
   els.frame.hidden = false;
   els.frame.removeAttribute('srcdoc');
+  liveSrcdoc = '';
+  els.settingsView.hidden = true;
   hideWebviews();
   els.overlay.hidden = false;
   renderSuggestions();
@@ -1994,6 +2109,7 @@ function renderPageHtml(html, scrollY = 0) {
   hideWebviews();
   els.frame.hidden = false;
   els.overlay.hidden = true;
+  els.settingsView.hidden = true;
   // Append the Chervil runtime (link routing + applet bridge), plus an optional
   // scroll restore so the page doesn't jump to the top on each streaming re-render.
   const restore = scrollY > 0
@@ -2018,13 +2134,23 @@ function renderPageHtml(html, scrollY = 0) {
   }
   const shim = pageStorageShim(JSON.stringify(seed).replace(/</g, '\\u003c'));
   const ttsShim = pageTtsShim(frameVoicesJson());
-  els.frame.setAttribute('srcdoc', injectIntoHead(html, shim + ttsShim) + clearance + zoomStyle + CHERVIL_RUNTIME + restore);
+  const doc = injectIntoHead(html, shim + ttsShim) + clearance + zoomStyle + CHERVIL_RUNTIME + restore;
+  // Switching tabs lands here with the same page we already have parsed. Re-setting
+  // srcdoc would re-parse the whole document, re-run its scripts and re-fetch its
+  // images, and drop the user's scroll — so an unchanged page just stays live and
+  // appears instantly. Any real change (new HTML, zoom, restored store) alters
+  // `doc` and falls through to a real render.
+  if (doc === liveSrcdoc && els.frame.hasAttribute('srcdoc')) return;
+  liveSrcdoc = doc;
+  els.frame.setAttribute('srcdoc', doc);
 }
 
 function renderSite(url) {
   els.frame.hidden = true;
   els.frame.removeAttribute('srcdoc');
+  liveSrcdoc = '';
   els.overlay.hidden = true;
+  els.settingsView.hidden = true;
   const tab = activeTab();
   if (!tab) return;
   const wv = ensureWebview(tab);
@@ -2073,6 +2199,14 @@ function renderCurrentPage() {
     renderSite(entry.url);
     setOmnibox(entry.url);
     setBadge('live', 'live site');
+    els.save.disabled = true;
+    setRemixVisible(false);
+  } else if (entry.kind === 'settings') {
+    // Must come before the composed-page branch: that's the catch-all `else`, and
+    // a settings entry has no html to render.
+    renderSettingsView(entry);
+    setOmnibox('Settings');
+    setBadge('', 'settings');
     els.save.disabled = true;
     setRemixVisible(false);
   } else {
@@ -2687,8 +2821,11 @@ function imageEditorHtml(dataUrl, name) {
   </script></body></html>`;
 }
 
-// Open a snip (or any data: image) in its own editor tab.
-function openImageEditor(dataUrl, name) {
+// Open a snip (or any data: image) in its own editor tab. With `instruction`,
+// the edit starts as soon as the editor is live — so "put Robbie the Robot in
+// the picture" with an attached photo runs the edit instead of just landing the
+// user in an editor they'd have to re-type the request into.
+function openImageEditor(dataUrl, name, instruction = '') {
   const tab = newTab(true);
   const entry = {
     kind: 'page',
@@ -2703,8 +2840,20 @@ function openImageEditor(dataUrl, name) {
   pushEntry(tab, entry);
   tab.title = `✏️ ${name}`;
   renderTabs();
+  // Force a real re-parse: renderPageHtml skips identical HTML, and re-editing the
+  // same image with the same instruction would otherwise reuse the live frame and
+  // never fire the load event the instruction below waits for.
+  liveSrcdoc = '';
   renderCurrentPage();
   scheduleSave();
+  // The editor listens for `edit-instruction` on its own window, so the frame must
+  // have parsed before the message lands — hence waiting on load rather than
+  // posting straight after renderCurrentPage.
+  if (instruction) {
+    els.frame.addEventListener('load', () => {
+      if (currentEntry(activeTab()) === entry) forwardEditToImageEditor(instruction);
+    }, { once: true });
+  }
 }
 
 // Re-render a stale editor shell (same trick as maybeRefreshSkillHtml): the tab
@@ -3038,7 +3187,7 @@ let cachedVoices = [];
 function loadVoices() {
   try { cachedVoices = window.speechSynthesis.getVoices() || []; } catch { cachedVoices = []; }
   // Voices often arrive asynchronously — refresh the picker if Settings is open.
-  if (els.voiceSelect && els.settingsModal.classList.contains('open')) populateVoiceSelect();
+  if (els.voiceSelect && settingsOpen()) populateVoiceSelect();
 }
 if (window.speechSynthesis) {
   loadVoices();
@@ -3265,16 +3414,25 @@ function intervalLabel(ms) {
 
 function startScheduler() {
   if (livingTimer) return;
-  if (!living.length && !schedules.length && !watchers.length) return;
+  if (!schedulerHasWork()) return;
   livingTimer = setInterval(schedulerTick, 30000); // check living pages + schedules + watchers every 30s
+}
+
+// Anything for the tick to do? Dossier scanning counts — it's the only consumer
+// with no records of its own, so without this the tick would never start (or would
+// stop itself) while ambient offers are on.
+function schedulerHasWork() {
+  return !!(living.length || schedules.length || watchers.length || dossierOffersEnabled());
 }
 
 // Master 30s tick: drives Living-page refresh, scheduled agents, and page watchers.
 function schedulerTick() {
-  if (!living.length && !schedules.length && !watchers.length) { clearInterval(livingTimer); livingTimer = null; return; }
+  if (!schedulerHasWork()) { clearInterval(livingTimer); livingTimer = null; return; }
   tickLiving();
   tickSchedules();
   tickWatchers();
+  // Rate-limits itself to DOSSIER_SCAN_MS internally; this tick is every 30s.
+  scanForDossierTopics().catch(() => {});
 }
 
 function tickLiving() {
@@ -4056,7 +4214,7 @@ async function lockVault(reason) {
     if (!st || !st.ok || !st.unlocked) return; // already locked / not set up
     await window.chervil.creds.lock();
     updatePwFillButton();
-    if (els.settingsModal && els.settingsModal.classList.contains('open')) { renderCredsPanel(); renderCardsPanel(); }
+    if (settingsOpen()) { renderCredsPanel(); renderCardsPanel(); }
     if (reason === 'idle') toast('Passwords locked (idle).');
   } catch { /* ignore */ }
 }
@@ -6388,6 +6546,41 @@ function isComparisonQuery(text) {
   return !!a && !!b && words(a) <= 6 && words(b) <= 6;
 }
 
+// Politeness/filler that can precede the real verb. Stripped before the tests
+// below so "can you remove the background" reads as the edit it is, rather than
+// as a "can …" question.
+const IMAGE_LEAD_FILLER = /^(?:please\s+|hey\s+sprig[,\s]+|sprig[,\s]+|can\s+you\s+|could\s+you\s+|would\s+you\s+|now\s+|also\s+|just\s+)+/i;
+// Imperative verbs that mean "change this image" when a message leads with them.
+const IMAGE_EDIT_VERB = /^(?:add|put|place|insert|drop|stick|paste|remove|delete|erase|take\s+out|get\s+rid\s+of|replace|swap|change|turn|make|give|dress|move|recolou?r|colou?rize|crop|rotate|flip|mirror|blur|sharpen|brighten|darken|lighten|enhance|upscale|clean\s+up|retouch|fix|repair|restore|extend|expand|resize|edit|photoshop|draw|paint|shade|zoom)\b/i;
+// A message that leads with these is ASKING ABOUT the image, not changing it.
+const IMAGE_ASK_LEAD = /^(?:what|who|whose|where|when|why|how|which|is|are|was|were|do|does|did|can|could|should|tell|describe|explain|identify|summar|list|find|read|analy|compare|research|write)\b/i;
+// "make a timeline from this" wants a page, not a new picture. Anchored on a
+// composing verb reaching one of these objects, so it catches "make me a page
+// from this photo" without also catching "remove the table from the picture" —
+// where the same noun is the thing being edited out.
+const COMPOSE_OBJECT = /\b(?:make|create|build|compose|generate|write|produce|give\s+me|show\s+me|put\s+together|draw\s+up|turn\s+(?:this|it)\s+into)\b[^.?!]{0,60}\b(?:page|site|website|report|article|timeline|chart|graph|table|list|summary|lesson|quiz|deck|slides?|plan|guide|dashboard|comparison|document|doc|essay|post|blog|recipe|infographic)\b/i;
+
+// Does this message, sent with an image attached, mean "edit the image"?
+// A leading edit verb IS the signal: with a picture attached, "replace the book
+// with a calculator" can only mean the picture. Everything that reads as a
+// question about the image, or as a request for a page built from it, is excluded
+// first — so this diverts only turns Chervil can genuinely fulfil.
+//
+// Note there is deliberately no "does it name the picture?" test. An earlier cut
+// required the message to say "photo"/"picture" or be very short, and it missed
+// real requests that name only the things being changed ("Replace the book in the
+// robot's hand with a calculator") — which then fell through to compose, the exact
+// failure this routing exists to prevent.
+function isImageEditIntent(text) {
+  const raw = String(text || '').trim();
+  if (!raw || raw.length > 200) return false;
+  const q = raw.replace(IMAGE_LEAD_FILLER, '').trim();
+  if (!q) return false;
+  if (IMAGE_ASK_LEAD.test(q) || COMPOSE_OBJECT.test(q)) return false;
+  if (/\bphotoshop\b|\bedit\s+(?:this|the|my)\b/i.test(q)) return true;
+  return IMAGE_EDIT_VERB.test(q);
+}
+
 function handleComposerSubmit(text, opts = {}) {
   const tab = activeTab();
   if (!tab || isTabBusy(tab.id) || agentRunning) return;
@@ -6420,6 +6613,21 @@ function handleComposerSubmit(text, opts = {}) {
       els.prompt.value = '';
       resetPromptHeight();
       forwardEditToImageEditor(query);
+      return;
+    }
+  }
+
+  // Attaching an image and asking to CHANGE it ("put Robbie the Robot in the
+  // picture") means edit the image — open it in the editor, which owns the real
+  // edit_image path. Without this the turn falls through to compose, and the
+  // composer answers a request it cannot fulfil by writing <img> tags for
+  // pictures that were never generated. Asking ABOUT an image still composes.
+  {
+    const img = attachments.length === 1 && attachments[0].kind === 'image' ? attachments[0] : null;
+    if (img && isImageEditIntent(query)) {
+      els.prompt.value = '';
+      resetPromptHeight();
+      openImageEditor(`data:${img.mediaType || 'image/png'};base64,${img.data}`, img.name || 'image.png', query);
       return;
     }
   }
@@ -6508,8 +6716,30 @@ function handleComposerSubmit(text, opts = {}) {
     return;
   }
 
+  // Questions about the user's own reading (RFC 0013). Both are checked before the
+  // answer cache: they ask ABOUT the user's history rather than repeating an
+  // earlier question, so a cached page would answer something else entirely.
+  //
+  // Dossier first — "summarize what I've read about X" satisfies the recall test
+  // too, and synthesizing everything is the stronger reading of it than re-finding
+  // one page.
+  if (!attachments.length && isDossierQuery(query)) {
+    buildDossier(tab, query);
+    return;
+  }
+  // "What was that laptop review I read last month?" — re-find it in their reading.
+  if (!attachments.length && isRecallQuery(query)) {
+    askFromYourWeb(tab, query);
+    return;
+  }
+
   if (settings.followupMode === 'ask' && cur && cur.kind === 'page') {
     promptRefineChoice(query, attachments);
+  } else if (!attachments.length && !(cur && cur.kind === 'page')) {
+    // A fresh ask can be answered instantly from a page you already have
+    // (RFC 0013, phase 2a). Deliberately NOT when a composed page is on screen:
+    // there the query may mean "refine this", and the cache must not hijack it.
+    askWithCache(tab, query);
   } else {
     submitQuery(query, { attachments });
   }
@@ -6596,6 +6826,344 @@ async function buildAndRenderSkill(tab, skillId, input, label) {
 }
 
 // Inline "Refine this page / New page" choice for the 'ask' follow-up mode.
+// ---- Answering from your own reading (RFC 0013, phase 1d) ----
+//
+// The thing a search engine structurally cannot do: "what was that laptop review I
+// read last month?" Google never saw the page you read, and Chrome has your
+// history but no way to read it. Chervil has both halves, locally.
+
+// Phrases that mean "I'm looking for something I already saw". Deliberately
+// requires an explicit first-person memory cue — "the article about X" alone is
+// ambiguous, but "the article I read about X" is not.
+//
+// The modal guard is load-bearing: "what should I read next" is a request for a
+// recommendation, and "I read" alone can't tell it from "what I read last week".
+// A preceding modal makes it hypothetical or future — never a memory.
+const NOT_PAST = '(?<!\\b(?:should|shall|could|would|can|will|might|must|may|wanna|gonna)\\s)';
+// "I've read" is at least as common as "I read", and the contraction has to be
+// spelled out — \bi\s+ won't match it, since what follows the "i" is an apostrophe.
+const I_PAST = "(?:i|we)(?:'ve|'d|\\s+have|\\s+had)?";
+const RECALL_RE = new RegExp([
+  NOT_PAST + '\\b' + I_PAST + '\\s+(?:already\\s+|previously\\s+|recently\\s+|just\\s+)?(?:read|saw|seen|found|looked at|visited|browsed|opened|was reading|were reading|had open)\\b',
+  '\\bthat\\s+(?:article|page|post|site|thing|review|piece|story|link|blog|paper|guide|recipe|video)\\b.{0,40}\\b(?:i|we)\\b',
+  '\\b(?:remind me|what was)\\b.{0,30}\\b' + I_PAST + '\\s+(?:read|saw|seen|looked)',
+  '\\bfrom\\s+my\\s+(?:reading|history|pages|browsing)\\b',
+  '\\bin\\s+(?:my|the)\\s+(?:pages|reading|history|library)\\b',
+  '\\bdid\\s+i\\s+(?:read|see|visit|open)\\b',
+  '\\bwhere\\s+did\\s+i\\s+(?:read|see|find)\\b',
+].join('|'), 'i');
+
+function isRecallQuery(text) {
+  const q = String(text || '').trim();
+  if (!q || q.length > 300) return false;
+  return RECALL_RE.test(q);
+}
+
+// "Pull together what I've read about X" — the manual half of the dossier (Bet 3).
+// Same corpus as recall, different job: synthesize across everything rather than
+// re-find one page. Requires BOTH a gathering verb and a possessive reference to
+// the user's own reading, so it can't swallow an ordinary "summarize tariffs".
+const DOSSIER_VERB = /\b(?:synthesi[sz]e|pull\s+together|round\s+up|bring\s+together|tie\s+together|make\s+sense\s+of|brief\s+me\s+on|dossier|write\s+up|sum\s+up|summari[sz]e|recap|what\s+do\s+i\s+know|what\s+have\s+i\s+learned)\b/i;
+const DOSSIER_MINE = /\b(?:my|i've|i\s+have|i)\s*(?:been\s+)?(?:reading|read|research|researched|browsing|browsed|found|collected|gathered|looked\s+at|seen)\b|\bmy\s+(?:reading|research|pages|history|notes)\b|\bfrom\s+(?:my|everything\s+i)\b/i;
+
+function isDossierQuery(text) {
+  const q = String(text || '').trim();
+  if (!q || q.length > 300) return false;
+  return DOSSIER_VERB.test(q) && DOSSIER_MINE.test(q);
+}
+
+// The topic being asked about, with the framing words stripped — "pull together
+// what I've read about mirrorless cameras" → "mirrorless cameras". Retrieval works
+// far better on the subject than on the whole sentence.
+function dossierTopic(text) {
+  // The leading .* is greedy on purpose: it forces the LAST preposition to win.
+  // "brief me ON everything I've read ABOUT tariffs" must yield "tariffs", and a
+  // lazy/leftmost match would hand back "everything I've read about tariffs".
+  const m = String(text || '').match(/^.*\b(?:about|on|regarding|concerning|around)\s+(.{2,120})$/i);
+  const topic = (m ? m[1] : String(text || '')).replace(/[?.!]+$/, '').trim();
+  return topic || String(text || '').trim();
+}
+
+// Format retrieved pages for the model. Excerpts, not whole pages: five 1,200-char
+// windows is plenty to recognise the right page and answer from it, and keeps the
+// turn cheap — the point is re-finding, not re-reading.
+function buildRecallContext(hits, { limit = 5 } = {}) {
+  return hits.slice(0, limit).map((h, i) => {
+    const where = h.kind === 'visited' ? (hostOf(h.url) || h.url) : 'a page Sprig composed for me';
+    const when = relTime(h.createdAt);
+    const body = String(h.body || '').slice(0, 1200);
+    return [
+      `[${i + 1}] "${h.title || h.query || 'Untitled'}"`,
+      `  Where: ${where}${h.url ? ` (${h.url})` : ''}`,
+      `  When: ${when}${h.kind === 'visited' && h.visits > 1 ? ` · read ${h.visits} times` : ''}`,
+      `  Excerpt: ${body}`,
+    ].join('\n');
+  }).join('\n\n').slice(0, 24000);
+}
+
+// ---- Ambient dossier offers (Bet 3, the automatic half) ----
+//
+// Chervil notices you've been reading around a subject and OFFERS to pull it
+// together. It never composes on its own. That's the same call as wakeConfirm: an
+// ambient trigger with a guessed threshold will fire wrong sometimes, so a wrong
+// fire costs one dismissible card — not tokens spent behind your back, and not a
+// surprise page about something you didn't care about.
+//
+// Detection itself is free and local (term clustering in SQLite — see
+// pageIndex.topics), so having this on costs nothing until you accept an offer.
+
+const DOSSIER_SCAN_MS = 20 * 60 * 1000;  // how often to look; reading habits don't change by the minute
+let lastDossierScan = 0;
+
+function dossierOffersEnabled() {
+  return !!(settings.dossierOffers && settings.indexSites && libraryFromIndex && window.chervil.index);
+}
+
+async function scanForDossierTopics({ force = false } = {}) {
+  if (!dossierOffersEnabled()) return;
+  if (!force && Date.now() - lastDossierScan < DOSSIER_SCAN_MS) return;
+  lastDossierScan = Date.now();
+  const minPages = Math.max(3, Number(settings.dossierMinPages) || 5);
+  let topics = [];
+  try {
+    const res = await window.chervil.index.topics({
+      sinceMs: Date.now() - 14 * 24 * 60 * 60 * 1000,
+      minPages,
+      minHosts: 2,   // reading one site a lot is a habit, not a subject
+      limit: 4,
+    });
+    if (res && res.ok) topics = res.topics || [];
+  } catch { return; }
+
+  let added = false;
+  for (const t of topics) {
+    if (dossierOffers.some((o) => o.term === t.term)) continue;      // already offered
+    if (dossierDismissed.some((d) => d.term === t.term)) continue;   // they said no — that's final
+    dossierOffers.push({
+      id: uid(), term: t.term, related: t.related || [],
+      pageCount: t.pageCount, hostCount: t.hostCount, at: Date.now(),
+    });
+    added = true;
+  }
+  if (dossierOffers.length > 3) dossierOffers = dossierOffers.slice(-3); // never a wall of cards
+  if (added) { scheduleSave(); if (!els.overlay.hidden) renderSuggestions(); }
+}
+
+function acceptDossierOffer(id) {
+  const o = dossierOffers.find((x) => x.id === id);
+  if (!o) return;
+  dossierOffers = dossierOffers.filter((x) => x.id !== id);
+  scheduleSave();
+  const tab = activeTab() || newTab(true);
+  const topic = [o.term, ...(o.related || []).slice(0, 1)].join(' ');
+  buildDossier(tab, `Pull together what I've read about ${topic}.`, topic);
+}
+
+function dismissDossierOffer(id) {
+  const o = dossierOffers.find((x) => x.id === id);
+  if (!o) return;
+  dossierOffers = dossierOffers.filter((x) => x.id !== id);
+  // Remember the no. Re-offering a dismissed subject is exactly how an ambient
+  // feature earns its way into being switched off for good.
+  dossierDismissed.push({ term: o.term, at: Date.now() });
+  if (dossierDismissed.length > 200) dossierDismissed = dossierDismissed.slice(-200);
+  scheduleSave();
+  renderSuggestions();
+}
+
+// Pull together everything the user has read on a topic (Bet 3, manual half).
+// Retrieves wider than recall — synthesis needs breadth, where re-finding needs
+// precision — and asks the model to synthesize rather than locate.
+async function buildDossier(tab, query, topicText) {
+  const topic = topicText || dossierTopic(query);
+  if (!libraryFromIndex || !window.chervil.index) { submitQuery(query, { tab }); return; }
+  let hits = [];
+  try {
+    const words = contentWords(topic);   // unstemmed — the index stores real words
+    const res = await window.chervil.index.search({
+      query: words.length ? words.join(' ') : topic, limit: 10, includeBody: true, any: true,
+    });
+    if (res && res.ok) hits = res.items || [];
+  } catch { /* fall through */ }
+  // Two pages isn't a dossier. Say so rather than dressing up a thin pile as a
+  // synthesis — the whole value here is breadth the user couldn't see themselves.
+  if (hits.length < 2) {
+    addMessage(tab, 'bot', hits.length
+      ? `I've only got one page on “${topic}” in your reading — not enough to pull together. Composing a fresh page instead.`
+      : `I couldn’t find anything about “${topic}” in your pages or the sites you’ve read. Composing a fresh page instead.`, 'note');
+    submitQuery(query, { tab });
+    return;
+  }
+  submitQuery(`Pull together everything I've read about ${topic}.`, {
+    tab,
+    displayText: query,
+    recallContext: buildRecallContext(hits, { limit: 10 }),
+    recallMode: 'synthesize',
+    skipFollowup: true,
+  });
+}
+
+// Retrieve from the index and compose an answer grounded in it. On a miss we still
+// compose, but WITHOUT recall context — better a normal web answer than one that
+// pretends to be from the user's history.
+async function askFromYourWeb(tab, query) {
+  if (!libraryFromIndex || !window.chervil.index) { submitQuery(query, { tab }); return; }
+  const words = contentWords(query);   // unstemmed — the index stores real words
+  if (!words.length) { submitQuery(query, { tab }); return; }
+  let hits = [];
+  try {
+    const res = await window.chervil.index.search({ query: words.join(' '), limit: 5, includeBody: true, any: true });
+    if (res && res.ok) hits = res.items || [];
+  } catch { /* fall through to a plain compose */ }
+  if (!hits.length) {
+    addMessage(tab, 'bot', 'I couldn’t find that in your pages or the sites you’ve read. Answering from the web instead.', 'note');
+    submitQuery(query, { tab });
+    return;
+  }
+  submitQuery(query, { tab, recallContext: buildRecallContext(hits), skipFollowup: true, allowNavigate: false });
+}
+
+// ---- Instant answers from your own pages (RFC 0013, phase 2a) ----
+//
+// Composing takes ~20 seconds and costs tokens. Asking something you've already
+// asked shouldn't. When a question is a near-duplicate of one you've asked before,
+// show the page you already have — visibly labelled, one click from a fresh one.
+// Never silently: a cached answer the user can't identify as cached is a lie.
+
+// A cached page can never stand in for a question whose answer moves. This is
+// deliberately about the QUESTION, not the page's age — "today's news" is stale
+// the moment it's composed, and no TTL makes it safe to reuse.
+const LIVE_QUERY_RE = /\b(latest|today|todays|tonight|yesterday|now|current|currently|this (?:week|month|year|morning|evening)|so far|recent|recently|news|headlines|score|scores|price|prices|cost|stock|shares|weather|forecast|temperature|open now|hours|schedule|fixtures|standings|live|update|updates|released?|launch(?:ed|ing)?|upcoming|deadline|status|who is|whos the|remaining|left)\b/i;
+
+// Beyond this, even an evergreen page has usually drifted enough that silently
+// reusing it is the wrong default. Refresh stays one click away either way.
+const MAX_CACHE_AGE_MS = 90 * 24 * 60 * 60 * 1000;
+const CACHE_SIMILARITY = 0.7;
+
+const CACHE_STOP = new Set(['a', 'an', 'the', 'of', 'for', 'to', 'in', 'on', 'at', 'is', 'are', 'was',
+  'what', 'whats', 'how', 'why', 'when', 'which', 'who', 'do', 'does', 'did', 'me', 'my', 'i', 'please',
+  'tell', 'give', 'show', 'explain', 'about', 'and', 'or', 'with', 'can', 'you', 'sprig', 'hey', 'a', 'some']);
+
+// The content words of a question, deduped and order-independent — so "sourdough
+// starter guide" and "guide to sourdough starters" land on the same key.
+//
+// Every non-stopword token counts, including one-character ones. Dropping short
+// tokens looks harmless and isn't: it's often the ONLY thing distinguishing two
+// questions ("widget 1" vs "widget 2", "learn C" vs "learn R"), which would score
+// as identical and serve the wrong cached answer.
+function queryKey(q) {
+  return [...new Set(contentWords(q).map((w) => w.replace(/(?:ies|es|s)$/, '')))].sort(); // crude stem: starters/starter
+}
+
+// The same content words WITHOUT stemming — for retrieval.
+//
+// queryKey's stemming is right for comparing two questions (both sides are stemmed
+// the same way) and WRONG for querying the index, which stores real words and whose
+// tokenizer doesn't stem: "mirrorless" would go in as "mirrorles" and match
+// nothing, and so would "monads", "tariffs" — anything ending in s. Retrieval must
+// ask for the words as they were actually written.
+// (A future option is FTS5's `porter` tokenizer, which would stem index and query
+// alike — but that means rebuilding the FTS table, so it's a migration, not a fix.)
+function contentWords(q) {
+  return [...new Set(
+    String(q || '').toLowerCase().replace(/[^a-z0-9\s]/g, ' ').split(/\s+/)
+      .filter((w) => w && !CACHE_STOP.has(w))
+  )];
+}
+
+function jaccard(a, b) {
+  const A = new Set(a), B = new Set(b);
+  if (!A.size || !B.size) return 0;
+  let inter = 0;
+  for (const x of A) if (B.has(x)) inter++;
+  return inter / (A.size + B.size - inter);
+}
+
+// The best near-duplicate of `query` among pages you've already composed, or null.
+async function findCachedAnswer(query) {
+  if (!libraryFromIndex || !window.chervil.index) return null;
+  if (LIVE_QUERY_RE.test(query)) return null;
+  const key = queryKey(query);
+  if (key.length < 2) return null;   // one content word is too thin to match on
+  try {
+    // Retrieve on the CONTENT words with OR: the whole point is that the wording
+    // differs, so an all-terms match over the raw question finds nothing. This is
+    // a wide net on purpose — the similarity gate below is what actually decides.
+    // Unstemmed (see contentWords): `key` is for comparing, not for querying.
+    const res = await window.chervil.index.search({ query: contentWords(query).join(' '), kind: 'composed', limit: 8, any: true });
+    if (!res || !res.ok || !res.items || !res.items.length) return null;
+    let best = null;
+    for (const it of res.items) {
+      if (!it.query) continue;
+      if (Date.now() - (it.createdAt || 0) > MAX_CACHE_AGE_MS) continue;
+      if (LIVE_QUERY_RE.test(it.query)) continue;  // it was a live ask when made
+      const score = jaccard(key, queryKey(it.query));
+      if (score >= CACHE_SIMILARITY && (!best || score > best.score)) best = { item: it, score };
+    }
+    return best ? best.item : null;
+  } catch {
+    return null;
+  }
+}
+
+// Serve a cached page into `tab`, with an unmissable note saying where it came
+// from and a Refresh that composes it again for real.
+async function serveCachedAnswer(tab, query, hit) {
+  let full = hit;
+  if (!full.html) {
+    try {
+      const res = await window.chervil.index.get(hit.id);
+      if (res && res.ok && res.item) full = res.item;
+    } catch { /* fall through */ }
+  }
+  if (!full.html) { submitQuery(query, { tab }); return; }  // couldn't load it — just compose
+
+  els.prompt.value = '';
+  resetPromptHeight();
+  addMessage(tab, 'user', query);
+
+  pushEntry(tab, {
+    kind: 'page',
+    title: full.title || query,
+    query: full.query || query,
+    html: full.html,
+    sources: full.sources || [],
+    storeKey: full.storeKey,
+  });
+  if (!tab.title || tab.title === 'New Tab') tab.title = full.title || query;
+  renderTabs();
+  renderCurrentPage();
+  scheduleSave();
+
+  const wrap = document.createElement('div');
+  wrap.className = 'msg bot refine-choice';
+  const p = document.createElement('div');
+  p.textContent = `From your pages — you asked this ${relTime(full.createdAt)}. Nothing was searched or composed.`;
+  wrap.appendChild(p);
+  const row = document.createElement('div');
+  row.className = 'choice-row';
+  const refresh = document.createElement('button');
+  refresh.textContent = '↻ Answer it fresh';
+  row.appendChild(refresh);
+  wrap.appendChild(row);
+  els.conversation.appendChild(wrap);
+  els.conversation.scrollTop = els.conversation.scrollHeight;
+  refresh.addEventListener('click', () => {
+    wrap.remove();
+    // skipFollowup so the cached page now on screen isn't treated as context to
+    // refine; skipUserMessage because the question is already in the transcript.
+    submitQuery(query, { tab, skipFollowup: true, skipUserMessage: true });
+  });
+}
+
+// Try the cache, else compose. Callers use this instead of submitQuery for a
+// fresh ask; every other path (refine, remix, skills, deep) bypasses it.
+async function askWithCache(tab, query) {
+  const hit = await findCachedAnswer(query);
+  if (hit) { serveCachedAnswer(tab, query, hit); return; }
+  submitQuery(query, { tab });
+}
+
 function promptRefineChoice(query, attachments = []) {
   const tab = activeTab();
   els.prompt.value = '';
@@ -6974,6 +7542,8 @@ async function submitQuery(text, opts = {}) {
       allowNavigate,
       refineMode,
       spaceContext: opts.spaceContext || null,
+      recallContext: opts.recallContext || null,
+      recallMode: opts.recallMode || 'find',
       deep,
       verify,
       profile: settings.profile || null,
@@ -7291,6 +7861,16 @@ async function showQrModal(title, text, caption) {
 }
 
 // ---- Library (auto-collected History + Trash) ----
+// The page itself lives in the index (RFC 0013), NOT in the session state file —
+// `library` holds only light rows (no html/conversation/history) so the drawer can
+// render without hauling megabytes around, and openLibraryItem fetches the payload
+// for the one page being opened. `MAX_LIBRARY` still bounds what's in memory; the
+// index keeps its own, larger history.
+function libraryRow(item) {
+  const { html, conversation, history, body, ...light } = item;
+  return light;
+}
+
 function addToLibrary(tab, result, query) {
   if (tab && tab.private) return; // private tabs aren't collected into the Library
   const item = {
@@ -7304,7 +7884,10 @@ function addToLibrary(tab, result, query) {
     history: tab.history.map((h) => ({ ...h })),
     spaceId: activeSpaceId,
   };
-  library.history.unshift(item);
+  // Fire-and-forget: a failed index write must never block or break composing —
+  // the page is already on screen and lives in the tab regardless.
+  if (window.chervil.index) window.chervil.index.put(item).catch(() => {});
+  library.history.unshift(libraryRow(item));
   if (library.history.length > MAX_LIBRARY) library.history.length = MAX_LIBRARY;
 }
 
@@ -7521,7 +8104,19 @@ footer{margin-top:32px;color:#8aa093;font-size:13px;text-align:center}
 </body></html>`;
 }
 
-function openLibraryItem(item) {
+// Library rows are light (no html), so the page body is fetched from the index for
+// the one item actually being opened. `item` may already be a full record (the
+// index-unavailable fallback), in which case the fetch is skipped.
+async function openLibraryItem(item) {
+  let full = item;
+  if (!item.html && window.chervil.index) {
+    try {
+      const res = await window.chervil.index.get(item.id);
+      if (res && res.ok && res.item) full = res.item;
+    } catch { /* fall through with the light row */ }
+  }
+  if (!full.html) { toast('Couldn’t load that page.'); return; }
+  item = full;
   const rootId = uid();
   const tab = {
     id: uid(),
@@ -7559,6 +8154,7 @@ function deleteLibraryItem(id) {
   it.updatedAt = Date.now();          // fresh recency so the move wins over sync
   library.trash.unshift(it);
   if (library.trash.length > MAX_LIBRARY) library.trash.length = MAX_LIBRARY;
+  if (window.chervil.index) window.chervil.index.trash(id).catch(() => {});
   addTombstone('pages', id);          // don't let another machine resurrect it into history
   renderDrawer();
   scheduleSave();
@@ -7577,6 +8173,7 @@ function deleteLibraryItems(ids) {
   for (let i = moved.length - 1; i >= 0; i--) {
     moved[i].updatedAt = Date.now();
     library.trash.unshift(moved[i]);
+    if (window.chervil.index) window.chervil.index.trash(moved[i].id).catch(() => {});
     addTombstone('pages', moved[i].id);
   }
   if (library.trash.length > MAX_LIBRARY) library.trash.length = MAX_LIBRARY;
@@ -7620,6 +8217,7 @@ function restoreLibraryItem(id) {
   const [it] = library.trash.splice(idx, 1);
   it.updatedAt = Date.now();          // fresh recency so the restore wins over sync
   library.history.unshift(it);
+  if (window.chervil.index) window.chervil.index.restore(id).catch(() => {});
   clearTombstone('pages', id);        // it's allowed back in history now…
   addTombstone('trash', id);          // …and gone from trash on every machine
   renderDrawer();
@@ -7629,8 +8227,55 @@ function restoreLibraryItem(id) {
 function emptyTrash() {
   for (const it of library.trash) addTombstone('trash', it && it.id);
   library.trash = [];
+  // A real DELETE in the index, not a tombstone — emptying the trash has to
+  // actually remove the page text, or "delete" is a lie (RFC 0013, privacy).
+  if (window.chervil.index) window.chervil.index.emptyTrash().catch(() => {});
   renderDrawer();
   scheduleSave();
+}
+
+// Search your own pages by content (RFC 0013, phase 1b). Debounced so typing
+// doesn't fire an IPC round-trip per keystroke; a stale response is dropped rather
+// than allowed to overwrite the results for what you're now typing.
+function scheduleLibraryFts() {
+  if (libraryFtsTimer) clearTimeout(libraryFtsTimer);
+  const q = librarySearch.trim();
+  if (!q || !libraryFromIndex || !window.chervil.index) { libraryFts = { q: '', items: null }; return; }
+  libraryFtsTimer = setTimeout(async () => {
+    libraryFtsTimer = null;
+    try {
+      const res = await window.chervil.index.search({ query: q, kind: 'composed', limit: 60 });
+      if (!res || !res.ok || librarySearch.trim() !== q) return; // superseded by newer typing
+      libraryFts = { q, items: res.items || [] };
+      renderDrawer();
+    } catch { /* keep the title filter */ }
+  }, 180);
+}
+
+// Match markers the index wraps hits in (see pageIndex.search). Control
+// characters, chosen so a page's own punctuation can never be mistaken for a
+// marker — and built with fromCharCode so no invisible literal ends up in source.
+const MARK_START = String.fromCharCode(0x01);
+const MARK_END = String.fromCharCode(0x02);
+
+// Render a search snippet with its matches highlighted. Builds real nodes rather
+// than innerHTML: this is page text from the open web and is never trusted.
+function snippetNode(text) {
+  const el = document.createElement('div');
+  el.className = 'lib-snippet';
+  let rest = String(text || '');
+  while (rest) {
+    const i = rest.indexOf(MARK_START);
+    if (i < 0) { el.appendChild(document.createTextNode(rest)); break; }
+    if (i > 0) el.appendChild(document.createTextNode(rest.slice(0, i)));
+    const j = rest.indexOf(MARK_END, i + 1);
+    if (j < 0) { el.appendChild(document.createTextNode(rest.slice(i + 1))); break; }
+    const m = document.createElement('mark');
+    m.textContent = rest.slice(i + 1, j);
+    el.appendChild(m);
+    rest = rest.slice(j + 1);
+  }
+  return el;
 }
 
 function relTime(ts) {
@@ -8652,7 +9297,16 @@ function renderDrawer() {
 
   // Free-text filter across the visible list (title/url/query/filename).
   const q = librarySearch.trim().toLowerCase();
-  if (q) items = items.filter((it) => libItemText(it).includes(q));
+  // Activity searches page CONTENT via the index (RFC 0013, phase 1b) — the other
+  // tabs stay a title/url filter, since sites/downloads have no indexed body. The
+  // index round-trip is async while this render is sync, so hits arrive via
+  // `libraryFts` and re-render; until then (and whenever the index is
+  // unavailable) the title filter below is what shows.
+  const ftsHits = (q && drawerTab === 'history' && libraryFts.items && libraryFts.q.toLowerCase() === q)
+    ? libraryFts.items
+    : null;
+  if (ftsHits) items = ftsHits;                 // BM25 order, not newest-first — that's the point
+  else if (q) items = items.filter((it) => libItemText(it).includes(q));
 
   // Bookmarks (unsearched): group by folder — sort so folder headers can be
   // inserted between groups, with Unfiled last.
@@ -8762,6 +9416,9 @@ function renderDrawer() {
             ? (item.ok ? `${item.path} · ${relTime(item.at)}` : `${item.state || 'failed'} · ${relTime(item.at)}`)
             : relTime(item.createdAt);
     main.appendChild(title);
+    // A content search shows the matching passage, so you can tell WHY a page came
+    // back rather than guessing from its title (RFC 0013, phase 1b).
+    if (item.snippet) main.appendChild(snippetNode(item.snippet));
     main.appendChild(meta);
     if (isSiteRow) { const fav = faviconImg(item.url, 'lib-favicon'); if (fav) row.appendChild(fav); }
     row.appendChild(main);
@@ -8969,13 +9626,13 @@ function applySettingsToUI() {
     const el = document.getElementById('af-' + k);
     if (el) el.value = (settings.autofill && settings.autofill[k]) || '';
   }
-  for (const r of els.settingsModal.querySelectorAll('input[name="linkBehavior"]')) {
+  for (const r of els.settingsView.querySelectorAll('input[name="linkBehavior"]')) {
     r.checked = r.value === settings.linkBehavior;
   }
-  for (const r of els.settingsModal.querySelectorAll('input[name="followupMode"]')) {
+  for (const r of els.settingsView.querySelectorAll('input[name="followupMode"]')) {
     r.checked = r.value === settings.followupMode;
   }
-  for (const r of els.settingsModal.querySelectorAll('input[name="provider"]')) {
+  for (const r of els.settingsView.querySelectorAll('input[name="provider"]')) {
     r.checked = r.value === settings.provider;
   }
   applyProviderUI();
@@ -9526,7 +10183,7 @@ function fetchModelsFor(p) {
   window.chervil.listModels(providerConfig()).then((res) => {
     if (res && res.ok && Array.isArray(res.models) && res.models.length) {
       liveModels[p] = res.models;
-      if (settings.provider === p && els.settingsModal.classList.contains('open')) {
+      if (settings.provider === p && settingsOpen()) {
         populateModelSelect();
       }
     }
@@ -9560,9 +10217,9 @@ function refreshKeyStatus() {
 
 // Settings topic tabs: show only the sections for the active group.
 function setSettingsTab(group) {
-  const modal = els.settingsModal;
-  modal.querySelectorAll('.settings-tab').forEach((b) => b.classList.toggle('active', b.dataset.sgroup === group));
-  modal.querySelectorAll('[data-sgroup]').forEach((el) => {
+  const view = els.settingsView;
+  view.querySelectorAll('.settings-tab').forEach((b) => b.classList.toggle('active', b.dataset.sgroup === group));
+  view.querySelectorAll('[data-sgroup]').forEach((el) => {
     if (el.classList.contains('settings-tab')) return; // the tab buttons themselves
     el.style.display = el.dataset.sgroup === group ? '' : 'none';
   });
@@ -9570,8 +10227,8 @@ function setSettingsTab(group) {
 
 // ---- Customizable top-bar buttons ----
 // The optional omnibar action buttons. Settings (⚙) and core nav (sidebar, back,
-// forward, omnibox) are always shown. A button is hidden when settings.toolbar[key]
-// === false (missing = shown).
+// forward, omnibox) are always shown. settings.toolbar[key] === false moves a
+// button into the ⋯ menu; missing = the default below.
 const TOOLBAR_BUTTONS = [
   { key: 'map', id: 'map-btn', label: 'Map' },
   { key: 'history', id: 'history-btn', label: 'Library' },
@@ -9595,13 +10252,29 @@ const TOOLBAR_BUTTONS = [
   { key: 'print', id: 'print-btn', label: 'Print' },
 ];
 
-function toolbarVisible(key) { return !settings.toolbar || settings.toolbar[key] !== false; }
+// Which of them earn a permanent seat in the bar.
+//
+// Chrome shows four icons and a menu. Chervil defined twenty and showed all of
+// them, and no amount of styling makes a twenty-icon bar read as a browser — it
+// was the single biggest reason Chervil didn't look like one. So the bar keeps the
+// handful you reach for on most pages, and everything else lives in the ⋯ menu.
+//
+// "Not in the bar" means IN THE MENU — never gone. These are the features Chrome
+// doesn't have and the reason to switch to Chervil; burying them beyond reach
+// would trade the product for the paint. 🔑/💳 stay on because they're already
+// context-gated (hidden until a page actually has a saved login/card to fill).
+const TOOLBAR_BAR_DEFAULT = new Set(['history', 'bookmark', 'favorite', 'askPage', 'snip', 'pwFill', 'cardFill']);
+
+// Does this button sit in the bar itself? An explicit choice always wins; absent
+// one, the Chrome-like default above decides.
+function toolbarVisible(key) {
+  const t = settings.toolbar || {};
+  return typeof t[key] === 'boolean' ? t[key] : TOOLBAR_BAR_DEFAULT.has(key);
+}
 
 function applyToolbar() {
-  for (const b of TOOLBAR_BUTTONS) {
-    const el = document.getElementById(b.id);
-    if (el) el.classList.toggle('btn-off', !toolbarVisible(b.key));
-  }
+  // Placement is reflowOmnibar's job now — a button that isn't in the bar is moved
+  // into the ⋯ menu rather than hidden, so nothing becomes unreachable.
   // The 🔑/💳 fill buttons are also context-sensitive (only on live sites with
   // saved creds), so re-evaluate them and keep the Security-tab checkboxes — a
   // second entry point to the same toggle — in sync with the toolbar options.
@@ -9732,16 +10405,31 @@ function reflowOmnibar() {
   for (const node of omniOriginalOrder) actions.appendChild(node);
   more.hidden = true;
 
-  // 2. If it all fits now, we're done.
+  // 2. Anything without a seat in the bar goes to the ⋯ menu — whatever the
+  //    window width. This is what keeps the bar short at ANY size (the old code
+  //    only trayed under width pressure, so on a wide screen all twenty showed).
+  //    Contextual buttons that are currently `hidden` (🔑/💳 with nothing to fill)
+  //    stay hidden rather than becoming menu clutter.
+  let trayed = 0;
+  for (const b of TOOLBAR_BUTTONS) {
+    if (toolbarVisible(b.key)) continue;
+    const el = document.getElementById(b.id);
+    if (!el || el.hidden) continue;
+    tray.appendChild(el);
+    trayed++;
+  }
+  if (trayed) more.hidden = false;
+
+  // 3. If what's left fits, we're done.
   const fits = () => bar.scrollWidth <= bar.clientWidth + 1;
   if (fits()) return;
 
-  // 3. Move buttons into the tray, lowest-priority first, until it fits.
+  // 4. Still too wide — push bar buttons into the tray too, lowest-priority first.
   more.hidden = false;
   for (const id of OMNI_OVERFLOW_ORDER) {
     if (fits()) break;
     const el = document.getElementById(id);
-    if (!el || el.offsetWidth === 0) continue; // skip hidden / user-disabled buttons
+    if (!el || el.offsetWidth === 0) continue; // skip hidden ones
     tray.appendChild(el);
   }
 }
@@ -9782,14 +10470,37 @@ function onOmniTrayOutside(e) {
 }
 function onOmniTrayEsc(e) { if (e.key === 'Escape') closeOmniTray(); }
 
-function openSettings() {
+// Is the Settings page what's on screen?
+function settingsOpen() { return !!(els.settingsView && !els.settingsView.hidden); }
+
+// Pull every panel's live state into the page. Called whenever Settings is shown —
+// including on a tab switch back to it, so a session that changed elsewhere can't
+// leave stale values on screen.
+function refreshSettingsUI() {
   applySettingsToUI();
   renderToolbarPrefs();
   renderSyncFolder();
   renderAccountBox();
   refreshPrivacyUI();
-  setSettingsTab('general');
-  els.settingsModal.classList.add('open');
+  renderIndexSettings();   // Your Web: reflect the toggle/excludes + live counts
+}
+
+// Settings opens in a TAB, the way a browser does it — so it has a title, sits in
+// back/forward, and can be left open in the background. Reuses an existing
+// Settings tab rather than piling up duplicates (Chrome does the same).
+function openSettings(group = 'general') {
+  const existing = tabs.find((t) => { const e = currentEntry(t); return e && e.kind === 'settings'; });
+  if (existing) {
+    switchTab(existing.id);
+    setSettingsTab(group);
+    return;
+  }
+  const tab = newTab(true);
+  pushEntry(tab, { kind: 'settings', title: 'Settings', settingsGroup: group });
+  tab.title = 'Settings';
+  renderTabs();
+  renderCurrentPage();
+  scheduleSave();
 }
 
 // Settings → You: show the user's Chervil account (Pro/free) with links to /me
@@ -9828,7 +10539,7 @@ async function renderAccountBox() {
   box.appendChild(hint('Checking your account…'));
   let res = null;
   try { res = window.chervil.accountStatus ? await window.chervil.accountStatus({ token: settings.publishToken, baseUrl: base }) : null; } catch { /* ignore */ }
-  if (!els.settingsModal.classList.contains('open')) return; // closed while we waited
+  if (!settingsOpen()) return; // navigated away while we waited
   box.innerHTML = '';
 
   if (!res || !res.ok) {
@@ -9863,8 +10574,14 @@ async function renderAccountBox() {
   box.appendChild(acts);
 }
 
+// Leaving Settings is leaving a page, not dismissing a dialog: go back if there's
+// somewhere to go back to, else close the tab. Esc still does what it always did.
 function closeSettings() {
-  els.settingsModal.classList.remove('open');
+  const tab = activeTab();
+  const entry = currentEntry(tab);
+  if (!entry || entry.kind !== 'settings') return;
+  if (parentOf(tab, entry)) goBack();
+  else closeTab(tab.id);
 }
 
 // ---- Sync folder (#1: free folder-sync on-ramp) ----
@@ -9925,7 +10642,14 @@ function scheduleSave() {
     const persistActiveId = persistTabs.some((t) => t.id === activeId)
       ? activeId
       : (persistTabs[0] && persistTabs[0].id) || null;
-    window.chervil.saveState({ tabs: persistTabs, activeId: persistActiveId, tabGroups, settings, library, bookmarks, bookmarkFolders, bookmarkTombstones, favorites, favoriteFolders, favoriteTombstones, collections, deletionTombstones, siteHistory, downloads, agentAudit, spaces, activeSpaceId, savedSpaces, activeSavedSpaceId, living, schedules, watchers, agents, activeAgentId, pipelines, pageStores })
+    // Pages live in the index once migrated, so the library is deliberately NOT in
+    // this payload — it was the bulk of it (~64% of a 3.93MB file), and this save
+    // runs on a 500ms debounce from ~100 call sites including every message and
+    // every checkbox click inside a page. Omitting it is the perf fix (RFC 0013).
+    // Until the migration has run, keep writing it so a downgrade loses nothing.
+    const state = { tabs: persistTabs, activeId: persistActiveId, tabGroups, settings, bookmarks, bookmarkFolders, bookmarkTombstones, favorites, favoriteFolders, favoriteTombstones, collections, deletionTombstones, siteHistory, downloads, agentAudit, spaces, activeSpaceId, savedSpaces, activeSavedSpaceId, living, schedules, watchers, agents, activeAgentId, pipelines, pageStores, dossierOffers, dossierDismissed };
+    if (!libraryFromIndex) state.library = library;
+    window.chervil.saveState(state)
       .then((r) => { if (r && r.mtimeMs) lastStateMtimeMs = r.mtimeMs; }) // our own write — keep baseline current
       .catch(() => {});
   }, 500);
@@ -9954,7 +10678,10 @@ async function reconcileNow() {
   if (Array.isArray(m.favoriteTombstones)) favoriteTombstones = m.favoriteTombstones;
   if (Array.isArray(m.collections)) collections = m.collections.filter((c) => c && c.id && Array.isArray(c.items));
   if (Array.isArray(m.siteHistory)) siteHistory = m.siteHistory;
-  if (m.library && Array.isArray(m.library.history)) {
+  // Once pages live in the index they are machine-local and are NOT synced, so a
+  // merged state file has nothing to say about them — adopting its (stale, or
+  // absent) library here would wipe the drawer.
+  if (!libraryFromIndex && m.library && Array.isArray(m.library.history)) {
     library = { history: m.library.history, trash: Array.isArray(m.library.trash) ? m.library.trash : [] };
   }
   if (Array.isArray(m.spaces) && m.spaces.length) {
@@ -10023,6 +10750,27 @@ function sanitizeTab(t) {
   };
 }
 
+// Move the library into the index (once), then hydrate `library` from it.
+//
+// Ordering matters: the migration reads the state file in the main process, so it
+// must finish before we replace the in-memory library with index rows — otherwise
+// a first boot on this build would show an empty drawer. Both steps are safe to
+// fail: if the index is unavailable we keep the state-file library exactly as
+// before, and Chervil behaves like it did pre-RFC-0013.
+async function migrateAndHydrateIndex() {
+  if (!window.chervil.index) return;
+  try {
+    const mig = await window.chervil.index.migrate();
+    if (!mig || !mig.ok) return;                      // index unavailable — keep state library
+    if (mig.migrated) console.info(`[chervil] moved ${mig.migrated} pages into the index`);
+
+    const res = await window.chervil.index.list({ withTrash: true, limit: MAX_LIBRARY });
+    if (!res || !res.ok || !Array.isArray(res.items)) return;
+    library = { history: res.items, trash: Array.isArray(res.trash) ? res.trash : [] };
+    libraryFromIndex = true;                          // state no longer carries pages
+  } catch { /* keep whatever came from state */ }
+}
+
 async function init() {
   let restored = null;
   try {
@@ -10070,12 +10818,18 @@ async function init() {
         }))
       : [];
   }
+  // Pages now live in the index (RFC 0013), not the state file. Seed from state
+  // anyway: it's the source of truth until the one-time migration below has run,
+  // and it's the fallback if the index is ever unavailable.
   if (restored && restored.library) {
     library = {
       history: Array.isArray(restored.library.history) ? restored.library.history : [],
       trash: Array.isArray(restored.library.trash) ? restored.library.trash : [],
     };
   }
+  await migrateAndHydrateIndex();
+  if (restored && Array.isArray(restored.dossierOffers)) dossierOffers = restored.dossierOffers.filter((o) => o && o.term);
+  if (restored && Array.isArray(restored.dossierDismissed)) dossierDismissed = restored.dossierDismissed.filter((d) => d && d.term);
   if (restored && Array.isArray(restored.bookmarks)) bookmarks = restored.bookmarks;
   if (restored && Array.isArray(restored.bookmarkFolders)) bookmarkFolders = restored.bookmarkFolders.filter((f) => typeof f === 'string');
   if (restored && Array.isArray(restored.bookmarkTombstones)) bookmarkTombstones = restored.bookmarkTombstones;
@@ -10174,6 +10928,14 @@ async function init() {
 
   // Baseline for folder-sync conflict detection (RFC 0005, decision 3).
   refreshStateMtime();
+
+  // Absorb any conflict copies from other machines now that the UI is up. This
+  // used to happen inside loadState, which blocked the first paint on reading
+  // every orphan file (seconds, when a cloud folder has to hydrate them). Doing
+  // it here instead lets Chervil open at once and adopt the merged items in
+  // place a moment later. Deferred past the save debounce because reconcileNow
+  // yields to a pending write of our own.
+  setTimeout(() => { reconcileNow().then(checkSyncConflict).catch(() => {}); }, 1500);
 }
 
 // ---- Save (to disk) ----
@@ -11256,6 +12018,83 @@ function onWebviewNavigated(tabId, url) {
   }
 }
 
+// ---- Your Web: capturing what you read (RFC 0013, phase 1c) ----
+//
+// Chervil kept only {url, title} for every site you visited — the same thing
+// Chrome does, from a product whose whole premise is that it can read. With this
+// on, it keeps the page's readable TEXT too, so "what was that laptop review I
+// read last month?" can be answered from your own reading instead of the web.
+//
+// Nothing here calls a model: the text goes straight to the local index and is
+// ranked by SQLite's own full-text search. Reading a page costs nothing, needs no
+// key, works offline, and sends nothing anywhere.
+
+// Readable text, run inside the site's own frame. Prefers article/main so the
+// index holds the piece you read rather than the nav and cookie banner around it.
+const CAPTURE_JS = `(function(){
+  try {
+    var drop = 'script,style,noscript,nav,header,footer,aside,form,iframe,svg,button,[aria-hidden="true"]';
+    var pick = document.querySelector('article') || document.querySelector('main')
+            || document.querySelector('[role="main"]') || document.body;
+    if (!pick) return null;
+    var c = pick.cloneNode(true);
+    var junk = c.querySelectorAll(drop);
+    for (var i = 0; i < junk.length; i++) junk[i].remove();
+    var text = (c.innerText || '').replace(/\\s+/g, ' ').trim();
+    // A password field means a login/paywall — that page is not yours to keep.
+    var authy = !!document.querySelector('input[type="password"]');
+    return { url: location.href, title: document.title || '', text: text, authy: authy };
+  } catch (e) { return null; }
+})()`;
+
+// Debounce per tab: a single navigation can settle more than once (redirects,
+// SPA route changes), and we want one capture per page, not one per event.
+const captureTimers = new Map();
+
+// Is capture allowed for this tab/url at all? Every gate here is a privacy
+// promise from the RFC — keep them in one place so none can be quietly skipped.
+function canCaptureSite(tab, url) {
+  if (!settings.indexSites) return false;              // off by default
+  if (!libraryFromIndex || !window.chervil.index) return false;
+  if (!url || !/^https?:\/\//i.test(url)) return false; // no about:, file:, data:
+  if (tab && tab.private) return false;                 // private tabs leave nothing behind
+  const host = hostOf(url) || '';
+  const excludes = Array.isArray(settings.indexExcludes) ? settings.indexExcludes : [];
+  if (excludes.some((p) => p && (host.includes(p) || url.includes(p)))) return false;
+  return true;
+}
+
+function scheduleSiteCapture(tabId, wv) {
+  const tab = tabs.find((t) => t.id === tabId);
+  let url = '';
+  try { url = wv.getURL() || ''; } catch { return; }
+  if (!canCaptureSite(tab, url)) return;
+  if (captureTimers.has(tabId)) clearTimeout(captureTimers.get(tabId));
+  // A beat after load so client-rendered pages have painted their content.
+  captureTimers.set(tabId, setTimeout(() => {
+    captureTimers.delete(tabId);
+    captureSite(tabId, wv).catch(() => {});
+  }, 1200));
+}
+
+async function captureSite(tabId, wv) {
+  const tab = tabs.find((t) => t.id === tabId);
+  let res = null;
+  try { res = await wv.executeJavaScript(CAPTURE_JS, false); } catch { return; }
+  if (!res || !res.text) return;
+  // Re-check: the user may have toggled capture off, or navigated, during the wait.
+  if (!canCaptureSite(tab, res.url)) return;
+  if (res.authy) return;                    // behind a login/paywall — not ours to keep
+  if (res.text.length < 200) return;        // a redirect stub or empty shell, not a read
+  try {
+    await window.chervil.index.putVisited({
+      id: uid(), url: res.url, title: res.title || hostOf(res.url), body: res.text,
+    });
+    // Keep captured sites inside the user's budget, oldest first.
+    if (window.chervil.index.evictOver) await window.chervil.index.evictOver(settings.indexMaxSites);
+  } catch { /* the index is an enhancement — never break browsing over it */ }
+}
+
 // Log a visited real site into browsing history (newest-first, deduped, capped).
 function recordSiteVisit(url, title, tab) {
   if (!url || !/^https?:\/\//i.test(url)) return;
@@ -11438,19 +12277,17 @@ els.voiceTest.addEventListener('click', testVoice);
 els.profileInput.addEventListener('input', () => { settings.profile = els.profileInput.value; scheduleSave(); });
 
 // Settings
-els.settingsBtn.addEventListener('click', openSettings);
-els.settingsClose.addEventListener('click', closeSettings);
-{
-  const tabs = document.getElementById('settings-tabs');
-  if (tabs) tabs.addEventListener('click', (e) => {
-    const btn = e.target.closest('.settings-tab');
-    if (btn) setSettingsTab(btn.dataset.sgroup);
-  });
-}
-els.settingsModal.addEventListener('click', (e) => {
-  if (e.target === els.settingsModal) closeSettings();
+els.settingsBtn.addEventListener('click', () => openSettings());
+if (els.settingsNav) els.settingsNav.addEventListener('click', (e) => {
+  const btn = e.target.closest('.settings-tab');
+  if (!btn) return;
+  setSettingsTab(btn.dataset.sgroup);
+  // Remember the section on the entry so a tab switch (or a restart) comes back to
+  // where you were, rather than resetting to General like the dialog did.
+  const entry = currentEntry(activeTab());
+  if (entry && entry.kind === 'settings') { entry.settingsGroup = btn.dataset.sgroup; scheduleSave(); }
 });
-els.settingsModal.addEventListener('change', (e) => {
+els.settingsView.addEventListener('change', (e) => {
   const t = e.target;
   if (t && t.name === 'linkBehavior') settings.linkBehavior = t.value;
   else if (t && t.name === 'followupMode') settings.followupMode = t.value;
@@ -11654,6 +12491,140 @@ if (els.notifyToggle) els.notifyToggle.addEventListener('change', () => {
   scheduleSave();
 });
 
+// ---- Your Web controls (RFC 0013, phase 1c) ----
+// Everything the user can see and undo about their index lives here. The rule the
+// whole feature rests on: what's kept is visible, and deleting really deletes.
+
+async function renderIndexStats() {
+  if (!els.indexStats) return;
+  if (!window.chervil.index || !libraryFromIndex) {
+    els.indexStats.textContent = 'The page index isn’t available in this build.';
+    return;
+  }
+  try {
+    const r = await window.chervil.index.stats();
+    if (!r || !r.ok) { els.indexStats.textContent = ''; return; }
+    const { composed, visited } = r.stats;
+    const pages = `${composed.toLocaleString()} page${composed === 1 ? '' : 's'} Sprig composed`;
+    const sites = settings.indexSites
+      ? `, and ${visited.toLocaleString()} website${visited === 1 ? '' : 's'} you’ve read`
+      : (visited ? `, and ${visited.toLocaleString()} website${visited === 1 ? '' : 's'} kept from when this was on` : '');
+    els.indexStats.textContent = `On this computer: ${pages}${sites}. Searchable from the Library.`;
+  } catch { els.indexStats.textContent = ''; }
+}
+
+function dossierMinPagesLabel(n) {
+  return `${n} pages on one subject`;
+}
+
+function renderIndexSettings() {
+  if (els.indexSitesToggle) els.indexSitesToggle.checked = !!settings.indexSites;
+  if (els.indexExcludes) els.indexExcludes.value = (settings.indexExcludes || []).join(', ');
+  if (els.dossierOffersToggle) {
+    els.dossierOffersToggle.checked = !!settings.dossierOffers;
+    // Noticing what you're researching needs something to notice.
+    els.dossierOffersToggle.disabled = !settings.indexSites;
+  }
+  if (els.dossierMinPages) {
+    const n = Math.max(3, Number(settings.dossierMinPages) || 5);
+    els.dossierMinPages.value = String(n);
+    if (els.dossierMinPagesVal) els.dossierMinPagesVal.textContent = dossierMinPagesLabel(n);
+  }
+  renderIndexStats();
+}
+
+if (els.dossierOffersToggle) els.dossierOffersToggle.addEventListener('change', () => {
+  settings.dossierOffers = els.dossierOffersToggle.checked;
+  scheduleSave();
+  if (settings.dossierOffers) {
+    startScheduler();                     // the tick may not be running yet
+    scanForDossierTopics({ force: true }); // look now rather than in 20 minutes
+    toast('Chervil will offer to pull together subjects you read around. It never writes a page on its own.');
+  } else {
+    dossierOffers = [];                   // don't leave stale cards on the new-tab screen
+    renderSuggestions();
+    toast('Chervil won’t offer dossiers.');
+  }
+});
+
+if (els.dossierMinPages) els.dossierMinPages.addEventListener('input', () => {
+  const n = parseInt(els.dossierMinPages.value, 10);
+  settings.dossierMinPages = n;
+  if (els.dossierMinPagesVal) els.dossierMinPagesVal.textContent = dossierMinPagesLabel(n);
+  scheduleSave();
+});
+
+if (els.indexSitesToggle) els.indexSitesToggle.addEventListener('change', () => {
+  settings.indexSites = els.indexSitesToggle.checked;
+  scheduleSave();
+  renderIndexStats();
+  toast(settings.indexSites
+    ? 'Chervil will keep the text of sites you read — on this computer only.'
+    : 'Stopped keeping sites you read. What’s already kept stays until you delete it.');
+});
+
+if (els.indexExcludesSave) els.indexExcludesSave.addEventListener('click', () => {
+  settings.indexExcludes = String(els.indexExcludes.value || '')
+    .split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
+  scheduleSave();
+  toast(settings.indexExcludes.length
+    ? `Skipping ${settings.indexExcludes.length} site${settings.indexExcludes.length === 1 ? '' : 's'}.`
+    : 'No sites are being skipped.');
+});
+
+async function forgetSince(ms, label) {
+  if (!window.chervil.index) return;
+  if (!confirm(`Forget everything Chervil kept from ${label}? This can’t be undone.`)) return;
+  const r = await window.chervil.index.forgetSince(Date.now() - ms);
+  if (!r || !r.ok) { toast('Couldn’t delete that.'); return; }
+  await refreshLibraryFromIndex();
+  toast(`Forgot ${label}.`);
+}
+
+if (els.indexForgetHour) els.indexForgetHour.addEventListener('click', () => forgetSince(3600000, 'the last hour'));
+if (els.indexForgetDay) els.indexForgetDay.addEventListener('click', () => forgetSince(86400000, 'today'));
+
+if (els.indexForgetSite) els.indexForgetSite.addEventListener('click', async () => {
+  const host = prompt('Forget everything from which site? (e.g. example.com)');
+  if (!host || !host.trim()) return;
+  const r = await window.chervil.index.forgetSite(host.trim().toLowerCase());
+  if (!r || !r.ok) { toast('Couldn’t delete that.'); return; }
+  await refreshLibraryFromIndex();
+  toast(`Forgot everything from ${host.trim()}.`);
+});
+
+if (els.indexDeleteAll) els.indexDeleteAll.addEventListener('click', async () => {
+  // Two separate things live in here, and only one of them is "what I read".
+  // Wiping someone's own composed pages because they wanted their browsing
+  // forgotten would be its own kind of betrayal — so ask which.
+  const alsoPages = confirm(
+    'Delete the text of every website you\'ve read?\n\n'
+    + 'Click OK to ALSO delete the pages Sprig composed for you (your whole Library).\n'
+    + 'Click Cancel to keep those and delete only the websites you read.'
+  );
+  if (!confirm(alsoPages
+    ? 'Really delete EVERYTHING — your composed pages and the sites you read? This cannot be undone.'
+    : 'Really delete the text of every site you\'ve read? Your composed pages are kept. This cannot be undone.')) return;
+  const r = await window.chervil.index.forgetAll(alsoPages);
+  if (!r || !r.ok) { toast('Couldn’t delete the index.'); return; }
+  await refreshLibraryFromIndex();
+  toast(alsoPages ? 'Deleted everything.' : 'Deleted the sites you read.');
+});
+
+// Re-pull the drawer's rows after anything deletes behind its back.
+async function refreshLibraryFromIndex() {
+  if (!libraryFromIndex || !window.chervil.index) return;
+  try {
+    const res = await window.chervil.index.list({ withTrash: true, limit: MAX_LIBRARY });
+    if (res && res.ok && Array.isArray(res.items)) {
+      library = { history: res.items, trash: Array.isArray(res.trash) ? res.trash : [] };
+    }
+  } catch { /* leave the rows as they are */ }
+  libraryFts = { q: '', items: null };
+  renderDrawer();
+  renderIndexStats();
+}
+
 // Hero-image toggle (opt-in; uses a BYO OpenAI/Gemini key).
 if (els.heroToggle) els.heroToggle.addEventListener('change', () => {
   settings.heroImages = els.heroToggle.checked;
@@ -11698,7 +12669,7 @@ if (els.importAddressBtn) els.importAddressBtn.addEventListener('click', importA
 // When the user comes back from the OS Default apps window, refresh the status
 // line so it flips to "Chervil is your default browser." without reopening Settings.
 window.addEventListener('focus', () => {
-  if (els.settingsModal && els.settingsModal.classList.contains('open')) refreshPrivacyUI();
+  if (settingsOpen()) refreshPrivacyUI();
 });
 if (els.adblockToggle) els.adblockToggle.addEventListener('change', async () => {
   settings.adblock = els.adblockToggle.checked;
@@ -11768,7 +12739,11 @@ if (els.libNewCollection) els.libNewCollection.addEventListener('click', createC
 els.libTabTrash.addEventListener('click', () => { drawerTab = 'trash'; renderDrawer(); });
 if (els.clearSites) els.clearSites.addEventListener('click', clearSiteHistory);
 if (els.clearDownloads) els.clearDownloads.addEventListener('click', clearDownloads);
-if (els.libSearch) els.libSearch.addEventListener('input', () => { librarySearch = els.libSearch.value; renderDrawer(); });
+if (els.libSearch) els.libSearch.addEventListener('input', () => {
+  librarySearch = els.libSearch.value;
+  scheduleLibraryFts();
+  renderDrawer();
+});
 if (els.libNewFolder) els.libNewFolder.addEventListener('click', () => (drawerTab === 'favorites' ? createFavoriteFolder() : createBookmarkFolder()));
 if (els.libCollapseAll) els.libCollapseAll.addEventListener('click', toggleCollapseAll);
 if (els.bookmarksBarToggle) els.bookmarksBarToggle.addEventListener('change', () => { settings.bookmarksBar = els.bookmarksBarToggle.checked; applyBookmarksBar(); scheduleSave(); });
@@ -11823,7 +12798,7 @@ document.addEventListener('keydown', (e) => {
     if (els.agentsView.classList.contains('open')) { closeAgents(); return; }
     if (els.schedView.classList.contains('open')) { closeSched(); return; }
     if (els.mapView.classList.contains('open')) { closeMap(); return; }
-    if (els.settingsModal.classList.contains('open')) { closeSettings(); return; }
+    if (settingsOpen()) { closeSettings(); return; }
     if (els.libraryDrawer.classList.contains('open')) { closeDrawer(); return; }
     // Nothing else consumed Esc — stop the active tab if it's composing.
     if (activeId && isTabBusy(activeId)) { stopActiveCompose(); return; }
