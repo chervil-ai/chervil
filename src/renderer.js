@@ -505,7 +505,12 @@ function providerConfig(agentOverride) {
 
 // Auto-collected library of composed pages, plus a trash bin.
 //   item = { id, createdAt, title, query, html, sources, conversation, history, spaceId }
+// Library rows. Once the index has taken over (RFC 0013) these are LIGHT rows —
+// no html/conversation/history — and the session state file stops carrying pages
+// entirely. `libraryFromIndex` gates that switchover: false means the index is
+// unavailable or hasn't migrated yet, and state stays the source of truth.
 let library = { history: [], trash: [] };
+let libraryFromIndex = false;
 // "Saved Pages" (internally still `bookmarks`): composed Chervil pages the user
 // saved, on the ribbon button. Sites live in Favorites, not here. [{ id, key, kind:'page', query, title, at, folder?, tab }]
 let bookmarks = [];
@@ -606,6 +611,19 @@ const DOCTYPE_RE = /<!DOCTYPE html>|<html[\s>]/i;
 //   2. Expose a live tool bridge — window.chervil.ask(...) — so a composed page can
 //      call Sprig at runtime and build interactive "applets".
 const CHERVIL_RUNTIME = `<script>(function(){
+  // 0. Broken-image cleanup. An <img> whose src 404s — or was never a real
+  // picture — renders as a broken icon with its alt text sprawled across the
+  // layout. Drop it (and a figure that held only it) so the page degrades to
+  // clean prose. Resource errors don't bubble, so this listens in capture.
+  document.addEventListener('error', function(e){
+    var el = e.target;
+    if(!el || el.tagName !== 'IMG' || !el.closest) return;
+    if(el.closest('.chervil-hero')) return;   // the hero block has its own fallback
+    var fig = el.closest('figure');
+    var host = (fig && fig.querySelectorAll('img').length === 1) ? fig : el;
+    if(host.parentNode) host.parentNode.removeChild(host);
+  }, true);
+
   // 1. Link interception.
   document.addEventListener('click', function(e){
     var a = e.target && e.target.closest ? e.target.closest('a') : null;
@@ -1982,9 +2000,16 @@ function hideWebviews() {
   for (const wv of webviews.values()) wv.hidden = true;
 }
 
+// The exact srcdoc currently parsed into the page frame, so a tab switch back to
+// an unchanged composed page can skip re-injecting it (see renderPageHtml).
+// Cleared wherever the frame is emptied, so it can never claim a stale document
+// is still live.
+let liveSrcdoc = '';
+
 function showOverlay() {
   els.frame.hidden = false;
   els.frame.removeAttribute('srcdoc');
+  liveSrcdoc = '';
   hideWebviews();
   els.overlay.hidden = false;
   renderSuggestions();
@@ -2018,12 +2043,21 @@ function renderPageHtml(html, scrollY = 0) {
   }
   const shim = pageStorageShim(JSON.stringify(seed).replace(/</g, '\\u003c'));
   const ttsShim = pageTtsShim(frameVoicesJson());
-  els.frame.setAttribute('srcdoc', injectIntoHead(html, shim + ttsShim) + clearance + zoomStyle + CHERVIL_RUNTIME + restore);
+  const doc = injectIntoHead(html, shim + ttsShim) + clearance + zoomStyle + CHERVIL_RUNTIME + restore;
+  // Switching tabs lands here with the same page we already have parsed. Re-setting
+  // srcdoc would re-parse the whole document, re-run its scripts and re-fetch its
+  // images, and drop the user's scroll — so an unchanged page just stays live and
+  // appears instantly. Any real change (new HTML, zoom, restored store) alters
+  // `doc` and falls through to a real render.
+  if (doc === liveSrcdoc && els.frame.hasAttribute('srcdoc')) return;
+  liveSrcdoc = doc;
+  els.frame.setAttribute('srcdoc', doc);
 }
 
 function renderSite(url) {
   els.frame.hidden = true;
   els.frame.removeAttribute('srcdoc');
+  liveSrcdoc = '';
   els.overlay.hidden = true;
   const tab = activeTab();
   if (!tab) return;
@@ -2687,8 +2721,11 @@ function imageEditorHtml(dataUrl, name) {
   </script></body></html>`;
 }
 
-// Open a snip (or any data: image) in its own editor tab.
-function openImageEditor(dataUrl, name) {
+// Open a snip (or any data: image) in its own editor tab. With `instruction`,
+// the edit starts as soon as the editor is live — so "put Robbie the Robot in
+// the picture" with an attached photo runs the edit instead of just landing the
+// user in an editor they'd have to re-type the request into.
+function openImageEditor(dataUrl, name, instruction = '') {
   const tab = newTab(true);
   const entry = {
     kind: 'page',
@@ -2703,8 +2740,20 @@ function openImageEditor(dataUrl, name) {
   pushEntry(tab, entry);
   tab.title = `✏️ ${name}`;
   renderTabs();
+  // Force a real re-parse: renderPageHtml skips identical HTML, and re-editing the
+  // same image with the same instruction would otherwise reuse the live frame and
+  // never fire the load event the instruction below waits for.
+  liveSrcdoc = '';
   renderCurrentPage();
   scheduleSave();
+  // The editor listens for `edit-instruction` on its own window, so the frame must
+  // have parsed before the message lands — hence waiting on load rather than
+  // posting straight after renderCurrentPage.
+  if (instruction) {
+    els.frame.addEventListener('load', () => {
+      if (currentEntry(activeTab()) === entry) forwardEditToImageEditor(instruction);
+    }, { once: true });
+  }
 }
 
 // Re-render a stale editor shell (same trick as maybeRefreshSkillHtml): the tab
@@ -6388,6 +6437,41 @@ function isComparisonQuery(text) {
   return !!a && !!b && words(a) <= 6 && words(b) <= 6;
 }
 
+// Politeness/filler that can precede the real verb. Stripped before the tests
+// below so "can you remove the background" reads as the edit it is, rather than
+// as a "can …" question.
+const IMAGE_LEAD_FILLER = /^(?:please\s+|hey\s+sprig[,\s]+|sprig[,\s]+|can\s+you\s+|could\s+you\s+|would\s+you\s+|now\s+|also\s+|just\s+)+/i;
+// Imperative verbs that mean "change this image" when a message leads with them.
+const IMAGE_EDIT_VERB = /^(?:add|put|place|insert|drop|stick|paste|remove|delete|erase|take\s+out|get\s+rid\s+of|replace|swap|change|turn|make|give|dress|move|recolou?r|colou?rize|crop|rotate|flip|mirror|blur|sharpen|brighten|darken|lighten|enhance|upscale|clean\s+up|retouch|fix|repair|restore|extend|expand|resize|edit|photoshop|draw|paint|shade|zoom)\b/i;
+// A message that leads with these is ASKING ABOUT the image, not changing it.
+const IMAGE_ASK_LEAD = /^(?:what|who|whose|where|when|why|how|which|is|are|was|were|do|does|did|can|could|should|tell|describe|explain|identify|summar|list|find|read|analy|compare|research|write)\b/i;
+// "make a timeline from this" wants a page, not a new picture. Anchored on a
+// composing verb reaching one of these objects, so it catches "make me a page
+// from this photo" without also catching "remove the table from the picture" —
+// where the same noun is the thing being edited out.
+const COMPOSE_OBJECT = /\b(?:make|create|build|compose|generate|write|produce|give\s+me|show\s+me|put\s+together|draw\s+up|turn\s+(?:this|it)\s+into)\b[^.?!]{0,60}\b(?:page|site|website|report|article|timeline|chart|graph|table|list|summary|lesson|quiz|deck|slides?|plan|guide|dashboard|comparison|document|doc|essay|post|blog|recipe|infographic)\b/i;
+
+// Does this message, sent with an image attached, mean "edit the image"?
+// A leading edit verb IS the signal: with a picture attached, "replace the book
+// with a calculator" can only mean the picture. Everything that reads as a
+// question about the image, or as a request for a page built from it, is excluded
+// first — so this diverts only turns Chervil can genuinely fulfil.
+//
+// Note there is deliberately no "does it name the picture?" test. An earlier cut
+// required the message to say "photo"/"picture" or be very short, and it missed
+// real requests that name only the things being changed ("Replace the book in the
+// robot's hand with a calculator") — which then fell through to compose, the exact
+// failure this routing exists to prevent.
+function isImageEditIntent(text) {
+  const raw = String(text || '').trim();
+  if (!raw || raw.length > 200) return false;
+  const q = raw.replace(IMAGE_LEAD_FILLER, '').trim();
+  if (!q) return false;
+  if (IMAGE_ASK_LEAD.test(q) || COMPOSE_OBJECT.test(q)) return false;
+  if (/\bphotoshop\b|\bedit\s+(?:this|the|my)\b/i.test(q)) return true;
+  return IMAGE_EDIT_VERB.test(q);
+}
+
 function handleComposerSubmit(text, opts = {}) {
   const tab = activeTab();
   if (!tab || isTabBusy(tab.id) || agentRunning) return;
@@ -6420,6 +6504,21 @@ function handleComposerSubmit(text, opts = {}) {
       els.prompt.value = '';
       resetPromptHeight();
       forwardEditToImageEditor(query);
+      return;
+    }
+  }
+
+  // Attaching an image and asking to CHANGE it ("put Robbie the Robot in the
+  // picture") means edit the image — open it in the editor, which owns the real
+  // edit_image path. Without this the turn falls through to compose, and the
+  // composer answers a request it cannot fulfil by writing <img> tags for
+  // pictures that were never generated. Asking ABOUT an image still composes.
+  {
+    const img = attachments.length === 1 && attachments[0].kind === 'image' ? attachments[0] : null;
+    if (img && isImageEditIntent(query)) {
+      els.prompt.value = '';
+      resetPromptHeight();
+      openImageEditor(`data:${img.mediaType || 'image/png'};base64,${img.data}`, img.name || 'image.png', query);
       return;
     }
   }
@@ -7291,6 +7390,16 @@ async function showQrModal(title, text, caption) {
 }
 
 // ---- Library (auto-collected History + Trash) ----
+// The page itself lives in the index (RFC 0013), NOT in the session state file —
+// `library` holds only light rows (no html/conversation/history) so the drawer can
+// render without hauling megabytes around, and openLibraryItem fetches the payload
+// for the one page being opened. `MAX_LIBRARY` still bounds what's in memory; the
+// index keeps its own, larger history.
+function libraryRow(item) {
+  const { html, conversation, history, body, ...light } = item;
+  return light;
+}
+
 function addToLibrary(tab, result, query) {
   if (tab && tab.private) return; // private tabs aren't collected into the Library
   const item = {
@@ -7304,7 +7413,10 @@ function addToLibrary(tab, result, query) {
     history: tab.history.map((h) => ({ ...h })),
     spaceId: activeSpaceId,
   };
-  library.history.unshift(item);
+  // Fire-and-forget: a failed index write must never block or break composing —
+  // the page is already on screen and lives in the tab regardless.
+  if (window.chervil.index) window.chervil.index.put(item).catch(() => {});
+  library.history.unshift(libraryRow(item));
   if (library.history.length > MAX_LIBRARY) library.history.length = MAX_LIBRARY;
 }
 
@@ -7521,7 +7633,19 @@ footer{margin-top:32px;color:#8aa093;font-size:13px;text-align:center}
 </body></html>`;
 }
 
-function openLibraryItem(item) {
+// Library rows are light (no html), so the page body is fetched from the index for
+// the one item actually being opened. `item` may already be a full record (the
+// index-unavailable fallback), in which case the fetch is skipped.
+async function openLibraryItem(item) {
+  let full = item;
+  if (!item.html && window.chervil.index) {
+    try {
+      const res = await window.chervil.index.get(item.id);
+      if (res && res.ok && res.item) full = res.item;
+    } catch { /* fall through with the light row */ }
+  }
+  if (!full.html) { toast('Couldn’t load that page.'); return; }
+  item = full;
   const rootId = uid();
   const tab = {
     id: uid(),
@@ -7559,6 +7683,7 @@ function deleteLibraryItem(id) {
   it.updatedAt = Date.now();          // fresh recency so the move wins over sync
   library.trash.unshift(it);
   if (library.trash.length > MAX_LIBRARY) library.trash.length = MAX_LIBRARY;
+  if (window.chervil.index) window.chervil.index.trash(id).catch(() => {});
   addTombstone('pages', id);          // don't let another machine resurrect it into history
   renderDrawer();
   scheduleSave();
@@ -7577,6 +7702,7 @@ function deleteLibraryItems(ids) {
   for (let i = moved.length - 1; i >= 0; i--) {
     moved[i].updatedAt = Date.now();
     library.trash.unshift(moved[i]);
+    if (window.chervil.index) window.chervil.index.trash(moved[i].id).catch(() => {});
     addTombstone('pages', moved[i].id);
   }
   if (library.trash.length > MAX_LIBRARY) library.trash.length = MAX_LIBRARY;
@@ -7620,6 +7746,7 @@ function restoreLibraryItem(id) {
   const [it] = library.trash.splice(idx, 1);
   it.updatedAt = Date.now();          // fresh recency so the restore wins over sync
   library.history.unshift(it);
+  if (window.chervil.index) window.chervil.index.restore(id).catch(() => {});
   clearTombstone('pages', id);        // it's allowed back in history now…
   addTombstone('trash', id);          // …and gone from trash on every machine
   renderDrawer();
@@ -7629,6 +7756,9 @@ function restoreLibraryItem(id) {
 function emptyTrash() {
   for (const it of library.trash) addTombstone('trash', it && it.id);
   library.trash = [];
+  // A real DELETE in the index, not a tombstone — emptying the trash has to
+  // actually remove the page text, or "delete" is a lie (RFC 0013, privacy).
+  if (window.chervil.index) window.chervil.index.emptyTrash().catch(() => {});
   renderDrawer();
   scheduleSave();
 }
@@ -9925,7 +10055,14 @@ function scheduleSave() {
     const persistActiveId = persistTabs.some((t) => t.id === activeId)
       ? activeId
       : (persistTabs[0] && persistTabs[0].id) || null;
-    window.chervil.saveState({ tabs: persistTabs, activeId: persistActiveId, tabGroups, settings, library, bookmarks, bookmarkFolders, bookmarkTombstones, favorites, favoriteFolders, favoriteTombstones, collections, deletionTombstones, siteHistory, downloads, agentAudit, spaces, activeSpaceId, savedSpaces, activeSavedSpaceId, living, schedules, watchers, agents, activeAgentId, pipelines, pageStores })
+    // Pages live in the index once migrated, so the library is deliberately NOT in
+    // this payload — it was the bulk of it (~64% of a 3.93MB file), and this save
+    // runs on a 500ms debounce from ~100 call sites including every message and
+    // every checkbox click inside a page. Omitting it is the perf fix (RFC 0013).
+    // Until the migration has run, keep writing it so a downgrade loses nothing.
+    const state = { tabs: persistTabs, activeId: persistActiveId, tabGroups, settings, bookmarks, bookmarkFolders, bookmarkTombstones, favorites, favoriteFolders, favoriteTombstones, collections, deletionTombstones, siteHistory, downloads, agentAudit, spaces, activeSpaceId, savedSpaces, activeSavedSpaceId, living, schedules, watchers, agents, activeAgentId, pipelines, pageStores };
+    if (!libraryFromIndex) state.library = library;
+    window.chervil.saveState(state)
       .then((r) => { if (r && r.mtimeMs) lastStateMtimeMs = r.mtimeMs; }) // our own write — keep baseline current
       .catch(() => {});
   }, 500);
@@ -9954,7 +10091,10 @@ async function reconcileNow() {
   if (Array.isArray(m.favoriteTombstones)) favoriteTombstones = m.favoriteTombstones;
   if (Array.isArray(m.collections)) collections = m.collections.filter((c) => c && c.id && Array.isArray(c.items));
   if (Array.isArray(m.siteHistory)) siteHistory = m.siteHistory;
-  if (m.library && Array.isArray(m.library.history)) {
+  // Once pages live in the index they are machine-local and are NOT synced, so a
+  // merged state file has nothing to say about them — adopting its (stale, or
+  // absent) library here would wipe the drawer.
+  if (!libraryFromIndex && m.library && Array.isArray(m.library.history)) {
     library = { history: m.library.history, trash: Array.isArray(m.library.trash) ? m.library.trash : [] };
   }
   if (Array.isArray(m.spaces) && m.spaces.length) {
@@ -10023,6 +10163,27 @@ function sanitizeTab(t) {
   };
 }
 
+// Move the library into the index (once), then hydrate `library` from it.
+//
+// Ordering matters: the migration reads the state file in the main process, so it
+// must finish before we replace the in-memory library with index rows — otherwise
+// a first boot on this build would show an empty drawer. Both steps are safe to
+// fail: if the index is unavailable we keep the state-file library exactly as
+// before, and Chervil behaves like it did pre-RFC-0013.
+async function migrateAndHydrateIndex() {
+  if (!window.chervil.index) return;
+  try {
+    const mig = await window.chervil.index.migrate();
+    if (!mig || !mig.ok) return;                      // index unavailable — keep state library
+    if (mig.migrated) console.info(`[chervil] moved ${mig.migrated} pages into the index`);
+
+    const res = await window.chervil.index.list({ withTrash: true, limit: MAX_LIBRARY });
+    if (!res || !res.ok || !Array.isArray(res.items)) return;
+    library = { history: res.items, trash: Array.isArray(res.trash) ? res.trash : [] };
+    libraryFromIndex = true;                          // state no longer carries pages
+  } catch { /* keep whatever came from state */ }
+}
+
 async function init() {
   let restored = null;
   try {
@@ -10070,12 +10231,16 @@ async function init() {
         }))
       : [];
   }
+  // Pages now live in the index (RFC 0013), not the state file. Seed from state
+  // anyway: it's the source of truth until the one-time migration below has run,
+  // and it's the fallback if the index is ever unavailable.
   if (restored && restored.library) {
     library = {
       history: Array.isArray(restored.library.history) ? restored.library.history : [],
       trash: Array.isArray(restored.library.trash) ? restored.library.trash : [],
     };
   }
+  await migrateAndHydrateIndex();
   if (restored && Array.isArray(restored.bookmarks)) bookmarks = restored.bookmarks;
   if (restored && Array.isArray(restored.bookmarkFolders)) bookmarkFolders = restored.bookmarkFolders.filter((f) => typeof f === 'string');
   if (restored && Array.isArray(restored.bookmarkTombstones)) bookmarkTombstones = restored.bookmarkTombstones;
@@ -10174,6 +10339,14 @@ async function init() {
 
   // Baseline for folder-sync conflict detection (RFC 0005, decision 3).
   refreshStateMtime();
+
+  // Absorb any conflict copies from other machines now that the UI is up. This
+  // used to happen inside loadState, which blocked the first paint on reading
+  // every orphan file (seconds, when a cloud folder has to hydrate them). Doing
+  // it here instead lets Chervil open at once and adopt the merged items in
+  // place a moment later. Deferred past the save debounce because reconcileNow
+  // yields to a pending write of our own.
+  setTimeout(() => { reconcileNow().then(checkSyncConflict).catch(() => {}); }, 1500);
 }
 
 // ---- Save (to disk) ----
