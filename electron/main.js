@@ -1243,7 +1243,7 @@ app.on('window-all-closed', () => {
 const askAborters = new Map();
 
 ipcMain.handle('chervil:ask', async (event, payload) => {
-  const { query, history, requestId, pageContext, allowNavigate, refineMode, spaceContext, deep, verify, profile, pageStyle, attachments, mcpServers, agent } =
+  const { query, history, requestId, pageContext, allowNavigate, refineMode, spaceContext, recallContext, deep, verify, profile, pageStyle, attachments, mcpServers, agent } =
     payload || {};
   const send = (channel, data) => {
     if (!event.sender.isDestroyed()) event.sender.send(channel, data);
@@ -1266,6 +1266,7 @@ ipcMain.handle('chervil:ask', async (event, payload) => {
       allowNavigate: allowNavigate !== false,
       refineMode: refineMode || null,
       spaceContext: spaceContext || null,
+      recallContext: recallContext || null,
       deep: deep === true,
       verify: verify === true,
       profile: typeof profile === 'string' ? profile : null,

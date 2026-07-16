@@ -6632,6 +6632,15 @@ function handleComposerSubmit(text, opts = {}) {
     return;
   }
 
+  // "What was that laptop review I read last month?" — answer from the user's own
+  // reading, not the web (RFC 0013, phase 1d). Checked before the answer cache:
+  // recall is a question ABOUT their history, not a repeat of an earlier question,
+  // so serving a cached page here would answer the wrong thing entirely.
+  if (!attachments.length && isRecallQuery(query)) {
+    askFromYourWeb(tab, query);
+    return;
+  }
+
   if (settings.followupMode === 'ask' && cur && cur.kind === 'page') {
     promptRefineChoice(query, attachments);
   } else if (!attachments.length && !(cur && cur.kind === 'page')) {
@@ -6725,6 +6734,73 @@ async function buildAndRenderSkill(tab, skillId, input, label) {
 }
 
 // Inline "Refine this page / New page" choice for the 'ask' follow-up mode.
+// ---- Answering from your own reading (RFC 0013, phase 1d) ----
+//
+// The thing a search engine structurally cannot do: "what was that laptop review I
+// read last month?" Google never saw the page you read, and Chrome has your
+// history but no way to read it. Chervil has both halves, locally.
+
+// Phrases that mean "I'm looking for something I already saw". Deliberately
+// requires an explicit first-person memory cue — "the article about X" alone is
+// ambiguous, but "the article I read about X" is not.
+//
+// The modal guard is load-bearing: "what should I read next" is a request for a
+// recommendation, and "I read" alone can't tell it from "what I read last week".
+// A preceding modal makes it hypothetical or future — never a memory.
+const NOT_PAST = '(?<!\\b(?:should|shall|could|would|can|will|might|must|may|wanna|gonna)\\s)';
+const RECALL_RE = new RegExp([
+  NOT_PAST + '\\b(?:i|we)\\s+(?:already\\s+|previously\\s+|recently\\s+)?(?:read|saw|found|looked at|visited|browsed|opened|was reading|were reading|had open)\\b',
+  '\\bthat\\s+(?:article|page|post|site|thing|review|piece|story|link|blog|paper|guide|recipe|video)\\b.{0,40}\\b(?:i|we)\\b',
+  '\\b(?:remind me|what was)\\b.{0,30}\\b(?:i|we)\\s+(?:read|saw|looked)',
+  '\\bfrom\\s+my\\s+(?:reading|history|pages|browsing)\\b',
+  '\\bin\\s+(?:my|the)\\s+(?:pages|reading|history|library)\\b',
+  '\\bdid\\s+i\\s+(?:read|see|visit|open)\\b',
+  '\\bwhere\\s+did\\s+i\\s+(?:read|see|find)\\b',
+].join('|'), 'i');
+
+function isRecallQuery(text) {
+  const q = String(text || '').trim();
+  if (!q || q.length > 300) return false;
+  return RECALL_RE.test(q);
+}
+
+// Format retrieved pages for the model. Excerpts, not whole pages: five 1,200-char
+// windows is plenty to recognise the right page and answer from it, and keeps the
+// turn cheap — the point is re-finding, not re-reading.
+function buildRecallContext(hits) {
+  return hits.slice(0, 5).map((h, i) => {
+    const where = h.kind === 'visited' ? (hostOf(h.url) || h.url) : 'a page Sprig composed for me';
+    const when = relTime(h.createdAt);
+    const body = String(h.body || '').slice(0, 1200);
+    return [
+      `[${i + 1}] "${h.title || h.query || 'Untitled'}"`,
+      `  Where: ${where}${h.url ? ` (${h.url})` : ''}`,
+      `  When: ${when}${h.kind === 'visited' && h.visits > 1 ? ` · read ${h.visits} times` : ''}`,
+      `  Excerpt: ${body}`,
+    ].join('\n');
+  }).join('\n\n').slice(0, 12000);
+}
+
+// Retrieve from the index and compose an answer grounded in it. On a miss we still
+// compose, but WITHOUT recall context — better a normal web answer than one that
+// pretends to be from the user's history.
+async function askFromYourWeb(tab, query) {
+  if (!libraryFromIndex || !window.chervil.index) { submitQuery(query, { tab }); return; }
+  const key = queryKey(query);
+  if (!key.length) { submitQuery(query, { tab }); return; }
+  let hits = [];
+  try {
+    const res = await window.chervil.index.search({ query: key.join(' '), limit: 5, includeBody: true, any: true });
+    if (res && res.ok) hits = res.items || [];
+  } catch { /* fall through to a plain compose */ }
+  if (!hits.length) {
+    addMessage(tab, 'bot', 'I couldn’t find that in your pages or the sites you’ve read. Answering from the web instead.', 'note');
+    submitQuery(query, { tab });
+    return;
+  }
+  submitQuery(query, { tab, recallContext: buildRecallContext(hits), skipFollowup: true, allowNavigate: false });
+}
+
 // ---- Instant answers from your own pages (RFC 0013, phase 2a) ----
 //
 // Composing takes ~20 seconds and costs tokens. Asking something you've already
@@ -7231,6 +7307,7 @@ async function submitQuery(text, opts = {}) {
       allowNavigate,
       refineMode,
       spaceContext: opts.spaceContext || null,
+      recallContext: opts.recallContext || null,
       deep,
       verify,
       profile: settings.profile || null,
