@@ -1950,10 +1950,72 @@ body.resizing #web-views { pointer-events: none; }
 .account-actions .lib-btn { cursor: pointer; }
 
 /* Settings topic tabs */
-.settings-tabs { display: flex; gap: 4px; flex-wrap: wrap; margin-bottom: 16px; border-bottom: 1px solid var(--border); }
-.settings-tab { background: transparent; border: 0; border-bottom: 2px solid transparent; color: var(--muted); font-size: 13px; font-weight: 600; padding: 8px 12px; cursor: pointer; }
-.settings-tab:hover { color: var(--text); }
-.settings-tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+/* ---------- Settings, as a page ----------
+   A browser opens settings in a tab, not a dialog. Two columns: a nav rail that
+   stays put, and a content column that scrolls — so the sections have room to
+   breathe instead of being squeezed into a modal. */
+#settings-view {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  display: grid;
+  grid-template-columns: 248px 1fr;
+  background: var(--bg);
+  overflow: hidden;
+}
+#settings-view[hidden] { display: none; }
+
+#settings-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 22px 12px;
+  border-right: 1px solid var(--border);
+  overflow-y: auto;
+}
+.settings-nav-head {
+  font-size: 20px;
+  font-weight: 600;
+  color: var(--text);
+  padding: 0 12px 18px;
+}
+/* Rail items: a pill highlight on the active one, the way Chrome's settings nav
+   reads. The old horizontal underline tabs don't survive the move. */
+.settings-tab {
+  background: transparent;
+  border: 0;
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 13.5px;
+  font-weight: 500;
+  text-align: left;
+  padding: 9px 14px;
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s;
+}
+.settings-tab:hover { color: var(--text); background: rgba(255, 255, 255, 0.05); }
+.settings-tab.active {
+  color: var(--text);
+  background: color-mix(in srgb, var(--accent) 20%, transparent);
+  font-weight: 600;
+}
+
+#settings-content {
+  overflow-y: auto;
+  padding: 22px 0 80px;
+}
+/* Cards, centred with a comfortable measure — settings shouldn't stretch to a
+   1600px window's full width. */
+#settings-content .setting-group {
+  max-width: 720px;
+  margin: 0 auto 14px;
+  padding: 20px 22px;
+  border: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--panel);
+}
+#settings-content .settings-version { max-width: 720px; margin: 6px auto 0; padding: 0 22px; }
 
 /* History multi-select bar (mirrors #tab-select-bar) */
 #lib-select-bar { display: flex; align-items: center; gap: 8px; padding: 8px 12px; background: rgba(123, 224, 163, 0.10); border-bottom: 1px solid var(--border); font-size: 12px; color: var(--text); }

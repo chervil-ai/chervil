@@ -105,8 +105,9 @@ const els = {
   save: document.getElementById('save-btn'),
   // Settings
   settingsBtn: document.getElementById('settings-btn'),
-  settingsModal: document.getElementById('settings-modal'),
-  settingsClose: document.getElementById('settings-close'),
+  settingsView: document.getElementById('settings-view'),
+  settingsNav: document.getElementById('settings-nav'),
+  settingsContent: document.getElementById('settings-content'),
   providerKeyRow: document.getElementById('provider-key-row'),
   providerKeyLabel: document.getElementById('provider-key-label'),
   apiKeyInput: document.getElementById('api-key-input'),
@@ -2079,10 +2080,26 @@ function hideWebviews() {
 // is still live.
 let liveSrcdoc = '';
 
+// Settings is the fourth thing that can occupy the viewport, beside the page
+// frame, the webviews and the welcome overlay. It lives in the main document
+// rather than in #page-frame because that frame is sandboxed without
+// allow-same-origin, and Settings needs `settings`, els.* and IPC directly.
+function renderSettingsView(entry) {
+  hideWebviews();
+  els.frame.hidden = true;
+  els.frame.removeAttribute('srcdoc');
+  liveSrcdoc = '';
+  els.overlay.hidden = true;
+  els.settingsView.hidden = false;
+  refreshSettingsUI();
+  setSettingsTab((entry && entry.settingsGroup) || 'general');
+}
+
 function showOverlay() {
   els.frame.hidden = false;
   els.frame.removeAttribute('srcdoc');
   liveSrcdoc = '';
+  els.settingsView.hidden = true;
   hideWebviews();
   els.overlay.hidden = false;
   renderSuggestions();
@@ -2092,6 +2109,7 @@ function renderPageHtml(html, scrollY = 0) {
   hideWebviews();
   els.frame.hidden = false;
   els.overlay.hidden = true;
+  els.settingsView.hidden = true;
   // Append the Chervil runtime (link routing + applet bridge), plus an optional
   // scroll restore so the page doesn't jump to the top on each streaming re-render.
   const restore = scrollY > 0
@@ -2132,6 +2150,7 @@ function renderSite(url) {
   els.frame.removeAttribute('srcdoc');
   liveSrcdoc = '';
   els.overlay.hidden = true;
+  els.settingsView.hidden = true;
   const tab = activeTab();
   if (!tab) return;
   const wv = ensureWebview(tab);
@@ -2180,6 +2199,14 @@ function renderCurrentPage() {
     renderSite(entry.url);
     setOmnibox(entry.url);
     setBadge('live', 'live site');
+    els.save.disabled = true;
+    setRemixVisible(false);
+  } else if (entry.kind === 'settings') {
+    // Must come before the composed-page branch: that's the catch-all `else`, and
+    // a settings entry has no html to render.
+    renderSettingsView(entry);
+    setOmnibox('Settings');
+    setBadge('', 'settings');
     els.save.disabled = true;
     setRemixVisible(false);
   } else {
@@ -3160,7 +3187,7 @@ let cachedVoices = [];
 function loadVoices() {
   try { cachedVoices = window.speechSynthesis.getVoices() || []; } catch { cachedVoices = []; }
   // Voices often arrive asynchronously — refresh the picker if Settings is open.
-  if (els.voiceSelect && els.settingsModal.classList.contains('open')) populateVoiceSelect();
+  if (els.voiceSelect && settingsOpen()) populateVoiceSelect();
 }
 if (window.speechSynthesis) {
   loadVoices();
@@ -4187,7 +4214,7 @@ async function lockVault(reason) {
     if (!st || !st.ok || !st.unlocked) return; // already locked / not set up
     await window.chervil.creds.lock();
     updatePwFillButton();
-    if (els.settingsModal && els.settingsModal.classList.contains('open')) { renderCredsPanel(); renderCardsPanel(); }
+    if (settingsOpen()) { renderCredsPanel(); renderCardsPanel(); }
     if (reason === 'idle') toast('Passwords locked (idle).');
   } catch { /* ignore */ }
 }
@@ -9599,13 +9626,13 @@ function applySettingsToUI() {
     const el = document.getElementById('af-' + k);
     if (el) el.value = (settings.autofill && settings.autofill[k]) || '';
   }
-  for (const r of els.settingsModal.querySelectorAll('input[name="linkBehavior"]')) {
+  for (const r of els.settingsView.querySelectorAll('input[name="linkBehavior"]')) {
     r.checked = r.value === settings.linkBehavior;
   }
-  for (const r of els.settingsModal.querySelectorAll('input[name="followupMode"]')) {
+  for (const r of els.settingsView.querySelectorAll('input[name="followupMode"]')) {
     r.checked = r.value === settings.followupMode;
   }
-  for (const r of els.settingsModal.querySelectorAll('input[name="provider"]')) {
+  for (const r of els.settingsView.querySelectorAll('input[name="provider"]')) {
     r.checked = r.value === settings.provider;
   }
   applyProviderUI();
@@ -10156,7 +10183,7 @@ function fetchModelsFor(p) {
   window.chervil.listModels(providerConfig()).then((res) => {
     if (res && res.ok && Array.isArray(res.models) && res.models.length) {
       liveModels[p] = res.models;
-      if (settings.provider === p && els.settingsModal.classList.contains('open')) {
+      if (settings.provider === p && settingsOpen()) {
         populateModelSelect();
       }
     }
@@ -10190,9 +10217,9 @@ function refreshKeyStatus() {
 
 // Settings topic tabs: show only the sections for the active group.
 function setSettingsTab(group) {
-  const modal = els.settingsModal;
-  modal.querySelectorAll('.settings-tab').forEach((b) => b.classList.toggle('active', b.dataset.sgroup === group));
-  modal.querySelectorAll('[data-sgroup]').forEach((el) => {
+  const view = els.settingsView;
+  view.querySelectorAll('.settings-tab').forEach((b) => b.classList.toggle('active', b.dataset.sgroup === group));
+  view.querySelectorAll('[data-sgroup]').forEach((el) => {
     if (el.classList.contains('settings-tab')) return; // the tab buttons themselves
     el.style.display = el.dataset.sgroup === group ? '' : 'none';
   });
@@ -10443,15 +10470,37 @@ function onOmniTrayOutside(e) {
 }
 function onOmniTrayEsc(e) { if (e.key === 'Escape') closeOmniTray(); }
 
-function openSettings() {
+// Is the Settings page what's on screen?
+function settingsOpen() { return !!(els.settingsView && !els.settingsView.hidden); }
+
+// Pull every panel's live state into the page. Called whenever Settings is shown —
+// including on a tab switch back to it, so a session that changed elsewhere can't
+// leave stale values on screen.
+function refreshSettingsUI() {
   applySettingsToUI();
   renderToolbarPrefs();
   renderSyncFolder();
   renderAccountBox();
   refreshPrivacyUI();
   renderIndexSettings();   // Your Web: reflect the toggle/excludes + live counts
-  setSettingsTab('general');
-  els.settingsModal.classList.add('open');
+}
+
+// Settings opens in a TAB, the way a browser does it — so it has a title, sits in
+// back/forward, and can be left open in the background. Reuses an existing
+// Settings tab rather than piling up duplicates (Chrome does the same).
+function openSettings(group = 'general') {
+  const existing = tabs.find((t) => { const e = currentEntry(t); return e && e.kind === 'settings'; });
+  if (existing) {
+    switchTab(existing.id);
+    setSettingsTab(group);
+    return;
+  }
+  const tab = newTab(true);
+  pushEntry(tab, { kind: 'settings', title: 'Settings', settingsGroup: group });
+  tab.title = 'Settings';
+  renderTabs();
+  renderCurrentPage();
+  scheduleSave();
 }
 
 // Settings → You: show the user's Chervil account (Pro/free) with links to /me
@@ -10490,7 +10539,7 @@ async function renderAccountBox() {
   box.appendChild(hint('Checking your account…'));
   let res = null;
   try { res = window.chervil.accountStatus ? await window.chervil.accountStatus({ token: settings.publishToken, baseUrl: base }) : null; } catch { /* ignore */ }
-  if (!els.settingsModal.classList.contains('open')) return; // closed while we waited
+  if (!settingsOpen()) return; // navigated away while we waited
   box.innerHTML = '';
 
   if (!res || !res.ok) {
@@ -10525,8 +10574,14 @@ async function renderAccountBox() {
   box.appendChild(acts);
 }
 
+// Leaving Settings is leaving a page, not dismissing a dialog: go back if there's
+// somewhere to go back to, else close the tab. Esc still does what it always did.
 function closeSettings() {
-  els.settingsModal.classList.remove('open');
+  const tab = activeTab();
+  const entry = currentEntry(tab);
+  if (!entry || entry.kind !== 'settings') return;
+  if (parentOf(tab, entry)) goBack();
+  else closeTab(tab.id);
 }
 
 // ---- Sync folder (#1: free folder-sync on-ramp) ----
@@ -12222,19 +12277,17 @@ els.voiceTest.addEventListener('click', testVoice);
 els.profileInput.addEventListener('input', () => { settings.profile = els.profileInput.value; scheduleSave(); });
 
 // Settings
-els.settingsBtn.addEventListener('click', openSettings);
-els.settingsClose.addEventListener('click', closeSettings);
-{
-  const tabs = document.getElementById('settings-tabs');
-  if (tabs) tabs.addEventListener('click', (e) => {
-    const btn = e.target.closest('.settings-tab');
-    if (btn) setSettingsTab(btn.dataset.sgroup);
-  });
-}
-els.settingsModal.addEventListener('click', (e) => {
-  if (e.target === els.settingsModal) closeSettings();
+els.settingsBtn.addEventListener('click', () => openSettings());
+if (els.settingsNav) els.settingsNav.addEventListener('click', (e) => {
+  const btn = e.target.closest('.settings-tab');
+  if (!btn) return;
+  setSettingsTab(btn.dataset.sgroup);
+  // Remember the section on the entry so a tab switch (or a restart) comes back to
+  // where you were, rather than resetting to General like the dialog did.
+  const entry = currentEntry(activeTab());
+  if (entry && entry.kind === 'settings') { entry.settingsGroup = btn.dataset.sgroup; scheduleSave(); }
 });
-els.settingsModal.addEventListener('change', (e) => {
+els.settingsView.addEventListener('change', (e) => {
   const t = e.target;
   if (t && t.name === 'linkBehavior') settings.linkBehavior = t.value;
   else if (t && t.name === 'followupMode') settings.followupMode = t.value;
@@ -12616,7 +12669,7 @@ if (els.importAddressBtn) els.importAddressBtn.addEventListener('click', importA
 // When the user comes back from the OS Default apps window, refresh the status
 // line so it flips to "Chervil is your default browser." without reopening Settings.
 window.addEventListener('focus', () => {
-  if (els.settingsModal && els.settingsModal.classList.contains('open')) refreshPrivacyUI();
+  if (settingsOpen()) refreshPrivacyUI();
 });
 if (els.adblockToggle) els.adblockToggle.addEventListener('change', async () => {
   settings.adblock = els.adblockToggle.checked;
@@ -12745,7 +12798,7 @@ document.addEventListener('keydown', (e) => {
     if (els.agentsView.classList.contains('open')) { closeAgents(); return; }
     if (els.schedView.classList.contains('open')) { closeSched(); return; }
     if (els.mapView.classList.contains('open')) { closeMap(); return; }
-    if (els.settingsModal.classList.contains('open')) { closeSettings(); return; }
+    if (settingsOpen()) { closeSettings(); return; }
     if (els.libraryDrawer.classList.contains('open')) { closeDrawer(); return; }
     // Nothing else consumed Esc — stop the active tab if it's composing.
     if (activeId && isTabBusy(activeId)) { stopActiveCompose(); return; }

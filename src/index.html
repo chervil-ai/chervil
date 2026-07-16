@@ -210,86 +210,15 @@
           </div>
         </div>
 
-        <!-- Remix bar: transform the current composed page -->
-        <div id="remix-bar" hidden>
-          <button id="remix-min" class="remix-btn remix-min" title="Minimize this bar">▾</button>
-          <!-- In-page follow-up: refine THIS composed page in place, without leaving it -->
-          <form id="followup-form" class="followup" autocomplete="off">
-            <input id="followup-input" type="text" spellcheck="false" autocomplete="off"
-                   placeholder="Ask a follow-up to refine this page…" title="Refine this page in place — e.g. “focus on the budget options”, “make it shorter”, “add a section on X”" />
-            <button id="followup-send" type="submit" class="followup-send" title="Refine this page (Enter)">↳</button>
-          </form>
-          <span class="remix-sep"></span>
-          <span class="remix-label">Remix</span>
-          <button class="remix-btn" data-remix="summary">Summarize</button>
-          <button class="remix-btn" data-remix="simplify">Simplify</button>
-          <button class="remix-btn" data-remix="deeper">Go deeper</button>
-          <button class="remix-btn" data-remix="slides">Slides</button>
-          <button class="remix-btn" data-remix="keypoints">Key points</button>
-          <button id="audio-btn" class="remix-btn audio">🔊 Audio</button>
-          <span class="remix-sep"></span>
-          <button id="refresh-page-btn" class="remix-btn" title="Re-run this page's query and update it in place">↻ Refresh</button>
-          <button id="verify-btn" class="remix-btn verify" title="Fact-check this page against the live web">✓ Verify</button>
-          <button id="sources-btn" class="remix-btn" title="Sources Sprig used">Sources</button>
-          <select id="export-select" class="live-select" title="Export or share this page as a file">
-            <option value="">⤓ Export…</option>
-            <option value="share">🔗 Shareable page (.chervil)</option>
-            <option value="pdf">PDF (.pdf)</option>
-            <option value="png">Image — PNG (.png)</option>
-            <option value="jpg">Image — JPG (.jpg)</option>
-            <option value="gif">Animated GIF (.gif)</option>
-            <option value="pptx">PowerPoint (.pptx)</option>
-            <option value="docx">Word (.docx)</option>
-            <option value="xlsx">Excel (.xlsx)</option>
-            <option value="epub">📚 eBook — EPUB / Kindle (.epub)</option>
-            <option value="print-book">🖨 Print-ready PDF — book (.pdf)</option>
-            <option value="lesson">📱 Mobile lesson (.html)</option>
-            <option value="lesson-publish">🌐 Publish to web (Pro)</option>
-          </select>
-          <span class="remix-sep"></span>
-          <select id="live-select" class="live-select" title="Keep this page auto-updated">
-            <option value="off">⏱ Live: off</option>
-            <option value="300000">every 5 min</option>
-            <option value="900000">every 15 min</option>
-            <option value="1800000">every 30 min</option>
-            <option value="3600000">every hour</option>
-            <option value="21600000">every 6 hours</option>
-          </select>
-          <span id="live-status" class="live-status" hidden></span>
-        </div>
-
-        <!-- Collapsed remix-bar handle (re-expands the bar) -->
-        <button id="remix-handle" class="remix-handle" hidden title="Show page actions">✦ Remix</button>
-
-        <!-- Sources / "show your work" panel -->
-        <div id="sources-panel" hidden>
-          <div class="sources-head">
-            <span class="sources-title">Grounding</span>
-            <button id="sources-close" class="modal-close" title="Close">✕</button>
-          </div>
-          <div id="sources-list"></div>
-        </div>
-
-        <!-- Audio player (appears while narrating) -->
-        <div id="audio-bar" hidden>
-          <span id="audio-title">🔊 Reading this page</span>
-          <button id="audio-toggle" class="audio-ctrl">Pause</button>
-          <button id="audio-stop" class="audio-ctrl">Stop</button>
-        </div>
-      </div>
-    </main>
-    </div>
-  </div>
-
-  <!-- Settings modal -->
-  <div id="settings-modal" class="modal">
-    <div class="modal-card">
-      <header class="modal-head">
-        <h2>Settings</h2>
-        <button id="settings-close" class="modal-close" title="Close">✕</button>
-      </header>
-
-      <nav id="settings-tabs" class="settings-tabs">
+        <!-- Settings, as a page rather than a dialog (a browser opens settings in a
+             tab). It lives HERE, in the main document, and not in #page-frame:
+             that frame is sandboxed without allow-same-origin, and Settings needs
+             direct access to `settings`, els.* and IPC. Weakening the sandbox for
+             a settings screen would be a bad trade, so this is a third viewport
+             view alongside the frame and the overlay — same idea as #overlay. -->
+        <div id="settings-view" hidden>
+          <nav id="settings-nav" aria-label="Settings sections">
+            <div class="settings-nav-head">Settings</div>
         <button class="settings-tab active" data-sgroup="general">General</button>
         <button class="settings-tab" data-sgroup="browser">Browser</button>
         <button class="settings-tab" data-sgroup="ai">AI</button>
@@ -297,7 +226,9 @@
         <button class="settings-tab" data-sgroup="publishing">Publishing &amp; Sync</button>
         <button class="settings-tab" data-sgroup="security">Security</button>
         <button class="settings-tab" data-sgroup="you">You</button>
-      </nav>
+          </nav>
+          <div id="settings-content">
+
 
       <section class="setting-group" data-sgroup="general">
         <h3>When you click a link in a composed page</h3>
@@ -840,9 +771,81 @@
         · <button id="docs-link-btn" type="button" class="link-btn">Documentation</button>
         <span id="update-status" class="update-status"></span>
       </p>
+          </div>
+        </div>
+
+        <!-- Remix bar: transform the current composed page -->
+        <div id="remix-bar" hidden>
+          <button id="remix-min" class="remix-btn remix-min" title="Minimize this bar">▾</button>
+          <!-- In-page follow-up: refine THIS composed page in place, without leaving it -->
+          <form id="followup-form" class="followup" autocomplete="off">
+            <input id="followup-input" type="text" spellcheck="false" autocomplete="off"
+                   placeholder="Ask a follow-up to refine this page…" title="Refine this page in place — e.g. “focus on the budget options”, “make it shorter”, “add a section on X”" />
+            <button id="followup-send" type="submit" class="followup-send" title="Refine this page (Enter)">↳</button>
+          </form>
+          <span class="remix-sep"></span>
+          <span class="remix-label">Remix</span>
+          <button class="remix-btn" data-remix="summary">Summarize</button>
+          <button class="remix-btn" data-remix="simplify">Simplify</button>
+          <button class="remix-btn" data-remix="deeper">Go deeper</button>
+          <button class="remix-btn" data-remix="slides">Slides</button>
+          <button class="remix-btn" data-remix="keypoints">Key points</button>
+          <button id="audio-btn" class="remix-btn audio">🔊 Audio</button>
+          <span class="remix-sep"></span>
+          <button id="refresh-page-btn" class="remix-btn" title="Re-run this page's query and update it in place">↻ Refresh</button>
+          <button id="verify-btn" class="remix-btn verify" title="Fact-check this page against the live web">✓ Verify</button>
+          <button id="sources-btn" class="remix-btn" title="Sources Sprig used">Sources</button>
+          <select id="export-select" class="live-select" title="Export or share this page as a file">
+            <option value="">⤓ Export…</option>
+            <option value="share">🔗 Shareable page (.chervil)</option>
+            <option value="pdf">PDF (.pdf)</option>
+            <option value="png">Image — PNG (.png)</option>
+            <option value="jpg">Image — JPG (.jpg)</option>
+            <option value="gif">Animated GIF (.gif)</option>
+            <option value="pptx">PowerPoint (.pptx)</option>
+            <option value="docx">Word (.docx)</option>
+            <option value="xlsx">Excel (.xlsx)</option>
+            <option value="epub">📚 eBook — EPUB / Kindle (.epub)</option>
+            <option value="print-book">🖨 Print-ready PDF — book (.pdf)</option>
+            <option value="lesson">📱 Mobile lesson (.html)</option>
+            <option value="lesson-publish">🌐 Publish to web (Pro)</option>
+          </select>
+          <span class="remix-sep"></span>
+          <select id="live-select" class="live-select" title="Keep this page auto-updated">
+            <option value="off">⏱ Live: off</option>
+            <option value="300000">every 5 min</option>
+            <option value="900000">every 15 min</option>
+            <option value="1800000">every 30 min</option>
+            <option value="3600000">every hour</option>
+            <option value="21600000">every 6 hours</option>
+          </select>
+          <span id="live-status" class="live-status" hidden></span>
+        </div>
+
+        <!-- Collapsed remix-bar handle (re-expands the bar) -->
+        <button id="remix-handle" class="remix-handle" hidden title="Show page actions">✦ Remix</button>
+
+        <!-- Sources / "show your work" panel -->
+        <div id="sources-panel" hidden>
+          <div class="sources-head">
+            <span class="sources-title">Grounding</span>
+            <button id="sources-close" class="modal-close" title="Close">✕</button>
+          </div>
+          <div id="sources-list"></div>
+        </div>
+
+        <!-- Audio player (appears while narrating) -->
+        <div id="audio-bar" hidden>
+          <span id="audio-title">🔊 Reading this page</span>
+          <button id="audio-toggle" class="audio-ctrl">Pause</button>
+          <button id="audio-stop" class="audio-ctrl">Stop</button>
+        </div>
+      </div>
+    </main>
     </div>
   </div>
 
+  <!-- Settings modal -->
   <!-- Data folders modal: designate folders and pull files into a query -->
   <div id="folders-modal" class="modal">
     <div class="modal-card">
