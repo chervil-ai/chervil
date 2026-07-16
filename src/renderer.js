@@ -10200,8 +10200,8 @@ function setSettingsTab(group) {
 
 // ---- Customizable top-bar buttons ----
 // The optional omnibar action buttons. Settings (⚙) and core nav (sidebar, back,
-// forward, omnibox) are always shown. A button is hidden when settings.toolbar[key]
-// === false (missing = shown).
+// forward, omnibox) are always shown. settings.toolbar[key] === false moves a
+// button into the ⋯ menu; missing = the default below.
 const TOOLBAR_BUTTONS = [
   { key: 'map', id: 'map-btn', label: 'Map' },
   { key: 'history', id: 'history-btn', label: 'Library' },
@@ -10225,13 +10225,29 @@ const TOOLBAR_BUTTONS = [
   { key: 'print', id: 'print-btn', label: 'Print' },
 ];
 
-function toolbarVisible(key) { return !settings.toolbar || settings.toolbar[key] !== false; }
+// Which of them earn a permanent seat in the bar.
+//
+// Chrome shows four icons and a menu. Chervil defined twenty and showed all of
+// them, and no amount of styling makes a twenty-icon bar read as a browser — it
+// was the single biggest reason Chervil didn't look like one. So the bar keeps the
+// handful you reach for on most pages, and everything else lives in the ⋯ menu.
+//
+// "Not in the bar" means IN THE MENU — never gone. These are the features Chrome
+// doesn't have and the reason to switch to Chervil; burying them beyond reach
+// would trade the product for the paint. 🔑/💳 stay on because they're already
+// context-gated (hidden until a page actually has a saved login/card to fill).
+const TOOLBAR_BAR_DEFAULT = new Set(['history', 'bookmark', 'favorite', 'askPage', 'snip', 'pwFill', 'cardFill']);
+
+// Does this button sit in the bar itself? An explicit choice always wins; absent
+// one, the Chrome-like default above decides.
+function toolbarVisible(key) {
+  const t = settings.toolbar || {};
+  return typeof t[key] === 'boolean' ? t[key] : TOOLBAR_BAR_DEFAULT.has(key);
+}
 
 function applyToolbar() {
-  for (const b of TOOLBAR_BUTTONS) {
-    const el = document.getElementById(b.id);
-    if (el) el.classList.toggle('btn-off', !toolbarVisible(b.key));
-  }
+  // Placement is reflowOmnibar's job now — a button that isn't in the bar is moved
+  // into the ⋯ menu rather than hidden, so nothing becomes unreachable.
   // The 🔑/💳 fill buttons are also context-sensitive (only on live sites with
   // saved creds), so re-evaluate them and keep the Security-tab checkboxes — a
   // second entry point to the same toggle — in sync with the toolbar options.
@@ -10362,16 +10378,31 @@ function reflowOmnibar() {
   for (const node of omniOriginalOrder) actions.appendChild(node);
   more.hidden = true;
 
-  // 2. If it all fits now, we're done.
+  // 2. Anything without a seat in the bar goes to the ⋯ menu — whatever the
+  //    window width. This is what keeps the bar short at ANY size (the old code
+  //    only trayed under width pressure, so on a wide screen all twenty showed).
+  //    Contextual buttons that are currently `hidden` (🔑/💳 with nothing to fill)
+  //    stay hidden rather than becoming menu clutter.
+  let trayed = 0;
+  for (const b of TOOLBAR_BUTTONS) {
+    if (toolbarVisible(b.key)) continue;
+    const el = document.getElementById(b.id);
+    if (!el || el.hidden) continue;
+    tray.appendChild(el);
+    trayed++;
+  }
+  if (trayed) more.hidden = false;
+
+  // 3. If what's left fits, we're done.
   const fits = () => bar.scrollWidth <= bar.clientWidth + 1;
   if (fits()) return;
 
-  // 3. Move buttons into the tray, lowest-priority first, until it fits.
+  // 4. Still too wide — push bar buttons into the tray too, lowest-priority first.
   more.hidden = false;
   for (const id of OMNI_OVERFLOW_ORDER) {
     if (fits()) break;
     const el = document.getElementById(id);
-    if (!el || el.offsetWidth === 0) continue; // skip hidden / user-disabled buttons
+    if (!el || el.offsetWidth === 0) continue; // skip hidden ones
     tray.appendChild(el);
   }
 }

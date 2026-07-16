@@ -15,6 +15,11 @@
   --radius-md: 10px;   /* buttons, fields */
   --radius-lg: 14px;   /* cards */
   --radius-xl: 20px;   /* modals, large panels */
+  /* The window frame behind the tab strip. Darker than --panel so the active tab,
+     which shares --panel with the toolbar, reads as one continuous surface lifted
+     out of the frame — that silhouette is most of what makes a browser look like
+     a browser. */
+  --frame: #080a0e;
   --scrollbar: #2b3147;
   --sidebar-w: 380px;  /* chat sidebar — user-resizable (drag the seam) */
   --vtabs-w: 212px;    /* vertical tab rail — user-resizable */
@@ -128,8 +133,9 @@ body.resizing #web-views { pointer-events: none; }
   align-items: stretch;
   gap: 4px;
   padding: 6px 8px 0;
-  background: #080a0e;
-  border-bottom: 1px solid var(--border);
+  background: var(--frame);
+  /* No divider: the active tab has to flow into the toolbar without a line
+     cutting between them. That join is the whole effect. */
   overflow-x: auto;
 }
 #tabstrip::-webkit-scrollbar { height: 0; }
@@ -143,16 +149,21 @@ body.resizing #web-views { pointer-events: none; }
   max-width: 220px;
   min-width: 120px;
   padding: 8px 10px 8px 12px;
-  background: var(--panel);
-  border: 1px solid var(--border);
-  border-bottom: none;
+  /* Inactive tabs are just labels on the frame — no fill, no outline. Outlining
+     every tab is what made the strip read as a row of cards instead of tabs. */
+  background: transparent;
+  border: 0;
   border-radius: 9px 9px 0 0;
   color: var(--muted);
   font-size: 13px;
   cursor: pointer;
   user-select: none;
 }
-.tab.active { background: var(--panel-2); color: var(--text); }
+.tab:hover:not(.active) { background: rgba(255, 255, 255, 0.05); }
+/* --panel is exactly #omnibar's background, so the active tab and the toolbar are
+   one surface with no seam — the browser silhouette. Don't give this its own
+   colour: if it drifts from the toolbar the join reappears as a visible step. */
+.tab.active { background: var(--panel); color: var(--text); }
 .tab .tab-title {
   flex: 1;
   white-space: nowrap;
@@ -231,7 +242,7 @@ body.resizing #web-views { pointer-events: none; }
   left: 0;
   right: 0;
   z-index: 500;
-  background: #080a0e;
+  background: var(--frame);
   padding-bottom: 6px;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
 }
@@ -277,9 +288,12 @@ body.resizing #web-views { pointer-events: none; }
   flex-direction: column;
   gap: 5px;
 }
+/* The rail has no toolbar to merge into, so tabs stay self-contained cards here —
+   restore the fill the horizontal tabs just dropped. */
 #app.vtabs .tab {
   max-width: none;
   min-width: 0;
+  background: var(--panel);
   border: 1px solid var(--border);
   border-radius: 8px;
 }
@@ -955,7 +969,7 @@ body.resizing #web-views { pointer-events: none; }
    shrink further and tighten the cluster so nothing is pushed offscreen. */
 @container omnibar (max-width: 720px) {
   #omni-actions { gap: 4px; padding-left: 8px; }
-  #omnibar #page-title { min-width: 120px; }
+  #omnibar #omni-wrap { min-width: 120px; }
   #mode-badge { display: none; }
 }
 /* Minimum window (900px) with the sidebar open leaves the bar very narrow —
@@ -964,10 +978,8 @@ body.resizing #web-views { pointer-events: none; }
   #omnibar { gap: 8px; }
   #omnibar .omni-btn, #omni-actions .omni-btn.text { width: 28px; height: 28px; font-size: 14px; }
   #omni-actions { gap: 2px; padding-left: 6px; margin-left: 2px; }
-  #omnibar #page-title { min-width: 80px; padding: 7px 9px; }
+  #omnibar #omni-wrap { min-width: 80px; height: 30px; padding: 0 4px 0 9px; }
 }
-
-#mode-badge { margin-left: 2px; }
 
 /* Overflow tray — holds the toolbar buttons that don't fit the current width.
    Hidden until the ⋯ button opens it; positioned as a popover by reflowOmnibar. */
@@ -1010,27 +1022,64 @@ body.resizing #web-views { pointer-events: none; }
 /* The .text buttons (Map, Library, …) already contain a .lbl span — show it. */
 #omni-overflow-tray.open .omni-btn.text { width: 100%; padding: 0 10px; }
 #omni-overflow-tray.open .omni-btn.text .lbl { display: inline; font-size: 13px; }
+/* Zoom is a cluster, not a button — in the menu it reads as one row (− 100% +),
+   the way Chrome's ⋮ menu presents it, rather than three stacked full-width rows. */
+#omni-overflow-tray.open .omni-zoom {
+  display: flex;
+  width: 100%;
+  gap: 4px;
+  padding: 2px 6px;
+  box-sizing: border-box;
+}
+#omni-overflow-tray.open .omni-zoom .omni-btn {
+  width: auto;
+  flex: 1;
+  height: 30px;
+  justify-content: center;
+}
 
-#page-title {
+/* Omnibox — a browser address bar, not a form field.
+   The pill lives on the wrapper so the mode chip can sit inside it. A resting
+   fill with no visible border is what makes a browser's top bar read as calm:
+   the bar is a surface with one soft well in it, rather than a row of outlined
+   inputs. Border and ring appear only on focus. */
+#omni-wrap {
   flex: 1 1 auto;
   min-width: 240px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 34px;
+  box-sizing: border-box;
+  padding: 0 6px 0 12px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.06);
+  transition: background 0.12s, border-color 0.12s, box-shadow 0.12s;
+}
+#omni-wrap:hover { background: rgba(255, 255, 255, 0.09); }
+#omni-wrap:focus-within {
+  background: var(--panel);
+  border-color: var(--accent);
+  /* Was a hard-coded green that predated --accent going blue; derive it so the
+     ring can never drift from the accent again. */
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 20%, transparent);
+}
+#page-title {
+  flex: 1 1 auto;
+  min-width: 0;
   font-size: 14px;
   color: var(--text);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  /* Omnibox: an editable address/ask bar */
-  border: 1px solid var(--border);
-  background: var(--panel-2);
-  border-radius: 10px;
-  padding: 7px 12px;
+  border: 0;
+  background: transparent;
+  padding: 0;
   font-family: inherit;
   outline: none;
-  transition: border-color 0.12s, background 0.12s;
 }
 #page-title::placeholder { color: var(--muted); }
-#page-title:hover { border-color: var(--accent); }
-#page-title:focus { border-color: var(--accent); background: var(--panel); box-shadow: 0 0 0 3px rgba(123, 224, 163, 0.12); }
 
 .badge {
   font-size: 11px;
@@ -1041,6 +1090,19 @@ body.resizing #web-views { pointer-events: none; }
   border-radius: 999px;
   padding: 3px 10px;
 }
+/* Inside the omnibox it's the leading chip — the place a browser puts context
+   about what you're looking at. Order matters visually, so it never wraps or
+   shrinks the address itself. */
+#mode-badge {
+  flex: none;
+  margin: 0;
+  border: 0;
+  padding: 2px 8px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.07);
+  font-weight: 600;
+}
+#mode-badge:empty { display: none; }
 .badge.live { color: #7be0a3; border-color: #2c5a40; }
 .badge.page { color: var(--accent); border-color: #2e3a66; }
 .badge.working { color: #ffd479; border-color: #5a4a2a; }

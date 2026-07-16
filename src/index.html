@@ -121,10 +121,17 @@
         <button id="back-btn" class="omni-btn" title="Back" disabled>‹</button>
         <button id="fwd-btn" class="omni-btn" title="Forward" disabled>›</button>
         <button id="reload-btn" class="omni-btn" title="Reload page" disabled>⟳</button>
-        <input id="page-title" class="omnibox" value="Welcome to Chervil" spellcheck="false"
-               autocomplete="off" autocapitalize="off"
-               title="Enter a URL, ask Sprig, or type a command (/learn, /quiz) — Ctrl+L to focus"
-               placeholder="Search, ask Sprig, or enter a URL…" />
+        <!-- The omnibox is the pill; #mode-badge rides inside it as the leading
+             chip (where a browser puts context) instead of trailing the button
+             cluster. The wrapper carries the pill so the chip can sit within it —
+             an <input> can't have children. -->
+        <div id="omni-wrap">
+          <div id="mode-badge" class="badge">ready</div>
+          <input id="page-title" class="omnibox" value="Welcome to Chervil" spellcheck="false"
+                 autocomplete="off" autocapitalize="off"
+                 title="Enter a URL, ask Sprig, or type a command (/learn, /quiz) — Ctrl+L to focus"
+                 placeholder="Search, ask Sprig, or enter a URL…" />
+        </div>
         <div id="omni-actions">
           <button id="map-btn" class="omni-btn text" title="Thinking canvas — map of this tab's pages">⌗ <span class="lbl">Map</span></button>
           <button id="history-btn" class="omni-btn text" title="Library — Saved Pages, Activity, Favorites, History, Downloads &amp; Trash">🕘 <span class="lbl">Library</span></button>
@@ -152,7 +159,6 @@
           <button id="print-btn" class="omni-btn" title="Print (Ctrl+P)">🖨</button>
           <button id="omni-overflow-btn" class="omni-btn" title="More toolbar actions" aria-haspopup="true" aria-expanded="false" hidden>⋯</button>
           <button id="settings-btn" class="omni-btn" title="Settings">⚙</button>
-          <div id="mode-badge" class="badge">ready</div>
         </div>
       </div>
 
@@ -440,7 +446,7 @@
 
       <section class="setting-group" data-sgroup="general">
         <h3>Toolbar buttons</h3>
-        <p class="group-hint">Choose which buttons show on the top bar. (You can also <strong>right-click the top bar</strong> for a quick toggle.)</p>
+        <p class="group-hint">Chervil keeps the top bar short, like a browser should — everything else lives in the <strong>⋯ menu</strong> at the end of the bar. Tick a button to give it a permanent seat on the bar instead. <strong>Nothing is ever removed:</strong> unticked just means it’s in the ⋯ menu. (You can also <strong>right-click the top bar</strong> for a quick toggle.)</p>
         <div id="toolbar-prefs"></div>
       </section>
 
