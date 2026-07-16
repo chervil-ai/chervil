@@ -652,6 +652,30 @@
         </label>
       </section>
 
+      <section class="setting-group" data-sgroup="security">
+        <h3>Your Web — search what you’ve read</h3>
+        <p class="group-hint">Chervil already keeps the pages <strong>it composes</strong> for you, so you can search them in the Library. It can also keep the <strong>text of the websites you read</strong> — then you can ask Sprig things like “what was that laptop review I read last month?” and get an answer from your own reading, instantly and for free.<br /><br />
+        This is <strong>local and private</strong>. The index is a file on this computer, it is <strong>never synced and never uploaded</strong>, and no AI ever sees a page just because you read it — the text only reaches your AI provider if you ask a question it answers, exactly like attaching a file. It’s <strong>off unless you turn it on.</strong></p>
+        <label class="toggle-row">
+          <input id="index-sites-toggle" type="checkbox" />
+          <span>Keep the text of websites I read, so I can search and ask about them later. <strong>Private tabs are never included</strong>, and neither is any page behind a login or paywall.</span>
+        </label>
+        <label class="field-label" for="index-excludes">Never keep these sites</label>
+        <span class="field-row">
+          <input id="index-excludes" type="text" placeholder="mybank.com, myhealth.org, webmail" spellcheck="false" />
+          <button id="index-excludes-save" type="button" class="lib-btn">Save</button>
+        </span>
+        <small class="field-note">Comma-separated. Any address containing one of these is skipped entirely.</small>
+        <p id="index-stats" class="group-hint">—</p>
+        <span class="field-row">
+          <button id="index-forget-hour" type="button" class="lib-btn">Forget the last hour</button>
+          <button id="index-forget-day" type="button" class="lib-btn">Forget today</button>
+          <button id="index-forget-site" type="button" class="lib-btn">Forget a site…</button>
+          <button id="index-delete-all" type="button" class="lib-btn">Delete everything</button>
+        </span>
+        <small class="field-note">These really delete — the rows are removed and the file compacted, not just hidden from the list.</small>
+      </section>
+
       <section class="setting-group" data-sgroup="voice">
         <h3>Listening — “Hey Sprig”</h3>
         <p class="group-hint">Let Chervil listen for a wake word and pop the Quick-Ask bar so you can speak a request hands-free. Detection runs <strong>fully on-device</strong> and free (<a href="https://github.com/dscripka/openWakeWord" target="_blank" rel="noreferrer">openWakeWord</a>, no account or key) — your mic audio never leaves the machine until you actually speak a command, which is then transcribed by your configured voice-input service above.</p>

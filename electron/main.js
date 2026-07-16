@@ -3034,8 +3034,16 @@ ipcMain.handle('chervil:index-restore', withIndex((idx, p) => { idx.restore(p.id
 ipcMain.handle('chervil:index-remove', withIndex((idx, p) => { idx.remove(p.id); return {}; }));
 ipcMain.handle('chervil:index-empty-trash', withIndex((idx) => { idx.emptyTrash(); return {}; }));
 ipcMain.handle('chervil:index-stats', withIndex((idx) => ({ stats: idx.stats() })));
+ipcMain.handle('chervil:index-evict-over', withIndex((idx, p) => {
+  idx.evictVisitedOver(Math.max(0, Number(p.max) || 5000));
+  return {};
+}));
 ipcMain.handle('chervil:index-forget-site', withIndex((idx, p) => { idx.forgetSite(p.host); return {}; }));
 ipcMain.handle('chervil:index-forget-since', withIndex((idx, p) => { idx.forgetSince(p.since); return {}; }));
+ipcMain.handle('chervil:index-forget-all', withIndex((idx, p) => {
+  idx.forgetAll({ includeComposed: !!p.includeComposed });
+  return { stats: idx.stats() };
+}));
 
 ipcMain.handle('chervil:save-state', async (event, state) => {
   // Secondary (ephemeral) windows must not write over the primary's saved session.

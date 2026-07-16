@@ -201,6 +201,15 @@ const els = {
   importAddressBtn: document.getElementById('import-address-btn'),
   importAddressStatus: document.getElementById('import-address-status'),
   adblockToggle: document.getElementById('adblock-toggle'),
+  // Your Web (RFC 0013)
+  indexSitesToggle: document.getElementById('index-sites-toggle'),
+  indexExcludes: document.getElementById('index-excludes'),
+  indexExcludesSave: document.getElementById('index-excludes-save'),
+  indexStats: document.getElementById('index-stats'),
+  indexForgetHour: document.getElementById('index-forget-hour'),
+  indexForgetDay: document.getElementById('index-forget-day'),
+  indexForgetSite: document.getElementById('index-forget-site'),
+  indexDeleteAll: document.getElementById('index-delete-all'),
   adblockStat: document.getElementById('adblock-stat'),
   spellcheckToggle: document.getElementById('spellcheck-toggle'),
   sharePopupToggle: document.getElementById('share-popup-toggle'),
@@ -356,6 +365,11 @@ function attachWebviewEvents(wv, tabId) {
     try { wv.setZoomFactor(zoomForTab(t)); } catch { /* not ready */ }
     try { wv.setAudioMuted(!!(t && t.muted)); } catch { /* not ready */ }
   });
+  // Your Web (RFC 0013): once a page has settled, keep its readable text so you can
+  // search what you've read. Off unless the user turned it on; scheduleSiteCapture
+  // owns the gates. did-stop-loading rather than dom-ready — client-rendered pages
+  // have nothing to read at dom-ready.
+  wv.addEventListener('did-stop-loading', () => scheduleSiteCapture(tabId, wv));
   // Audio badge: any tab (active or background) shows 🔊 while its site plays.
   wv.addEventListener('media-started-playing', () => {
     try { if (wv.isCurrentlyAudible && !wv.isCurrentlyAudible()) return; } catch { /* assume audible */ }
@@ -435,6 +449,13 @@ let settings = {
   bookmarksBar: false,       // show the bookmarks strip under the omnibar (Ctrl+Shift+B)
   favoritesBar: false,       // show the favorites strip (★ sites) under the omnibar
   collapsedFolders: [],      // ["favorites:Name" | "bookmarks:Name"] folder groups the user collapsed in the Library
+  // Your Web (RFC 0013). DEFAULT OFF, deliberately: keeping the text of every
+  // site you read is the most sensitive thing Chervil does, and "it was quietly
+  // recording my browsing" is an unrecoverable first impression. Composed pages
+  // are indexed regardless — you knowingly made those.
+  indexSites: false,         // keep the readable text of sites you visit, so Sprig can answer from your own reading
+  indexExcludes: [],         // hosts never captured (substring match), e.g. ["bank.com", "myhealth"]
+  indexMaxSites: 5000,       // captured-site budget; oldest are evicted past this (text-only, so ~hundreds of MB at worst)
   adblock: false,            // block common ad/tracker hosts in embedded sites (main-process filter)
   spellcheck: true,          // red squiggles + right-click suggestions in text fields (app + embedded sites)
   sharePopup: true,          // open share composers (Fedica, AddToAny…) in a popup window vs a tab
@@ -10111,6 +10132,7 @@ function openSettings() {
   renderSyncFolder();
   renderAccountBox();
   refreshPrivacyUI();
+  renderIndexSettings();   // Your Web: reflect the toggle/excludes + live counts
   setSettingsTab('general');
   els.settingsModal.classList.add('open');
 }
@@ -11622,6 +11644,83 @@ function onWebviewNavigated(tabId, url) {
   }
 }
 
+// ---- Your Web: capturing what you read (RFC 0013, phase 1c) ----
+//
+// Chervil kept only {url, title} for every site you visited — the same thing
+// Chrome does, from a product whose whole premise is that it can read. With this
+// on, it keeps the page's readable TEXT too, so "what was that laptop review I
+// read last month?" can be answered from your own reading instead of the web.
+//
+// Nothing here calls a model: the text goes straight to the local index and is
+// ranked by SQLite's own full-text search. Reading a page costs nothing, needs no
+// key, works offline, and sends nothing anywhere.
+
+// Readable text, run inside the site's own frame. Prefers article/main so the
+// index holds the piece you read rather than the nav and cookie banner around it.
+const CAPTURE_JS = `(function(){
+  try {
+    var drop = 'script,style,noscript,nav,header,footer,aside,form,iframe,svg,button,[aria-hidden="true"]';
+    var pick = document.querySelector('article') || document.querySelector('main')
+            || document.querySelector('[role="main"]') || document.body;
+    if (!pick) return null;
+    var c = pick.cloneNode(true);
+    var junk = c.querySelectorAll(drop);
+    for (var i = 0; i < junk.length; i++) junk[i].remove();
+    var text = (c.innerText || '').replace(/\\s+/g, ' ').trim();
+    // A password field means a login/paywall — that page is not yours to keep.
+    var authy = !!document.querySelector('input[type="password"]');
+    return { url: location.href, title: document.title || '', text: text, authy: authy };
+  } catch (e) { return null; }
+})()`;
+
+// Debounce per tab: a single navigation can settle more than once (redirects,
+// SPA route changes), and we want one capture per page, not one per event.
+const captureTimers = new Map();
+
+// Is capture allowed for this tab/url at all? Every gate here is a privacy
+// promise from the RFC — keep them in one place so none can be quietly skipped.
+function canCaptureSite(tab, url) {
+  if (!settings.indexSites) return false;              // off by default
+  if (!libraryFromIndex || !window.chervil.index) return false;
+  if (!url || !/^https?:\/\//i.test(url)) return false; // no about:, file:, data:
+  if (tab && tab.private) return false;                 // private tabs leave nothing behind
+  const host = hostOf(url) || '';
+  const excludes = Array.isArray(settings.indexExcludes) ? settings.indexExcludes : [];
+  if (excludes.some((p) => p && (host.includes(p) || url.includes(p)))) return false;
+  return true;
+}
+
+function scheduleSiteCapture(tabId, wv) {
+  const tab = tabs.find((t) => t.id === tabId);
+  let url = '';
+  try { url = wv.getURL() || ''; } catch { return; }
+  if (!canCaptureSite(tab, url)) return;
+  if (captureTimers.has(tabId)) clearTimeout(captureTimers.get(tabId));
+  // A beat after load so client-rendered pages have painted their content.
+  captureTimers.set(tabId, setTimeout(() => {
+    captureTimers.delete(tabId);
+    captureSite(tabId, wv).catch(() => {});
+  }, 1200));
+}
+
+async function captureSite(tabId, wv) {
+  const tab = tabs.find((t) => t.id === tabId);
+  let res = null;
+  try { res = await wv.executeJavaScript(CAPTURE_JS, false); } catch { return; }
+  if (!res || !res.text) return;
+  // Re-check: the user may have toggled capture off, or navigated, during the wait.
+  if (!canCaptureSite(tab, res.url)) return;
+  if (res.authy) return;                    // behind a login/paywall — not ours to keep
+  if (res.text.length < 200) return;        // a redirect stub or empty shell, not a read
+  try {
+    await window.chervil.index.putVisited({
+      id: uid(), url: res.url, title: res.title || hostOf(res.url), body: res.text,
+    });
+    // Keep captured sites inside the user's budget, oldest first.
+    if (window.chervil.index.evictOver) await window.chervil.index.evictOver(settings.indexMaxSites);
+  } catch { /* the index is an enhancement — never break browsing over it */ }
+}
+
 // Log a visited real site into browsing history (newest-first, deduped, capped).
 function recordSiteVisit(url, title, tab) {
   if (!url || !/^https?:\/\//i.test(url)) return;
@@ -12019,6 +12118,105 @@ if (els.notifyToggle) els.notifyToggle.addEventListener('change', () => {
   settings.notifications = els.notifyToggle.checked;
   scheduleSave();
 });
+
+// ---- Your Web controls (RFC 0013, phase 1c) ----
+// Everything the user can see and undo about their index lives here. The rule the
+// whole feature rests on: what's kept is visible, and deleting really deletes.
+
+async function renderIndexStats() {
+  if (!els.indexStats) return;
+  if (!window.chervil.index || !libraryFromIndex) {
+    els.indexStats.textContent = 'The page index isn’t available in this build.';
+    return;
+  }
+  try {
+    const r = await window.chervil.index.stats();
+    if (!r || !r.ok) { els.indexStats.textContent = ''; return; }
+    const { composed, visited } = r.stats;
+    const pages = `${composed.toLocaleString()} page${composed === 1 ? '' : 's'} Sprig composed`;
+    const sites = settings.indexSites
+      ? `, and ${visited.toLocaleString()} website${visited === 1 ? '' : 's'} you’ve read`
+      : (visited ? `, and ${visited.toLocaleString()} website${visited === 1 ? '' : 's'} kept from when this was on` : '');
+    els.indexStats.textContent = `On this computer: ${pages}${sites}. Searchable from the Library.`;
+  } catch { els.indexStats.textContent = ''; }
+}
+
+function renderIndexSettings() {
+  if (els.indexSitesToggle) els.indexSitesToggle.checked = !!settings.indexSites;
+  if (els.indexExcludes) els.indexExcludes.value = (settings.indexExcludes || []).join(', ');
+  renderIndexStats();
+}
+
+if (els.indexSitesToggle) els.indexSitesToggle.addEventListener('change', () => {
+  settings.indexSites = els.indexSitesToggle.checked;
+  scheduleSave();
+  renderIndexStats();
+  toast(settings.indexSites
+    ? 'Chervil will keep the text of sites you read — on this computer only.'
+    : 'Stopped keeping sites you read. What’s already kept stays until you delete it.');
+});
+
+if (els.indexExcludesSave) els.indexExcludesSave.addEventListener('click', () => {
+  settings.indexExcludes = String(els.indexExcludes.value || '')
+    .split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
+  scheduleSave();
+  toast(settings.indexExcludes.length
+    ? `Skipping ${settings.indexExcludes.length} site${settings.indexExcludes.length === 1 ? '' : 's'}.`
+    : 'No sites are being skipped.');
+});
+
+async function forgetSince(ms, label) {
+  if (!window.chervil.index) return;
+  if (!confirm(`Forget everything Chervil kept from ${label}? This can’t be undone.`)) return;
+  const r = await window.chervil.index.forgetSince(Date.now() - ms);
+  if (!r || !r.ok) { toast('Couldn’t delete that.'); return; }
+  await refreshLibraryFromIndex();
+  toast(`Forgot ${label}.`);
+}
+
+if (els.indexForgetHour) els.indexForgetHour.addEventListener('click', () => forgetSince(3600000, 'the last hour'));
+if (els.indexForgetDay) els.indexForgetDay.addEventListener('click', () => forgetSince(86400000, 'today'));
+
+if (els.indexForgetSite) els.indexForgetSite.addEventListener('click', async () => {
+  const host = prompt('Forget everything from which site? (e.g. example.com)');
+  if (!host || !host.trim()) return;
+  const r = await window.chervil.index.forgetSite(host.trim().toLowerCase());
+  if (!r || !r.ok) { toast('Couldn’t delete that.'); return; }
+  await refreshLibraryFromIndex();
+  toast(`Forgot everything from ${host.trim()}.`);
+});
+
+if (els.indexDeleteAll) els.indexDeleteAll.addEventListener('click', async () => {
+  // Two separate things live in here, and only one of them is "what I read".
+  // Wiping someone's own composed pages because they wanted their browsing
+  // forgotten would be its own kind of betrayal — so ask which.
+  const alsoPages = confirm(
+    'Delete the text of every website you\'ve read?\n\n'
+    + 'Click OK to ALSO delete the pages Sprig composed for you (your whole Library).\n'
+    + 'Click Cancel to keep those and delete only the websites you read.'
+  );
+  if (!confirm(alsoPages
+    ? 'Really delete EVERYTHING — your composed pages and the sites you read? This cannot be undone.'
+    : 'Really delete the text of every site you\'ve read? Your composed pages are kept. This cannot be undone.')) return;
+  const r = await window.chervil.index.forgetAll(alsoPages);
+  if (!r || !r.ok) { toast('Couldn’t delete the index.'); return; }
+  await refreshLibraryFromIndex();
+  toast(alsoPages ? 'Deleted everything.' : 'Deleted the sites you read.');
+});
+
+// Re-pull the drawer's rows after anything deletes behind its back.
+async function refreshLibraryFromIndex() {
+  if (!libraryFromIndex || !window.chervil.index) return;
+  try {
+    const res = await window.chervil.index.list({ withTrash: true, limit: MAX_LIBRARY });
+    if (res && res.ok && Array.isArray(res.items)) {
+      library = { history: res.items, trash: Array.isArray(res.trash) ? res.trash : [] };
+    }
+  } catch { /* leave the rows as they are */ }
+  libraryFts = { q: '', items: null };
+  renderDrawer();
+  renderIndexStats();
+}
 
 // Hero-image toggle (opt-in; uses a BYO OpenAI/Gemini key).
 if (els.heroToggle) els.heroToggle.addEventListener('change', () => {

@@ -82,8 +82,12 @@ contextBridge.exposeInMainWorld('chervil', {
     remove: (id) => ipcRenderer.invoke('chervil:index-remove', { id }),
     emptyTrash: () => ipcRenderer.invoke('chervil:index-empty-trash'),
     stats: () => ipcRenderer.invoke('chervil:index-stats'),
+    /** Trim captured sites back to a budget, oldest first. Never touches composed pages. */
+    evictOver: (max) => ipcRenderer.invoke('chervil:index-evict-over', { max }),
     forgetSite: (host) => ipcRenderer.invoke('chervil:index-forget-site', { host }),
     forgetSince: (since) => ipcRenderer.invoke('chervil:index-forget-since', { since }),
+    /** Erase captured sites; includeComposed also erases your own composed pages. */
+    forgetAll: (includeComposed) => ipcRenderer.invoke('chervil:index-forget-all', { includeComposed }),
   },
 
   /** Export a pre-sanitized book (chapters + images) as an .epub file. */
