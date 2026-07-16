@@ -63,6 +63,29 @@ contextBridge.exposeInMainWorld('chervil', {
   imageKeyStatus: () => ipcRenderer.invoke('chervil:image-key-status'),
   /** AI-edit an image from a natural-language instruction (snip editor). */
   editImage: (payload) => ipcRenderer.invoke('chervil:edit-image', payload),
+  /** Your Web — the local page index (RFC 0013). Machine-local; never synced. */
+  index: {
+    /** One-time move of the library out of chervil-state.json. Idempotent. */
+    migrate: () => ipcRenderer.invoke('chervil:index-migrate'),
+    /** Store/replace a composed page. `body` is derived from html if omitted. */
+    put: (payload) => ipcRenderer.invoke('chervil:index-put', payload),
+    /** Record a visited site's readable text (never for private tabs). */
+    putVisited: (payload) => ipcRenderer.invoke('chervil:index-put-visited', payload),
+    /** The full record for one page, including html — the drawer's open path. */
+    get: (id) => ipcRenderer.invoke('chervil:index-get', { id }),
+    /** Light listing rows (no html/body) for the drawer. */
+    list: (payload) => ipcRenderer.invoke('chervil:index-list', payload || {}),
+    /** BM25 full-text search; pass includeBody only for model grounding. */
+    search: (payload) => ipcRenderer.invoke('chervil:index-search', payload || {}),
+    trash: (id) => ipcRenderer.invoke('chervil:index-trash', { id }),
+    restore: (id) => ipcRenderer.invoke('chervil:index-restore', { id }),
+    remove: (id) => ipcRenderer.invoke('chervil:index-remove', { id }),
+    emptyTrash: () => ipcRenderer.invoke('chervil:index-empty-trash'),
+    stats: () => ipcRenderer.invoke('chervil:index-stats'),
+    forgetSite: (host) => ipcRenderer.invoke('chervil:index-forget-site', { host }),
+    forgetSince: (since) => ipcRenderer.invoke('chervil:index-forget-since', { since }),
+  },
+
   /** Export a pre-sanitized book (chapters + images) as an .epub file. */
   exportEpub: (payload) => ipcRenderer.invoke('chervil:export-epub', payload),
   /** Export book HTML as a print-ready PDF at an exact trim size. */

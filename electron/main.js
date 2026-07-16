@@ -23,6 +23,7 @@ const { generateHeroImage, editImage } = require('../lib/images');
 const { buildEpub } = require('../lib/epub');
 const { getSkill } = require('../lib/skills');
 const { createVault } = require('../lib/vault');
+const { createPageIndex } = require('../lib/pageIndex');
 const { createSitePermissions, MANAGED_PERMISSIONS } = require('../lib/sitePermissions');
 const { registrableDomain } = require('../lib/etld');
 const { mergeStates } = require('../lib/stateMerge');
@@ -2903,18 +2904,138 @@ ipcMain.handle('chervil:load-state', async (event) => {
     if (!fs.existsSync(p) && fs.existsSync(defaultStateFile())) p = defaultStateFile();
     if (!fs.existsSync(p) && fs.existsSync(legacyStateFile())) p = legacyStateFile();
     if (!fs.existsSync(p)) return null;
-    // On a synced location, absorb any conflict copies first so cross-machine
-    // bookmarks/history/spaces survive instead of being stranded in orphan files.
-    const cfg = readConfig();
-    if (cfg.statePath && p === cfg.statePath) {
-      const merged = reconcileConflictCopies(p);
-      if (merged) return merged;
-    }
+    // Deliberately does NOT reconcile conflict copies. Absorbing them means reading
+    // and parsing every orphan file, and on a cloud-synced folder those reads can be
+    // dehydrated — seconds of network I/O inside readFileSync, blocking the main
+    // process while the user stares at an empty window. The renderer kicks off the
+    // same merge over IPC right after boot (reconcileNow) and adopts the result in
+    // place; the reconcile only ever changes additive collections, and the session
+    // itself (tabs, settings) comes from this canonical file regardless.
     return JSON.parse(fs.readFileSync(p, 'utf8'));
   } catch {
     return null;
   }
 });
+
+// --- Your Web: the local page index (RFC 0013) ---
+// Composed pages used to live as full HTML inside chervil-state.json, so every
+// save re-serialized megabytes. They live here instead: a page write is one small
+// INSERT, and the corpus becomes searchable. The DB is always LOCAL (never the
+// synced statePath) — the index is machine-local by design; see the RFC.
+let pageIndex = null;
+let pageIndexBroken = false;
+
+function pageIndexFile() {
+  return path.join(app.getPath('userData'), 'chervil-index.db');
+}
+
+// Lazily opened. If node:sqlite is ever unavailable the index degrades to "off"
+// rather than taking down the app — every caller below tolerates a null.
+function getPageIndex() {
+  if (pageIndex || pageIndexBroken) return pageIndex;
+  try {
+    pageIndex = createPageIndex(pageIndexFile());
+  } catch (err) {
+    pageIndexBroken = true;
+    console.error('[chervil] page index unavailable:', err && err.message);
+  }
+  return pageIndex;
+}
+
+app.on('will-quit', () => { try { if (pageIndex) pageIndex.close(); } catch { /* ignore */ } });
+
+// One-time move of library.history/trash out of the state file and into the index.
+// Reads the state file directly rather than taking megabytes over IPC. Idempotent:
+// a `library_migrated` marker means later boots no-op. Backs the state file up
+// first so a bad migration is recoverable.
+ipcMain.handle('chervil:index-migrate', async () => {
+  const idx = getPageIndex();
+  if (!idx) return { ok: false, error: 'index-unavailable' };
+  try {
+    const done = idx._db.prepare('SELECT value FROM meta WHERE key = ?').get('library_migrated');
+    if (done) return { ok: true, migrated: 0, already: true };
+
+    const p = stateFile();
+    if (!fs.existsSync(p)) {
+      idx._db.prepare('INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)').run('library_migrated', String(Date.now()));
+      return { ok: true, migrated: 0 };
+    }
+    const raw = fs.readFileSync(p, 'utf8');
+    const state = JSON.parse(raw);
+    const hist = (state.library && Array.isArray(state.library.history)) ? state.library.history : [];
+    const trash = (state.library && Array.isArray(state.library.trash)) ? state.library.trash : [];
+    if (hist.length || trash.length) {
+      try { fs.writeFileSync(p + '.pre-index.bak', raw, 'utf8'); } catch { /* best effort */ }
+    }
+
+    let migrated = 0;
+    const put = (it, trashed) => {
+      if (!it || !it.id) return;
+      idx.putComposed({
+        id: it.id,
+        title: it.title || '',
+        query: it.query || '',
+        html: it.html || '',
+        body: stripHtmlText(it.html),   // what FTS indexes
+        sources: it.sources || [],
+        conversation: it.conversation || [],
+        history: it.history || [],
+        spaceId: it.spaceId,
+        storeKey: it.storeKey,
+        createdAt: it.createdAt || Date.now(),
+      });
+      if (trashed) idx.trash(it.id);
+      migrated++;
+    };
+    for (const it of hist) put(it, false);
+    for (const it of trash) put(it, true);
+
+    idx._db.prepare('INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)').run('library_migrated', String(Date.now()));
+    return { ok: true, migrated, stats: idx.stats() };
+  } catch (err) {
+    return { ok: false, error: String(err && err.message ? err.message : err) };
+  }
+});
+
+// Mirrors the renderer's stripText — the index stores readable text, not markup.
+function stripHtmlText(html) {
+  return String(html || '')
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&[a-z]+;/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+const withIndex = (fn) => async (_event, payload) => {
+  const idx = getPageIndex();
+  if (!idx) return { ok: false, error: 'index-unavailable' };
+  try { return { ok: true, ...fn(idx, payload || {}) }; }
+  catch (err) { return { ok: false, error: String(err && err.message ? err.message : err) }; }
+};
+
+ipcMain.handle('chervil:index-put', withIndex((idx, p) => {
+  // Body is derived here so the renderer never has to ship text it already has as HTML.
+  const id = idx.putComposed({ ...p, body: p.body || stripHtmlText(p.html) });
+  return { id };
+}));
+ipcMain.handle('chervil:index-put-visited', withIndex((idx, p) => ({ id: idx.putVisited(p) })));
+ipcMain.handle('chervil:index-get', withIndex((idx, p) => ({ item: idx.get(p.id) })));
+ipcMain.handle('chervil:index-list', withIndex((idx, p) => ({
+  items: idx.list({ kind: p.kind || 'composed', limit: p.limit || 200, offset: p.offset || 0 }),
+  trash: p.withTrash ? idx.listTrash({ limit: p.limit || 200 }) : undefined,
+})));
+ipcMain.handle('chervil:index-search', withIndex((idx, p) => ({
+  items: idx.search(p.query || '', { limit: p.limit || 20, kind: p.kind || null, includeBody: !!p.includeBody }),
+})));
+ipcMain.handle('chervil:index-trash', withIndex((idx, p) => { idx.trash(p.id); return {}; }));
+ipcMain.handle('chervil:index-restore', withIndex((idx, p) => { idx.restore(p.id); return {}; }));
+ipcMain.handle('chervil:index-remove', withIndex((idx, p) => { idx.remove(p.id); return {}; }));
+ipcMain.handle('chervil:index-empty-trash', withIndex((idx) => { idx.emptyTrash(); return {}; }));
+ipcMain.handle('chervil:index-stats', withIndex((idx) => ({ stats: idx.stats() })));
+ipcMain.handle('chervil:index-forget-site', withIndex((idx, p) => { idx.forgetSite(p.host); return {}; }));
+ipcMain.handle('chervil:index-forget-since', withIndex((idx, p) => { idx.forgetSince(p.since); return {}; }));
 
 ipcMain.handle('chervil:save-state', async (event, state) => {
   // Secondary (ephemeral) windows must not write over the primary's saved session.
