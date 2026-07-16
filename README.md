@@ -30,6 +30,7 @@ right at home.)*
 ## What it does
 
 - **Compose pages, not link lists** — grounded in live web search, rendered in a sandbox.
+- **Your Web — a private index of your own reading.** Chervil keeps the pages it composes *and* (opt-in) the text of the sites you read, in a local SQLite + FTS index, so you can ask **"what was that laptop review I read last month?"** and get an answer from your own history — instantly, free, offline, with no web search. Ask it to **pull together** everything you've read on a subject and it synthesizes across your sources and names what you've missed. It can also **notice** when you're researching something and offer to do that unprompted (off by default; it offers, it never writes a page on its own). Nothing is distilled on ingest and nothing is uploaded: the index never leaves your machine, private tabs and login pages are never captured, and deleting really deletes. See [RFC 0013](docs/rfcs/0013-your-web.md).
 - **Living, interactive pages** — composed pages can call back to Sprig at runtime to fetch fresh data (mini-apps, not printouts).
 - **Deep Dive** — a two-phase research pipeline that produces a long, cited report with disinformation vetting.
 - **Trust layer** — every page can show its sources and one-click **Verify** its own claims against live sources.
@@ -39,7 +40,7 @@ right at home.)*
 - **Multi-stage agents** — chain agents into a pipeline where each builds on the last one's work (research → draft → critique), and the final agent composes the page. Or make it **orchestrated**, where a coordinator picks who acts next based on the results so far.
 - **Shareable pages** — export any composed page to a portable `.chervil` file, or publish it with a built-in **Open in Chervil** button, so anyone can import it into their own Chervil and remix it.
 - **Publish agents + the Agent store** — publish an agent to your profile (importable by anyone in one click), and submit your best agents and pages to the community **Agent store** and **Share gallery** at [getchervil.com](https://getchervil.com), browsable by category (vetted + approved). Browse and import from the store **right inside the app**, too.
-- **Make it your own** — choose which buttons show on the top bar (Settings, or right-click the bar), and pick a **page style** (Balanced / Rich / Minimal) for composed pages. Embedded real sites behave like a normal browser — popup/OAuth logins, downloads, find-in-page.
+- **Make it your own** — the top bar stays short like a browser's, with the long tail in the **⋯ menu**; give any button a permanent seat on the bar (Settings, or right-click the bar). Pick a **page style** (Balanced / Rich / Minimal) for composed pages. Embedded real sites behave like a normal browser — popup/OAuth logins, downloads, find-in-page.
 - **Quick-ask** — a global hotkey opens a floating ask bar; Chervil lives in the tray, always a keystroke away.
 - **"Hey Sprig" listening** — opt-in hands-free wake word that pops the quick-ask bar and captures your spoken request. Detection is fully on-device and free ([openWakeWord](https://github.com/dscripka/openWakeWord) on onnxruntime-web, no account or key) — audio never leaves your machine until you speak a command. Built-in words (Hey Jarvis / Alexa / Hey Mycroft) work out of the box; the literal "Hey Sprig" uses a free, self-trained openWakeWord model. A **confirmation gate** (on by default) shows what Sprig heard and waits for your OK before composing, so a stray trigger in a noisy room can't run off on its own.
 - **Scheduled agents** — run prompts on a daily/weekly/interval schedule in the background, optionally "as" a chosen agent.
@@ -93,8 +94,10 @@ sources, richer computed pages, and ever-stronger trust tooling.
 
 Electron desktop app (bundles its own engine — no installed browser needed). A
 main process holds keys and talks to providers; a sandboxed renderer is the UI;
-the model layer is fully pluggable. See [CONTRIBUTING.md](CONTRIBUTING.md) for
-architecture and how to add a provider.
+the model layer is fully pluggable. Your pages live in a local SQLite database
+with FTS5 full-text search, via Node's built-in `node:sqlite` — no native modules,
+no build step. See [CONTRIBUTING.md](CONTRIBUTING.md) for architecture and how to
+add a provider.
 
 ## License
 

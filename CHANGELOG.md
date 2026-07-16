@@ -6,6 +6,67 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.20.0] — 2026-07-16
+
+**Chervil remembers what you read.** Until now it hoarded the pages it composed
+for you and threw away every real website you visited — the same thing every other
+browser does, from a product whose whole premise is that it can read. Now it keeps
+a private index of your own reading, on your own machine, and Sprig can answer from
+it: *"what was that laptop review I read last month?"* Instantly, for free, with no
+web search at all.
+
+The top bar also stopped looking like a control panel and started looking like a
+browser.
+
+### Added
+- **Your Web — search your own pages.** The Library's search now looks *inside*
+  your pages, not just at their titles, and shows the passage that matched.
+- **Instant answers.** Ask something you've already asked and Chervil serves the
+  page you already have — clearly labelled *"From your pages — you asked this 3d
+  ago"*, with **↻ Answer it fresh** one click away. Questions whose answer moves
+  (news, prices, "today") are never served from cache.
+- **Keep the text of sites you read** *(off by default)* — Settings → Security →
+  **Your Web**. With it on, Sprig can answer from your own reading. Private tabs
+  are never included, nor is any page behind a login or paywall. The index is a
+  file on your computer: never synced, never uploaded, and no AI sees a page just
+  because you read it. Live counts, a skip-list for sites, and forget controls
+  (last hour / today / one site / everything) that **really delete**.
+- **Ask about your own reading.** *"What was that article I read about X?"* is
+  answered from your pages and the sites you've read, saying which page and when,
+  and linking back to it. If it can't find it, it says so rather than quietly
+  handing you a web answer dressed up as your own page.
+- **Dossiers.** *"Pull together what I've read about mirrorless cameras"* —
+  synthesized across your reading, attributed to each source, and honest about
+  what you haven't covered yet.
+- **Chervil can notice what you're researching** *(off by default)* — when a
+  subject keeps coming up across several different sites, a quiet card on the
+  new-tab screen offers to pull it together. It never writes a page on its own,
+  never spends anything unless you click, and never interrupts: no popup, no
+  sound, no notification. Sensitivity is yours to set, and "Not interested" is
+  remembered for good.
+
+### Changed
+- **The top bar is a browser's top bar.** Five buttons instead of twenty; the rest
+  moved into the **⋯ menu** — nothing was removed, and you can give any button a
+  permanent seat back in Settings → General. The address bar is a proper pill with
+  the page's status shown inside it, and the active tab now flows into the toolbar
+  instead of floating above a dividing line.
+- **Settings is a page, not a dialog.** It opens in its own tab, with a nav rail
+  down the side, and remembers which section you were on.
+- Composed pages are stored in a real database instead of the session file.
+
+### Fixed
+- **Attaching a photo and asking Sprig to change it now edits the photo.**
+  *"Replace the book with a calculator"* used to compose a page with broken images
+  — or a hand-drawn cartoon captioned "Image Successfully Edited". Sprig now says
+  plainly what he can't do, and an edit request opens the real image editor.
+- **Chervil opens faster.** Startup no longer stalls on reading synced files
+  before the window can draw — on a cloud-synced folder that could be seconds.
+- **Composed pages appear instantly when you switch back to them.** They were
+  being rebuilt from scratch on every tab switch, which also lost your scroll.
+- Your saved pages no longer grow the session file without limit when syncing
+  between computers.
+
 ## [0.19.3] — 2026-07-15
 
 The rest of the story: **Learn** and **Quiz** now show their work too, finishing
