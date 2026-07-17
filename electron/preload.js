@@ -90,6 +90,32 @@ contextBridge.exposeInMainWorld('chervil', {
     forgetSince: (since) => ipcRenderer.invoke('chervil:index-forget-since', { since }),
     /** Erase captured sites; includeComposed also erases your own composed pages. */
     forgetAll: (includeComposed) => ipcRenderer.invoke('chervil:index-forget-all', { includeComposed }),
+
+    /**
+     * Your Feeds — items from the user's subscriptions. Kept in their own tables,
+     * apart from the pages above, so feed volume can't drown out what you read.
+     */
+    feeds: {
+      /** Fetch one subscription and ingest its items. Returns how many were new. */
+      fetch: (feed) => ipcRenderer.invoke('chervil:feed-fetch', { feed }),
+      /** Newest-first items; undigestedOnly is what stops a digest repeating itself. */
+      recent: (payload) => ipcRenderer.invoke('chervil:feed-recent', payload || {}),
+      markDigested: (ids) => ipcRenderer.invoke('chervil:feed-mark-digested', { ids }),
+      markRead: (id) => ipcRenderer.invoke('chervil:feed-mark-read', { id }),
+      count: (feedId) => ipcRenderer.invoke('chervil:feed-count', { feedId }),
+      /** This machine's fetch cursor (last fetch, resolve cache, last error). */
+      state: (feedId) => ipcRenderer.invoke('chervil:feed-state', { feedId }),
+      /** Every cursor at once — mirrored into memory at launch. */
+      states: () => ipcRenderer.invoke('chervil:feed-states'),
+      /** Feed types + their form schema, straight from the adapters. */
+      types: () => ipcRenderer.invoke('chervil:feed-types'),
+      /** Find the feed for any site URL. Returns null if there isn't one. */
+      discover: (url) => ipcRenderer.invoke('chervil:feed-discover', { url }),
+      /** Unsubscribing takes the feed's items and cursor with it. */
+      remove: (feedId) => ipcRenderer.invoke('chervil:feed-remove', { feedId }),
+      /** Age + count eviction. Nothing else drives this — tickFeeds must call it. */
+      evict: (payload) => ipcRenderer.invoke('chervil:feed-evict', payload || {}),
+    },
   },
 
   /** Export a pre-sanitized book (chapters + images) as an .epub file. */
@@ -337,6 +363,9 @@ contextBridge.exposeInMainWorld('chervil', {
   /** Subscribe to "Ask Sprig about <selection>" from the right-click menu. */
   onContextAsk: (cb) => ipcRenderer.on('chervil:context-ask', (_e, text) => cb(text)),
 
+  /** "Check this page for RSS feeds" from the right-click menu → discover + subscribe. */
+  onContextFindFeeds: (cb) => ipcRenderer.on('chervil:context-find-feeds', (_e, url) => cb(url)),
+
   /** Load persisted session state (tabs, prompts, pages). */
   loadState: () => ipcRenderer.invoke('chervil:load-state'),
 
@@ -370,6 +399,8 @@ contextBridge.exposeInMainWorld('chervil', {
    *  the vault in the main process; passwords never return here. Resolves to
    *  { ok, added, skipped, failed, total } or { ok:true, canceled:true }. */
   importPasswordsCsv: () => ipcRenderer.invoke('chervil:import-passwords-csv'),
+  /** Import feed subscriptions from an OPML file. The picker is main's job (no path in). */
+  importOpml: () => ipcRenderer.invoke('chervil:import-opml'),
 
   /** List importable address-autofill sources. { ok, sources:[{...,count}] }. */
   importListAddressSources: () => ipcRenderer.invoke('chervil:import-list-address-sources'),

@@ -1,6 +1,6 @@
 {
   "name": "chervil",
-  "version": "0.20.0",
+  "version": "0.21.0",
   "description": "Chervil — the Agentic, Conversational Modern Web Browser",
   "main": "electron/main.js",
   "scripts": {
@@ -24,7 +24,8 @@
     "exceljs": "^4.4.0",
     "gifenc": "^1.0.3",
     "pptxgenjs": "^4.0.1",
-    "qrcode": "^1.5.4"
+    "qrcode": "^1.5.4",
+    "rss-parser": "^3.13.0"
   },
   "devDependencies": {
     "electron": "^39.8.5",

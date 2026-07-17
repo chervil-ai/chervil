@@ -6,6 +6,20 @@ const os = require('os');
 const { execFile } = require('child_process');
 const { app, BrowserWindow, ipcMain, dialog, safeStorage, Notification, Tray, Menu, globalShortcut, screen, shell, clipboard, session } = require('electron');
 
+// Swallow only Node's one-time "SQLite is an experimental feature" ExperimentalWarning.
+// node:sqlite backs the whole page index (RFC 0013) — we're committed to it — and
+// the warning is about the API surface being flagged experimental (it may change in
+// a future Node), NOT about our data or stability. Every other warning still prints.
+{
+  const emit = process.emitWarning.bind(process);
+  process.emitWarning = (warning, ...rest) => {
+    const msg = typeof warning === 'string' ? warning : (warning && warning.message) || '';
+    const type = (rest[0] && typeof rest[0] === 'object' ? rest[0].type : rest[0]) || '';
+    if (String(type) === 'ExperimentalWarning' && /\bSQLite\b/i.test(msg)) return;
+    return emit(warning, ...rest);
+  };
+}
+
 // Load .env from the project root (one level up from /electron).
 // quiet:true suppresses dotenv v17's "injected env … tip" banner (which also
 // renders as mojibake in the Windows console).
@@ -441,6 +455,24 @@ function attachContextMenu(wc, opts = {}) {
         { label: 'Forward', enabled: canFwd, click: () => (hist ? hist.goForward() : wc.goForward()) },
         { label: 'Reload', click: () => wc.reload() },
       ]);
+      // Unconditional: this handler is synchronous and can't ask the renderer
+      // whether the page has a feed, so the item is a verb ("check…") that reads
+      // fine even when the answer turns out to be none. The renderer discovers and
+      // reports. params.pageURL is the page, not a right-clicked link.
+      const pageUrl = params.pageURL || '';
+      if (/^https?:\/\//i.test(pageUrl)) {
+        groups.push([
+          {
+            label: 'Check this page for RSS feeds',
+            click: () => {
+              if (mainWindow && !mainWindow.webContents.isDestroyed()) {
+                mainWindow.show();
+                mainWindow.webContents.send('chervil:context-find-feeds', pageUrl);
+              }
+            },
+          },
+        ]);
+      }
     }
 
     // On the app shell, only show a menu when there's something to act on, so a
@@ -2903,17 +2935,26 @@ ipcMain.handle('chervil:load-state', async (event) => {
   try {
     let p = stateFile();
     // If a configured sync file isn't there yet, fall back to local, then legacy.
+    // existsSync is metadata-only (cheap even for a dehydrated file); it's the
+    // content read below that pays the hydration cost.
     if (!fs.existsSync(p) && fs.existsSync(defaultStateFile())) p = defaultStateFile();
     if (!fs.existsSync(p) && fs.existsSync(legacyStateFile())) p = legacyStateFile();
     if (!fs.existsSync(p)) return null;
-    // Deliberately does NOT reconcile conflict copies. Absorbing them means reading
-    // and parsing every orphan file, and on a cloud-synced folder those reads can be
-    // dehydrated — seconds of network I/O inside readFileSync, blocking the main
-    // process while the user stares at an empty window. The renderer kicks off the
-    // same merge over IPC right after boot (reconcileNow) and adopts the result in
-    // place; the reconcile only ever changes additive collections, and the session
-    // itself (tabs, settings) comes from this canonical file regardless.
-    return JSON.parse(fs.readFileSync(p, 'utf8'));
+    // ASYNC read, not readFileSync. When statePath is a cloud-synced folder
+    // (OneDrive/Drive/Dropbox) the state file is often dehydrated, so the OS blocks
+    // the read for seconds while it downloads — and a *synchronous* read blocks the
+    // entire main-process event loop with it, freezing the window, the tray and all
+    // IPC (the "super slow / sometimes freezes on first open"). fs.promises.readFile
+    // does the same download on the libuv threadpool, so the loop stays responsive
+    // and the renderer just awaits its state. After the first hydration the cloud
+    // client keeps the file warm, so later opens are back to ~25ms.
+    //
+    // Still does NOT reconcile conflict copies — that would read and parse every
+    // orphan file, each its own possible hydration stall. The renderer kicks off the
+    // same merge over IPC right after boot (reconcileNow) and adopts it in place;
+    // the reconcile only ever changes additive collections, and the session itself
+    // (tabs, settings) comes from this canonical file regardless.
+    return JSON.parse(await fs.promises.readFile(p, 'utf8'));
   } catch {
     return null;
   }
@@ -3036,6 +3077,65 @@ ipcMain.handle('chervil:index-restore', withIndex((idx, p) => { idx.restore(p.id
 ipcMain.handle('chervil:index-remove', withIndex((idx, p) => { idx.remove(p.id); return {}; }));
 ipcMain.handle('chervil:index-empty-trash', withIndex((idx) => { idx.emptyTrash(); return {}; }));
 ipcMain.handle('chervil:index-stats', withIndex((idx) => ({ stats: idx.stats() })));
+
+// --- Your Feeds -------------------------------------------------------------
+// Fetch and ingest are ONE call. The renderer has no use for the items (it reads
+// them back with feeds.recent at digest time), and a busy tick can pull hundreds
+// — shipping them across IPC to hand straight back would be pure cost. It also
+// keeps the resolve-cache main-side, next to the network code that fills it.
+ipcMain.handle('chervil:feed-fetch', async (_event, payload) => {
+  const idx = getPageIndex();
+  if (!idx) return { ok: false, error: 'index-unavailable' };
+  const feed = (payload && payload.feed) || null;
+  if (!feed || !feed.id || !feed.type) return { ok: false, error: 'bad-feed' };
+
+  const prev = idx.feeds.getState(feed.id) || {};
+  const at = Date.now();
+  try {
+    const { fetchFeed } = require('../lib/feeds');
+    const { items, resolvedUrl } = await fetchFeed(feed, { resolvedUrl: prev.resolvedUrl || '' });
+    const added = idx.feeds.putItems(items);
+    idx.feeds.setState(feed.id, { lastFetched: at, resolvedUrl, lastError: '' });
+    return { ok: true, added, fetched: items.length };
+  } catch (err) {
+    const error = String(err && err.message ? err.message : err);
+    // Record the failure but KEEP the resolve cache: a transient 503 shouldn't
+    // cost four round trips to rediscover a channel id that hasn't changed.
+    idx.feeds.setState(feed.id, { lastFetched: at, resolvedUrl: prev.resolvedUrl || '', lastError: error });
+    return { ok: false, error };
+  }
+});
+
+ipcMain.handle('chervil:feed-recent', withIndex((idx, p) => ({
+  items: idx.feeds.recent({
+    sinceMs: Number(p.sinceMs) || (Date.now() - 2 * 24 * 60 * 60 * 1000),
+    limit: Math.max(1, Math.min(500, Number(p.limit) || 120)),
+    undigestedOnly: !!p.undigestedOnly,
+  }),
+})));
+ipcMain.handle('chervil:feed-mark-digested', withIndex((idx, p) => { idx.feeds.markDigested(p.ids || []); return {}; }));
+ipcMain.handle('chervil:feed-mark-read', withIndex((idx, p) => { idx.feeds.markRead(p.id); return {}; }));
+ipcMain.handle('chervil:feed-count', withIndex((idx, p) => ({ count: idx.feeds.count(p.feedId || null) })));
+ipcMain.handle('chervil:feed-state', withIndex((idx, p) => ({ state: idx.feeds.getState(p.feedId) })));
+ipcMain.handle('chervil:feed-states', withIndex((idx) => ({ states: idx.feeds.allStates() })));
+// The Feeds pane builds its form from this, so the adapters stay the single
+// source of truth for what a feed type needs.
+ipcMain.handle('chervil:feed-types', () => {
+  try { return { ok: true, types: require('../lib/feeds').FEED_TYPES }; }
+  catch (err) { return { ok: false, error: String(err && err.message ? err.message : err) }; }
+});
+// Paste a site's address, get its feed — nobody should have to hunt for the
+// little orange icon.
+ipcMain.handle('chervil:feed-discover', async (_event, p) => {
+  try {
+    const { discoverFeed } = require('../lib/feeds');
+    return { ok: true, url: await discoverFeed(String((p && p.url) || '')) };
+  } catch (err) {
+    return { ok: false, error: String(err && err.message ? err.message : err) };
+  }
+});
+ipcMain.handle('chervil:feed-remove', withIndex((idx, p) => { idx.feeds.removeFeed(p.feedId); return {}; }));
+ipcMain.handle('chervil:feed-evict', withIndex((idx, p) => { idx.feeds.evict(p || {}); return {}; }));
 ipcMain.handle('chervil:index-topics', withIndex((idx, p) => ({
   topics: idx.topics({
     sinceMs: Number(p.sinceMs) || (Date.now() - 14 * 24 * 60 * 60 * 1000),
@@ -3161,6 +3261,35 @@ ipcMain.handle('chervil:import-passwords-csv', async (event) => {
       } catch { failed++; }
     }
     return { ok: true, added, skipped, failed, total: rows.length };
+  } catch (err) { return { ok: false, error: String(err && err.message ? err.message : err) }; }
+});
+
+// Import feed subscriptions from an OPML export (Feedly, Inoreader, FeedBro, …).
+// The user picks the file in a main-process dialog, so the renderer never names a
+// path — same invariant the passwords-CSV import relies on. Unlike passwords,
+// there's nothing secret here, so we return the parsed list for the renderer to
+// dedup and subscribe (feeds are renderer-owned state).
+ipcMain.handle('chervil:import-opml', async (event) => {
+  try {
+    const win = BrowserWindow.fromWebContents(event.sender) || mainWindow;
+    const { canceled, filePaths } = await dialog.showOpenDialog(win, {
+      title: 'Import feeds — choose an OPML file from your feed reader',
+      filters: [{ name: 'OPML / XML', extensions: ['opml', 'xml'] }],
+      properties: ['openFile'],
+    });
+    if (canceled || !filePaths || !filePaths[0]) return { ok: true, canceled: true };
+    // A user-picked file is arbitrary; reading a 200MB "opml" would take the main
+    // process down. OPML lists are kilobytes.
+    try {
+      const size = fs.statSync(filePaths[0]).size;
+      if (size > 5 * 1024 * 1024) return { ok: false, error: 'too-big' };
+    } catch { return { ok: false, error: 'Couldn’t read that file.' }; }
+    let text;
+    try { text = fs.readFileSync(filePaths[0], 'utf8'); } catch { return { ok: false, error: 'Couldn’t read that file.' }; }
+    const { parseOpml } = require('../lib/feeds');
+    const { feeds, folders, skipped } = parseOpml(text);
+    if (!feeds.length) return { ok: false, error: 'no-feeds' };
+    return { ok: true, feeds, folders, skipped };
   } catch (err) { return { ok: false, error: String(err && err.message ? err.message : err) }; }
 });
 

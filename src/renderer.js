@@ -169,19 +169,18 @@ const els = {
   mcpUrl: document.getElementById('mcp-url'),
   mcpToken: document.getElementById('mcp-token'),
   mcpAddBtn: document.getElementById('mcp-add'),
-  // Library (History / Trash)
+  // Library — a page, like Settings. The seven lib-tab-* ids are gone: the rail is
+  // data-libtab buttons driven by setLibraryTab, so there's nothing to bind.
   historyBtn: document.getElementById('history-btn'),
-  libraryDrawer: document.getElementById('library-drawer'),
-  libraryClose: document.getElementById('library-close'),
+  libraryView: document.getElementById('library-view'),
+  libraryNav: document.getElementById('library-nav'),
+  libraryHeading: document.getElementById('library-heading'),
   libraryList: document.getElementById('library-list'),
-  libTabHistory: document.getElementById('lib-tab-history'),
-  libTabBookmarks: document.getElementById('lib-tab-bookmarks'),
-  libTabFavorites: document.getElementById('lib-tab-favorites'),
-  libTabCollections: document.getElementById('lib-tab-collections'),
+  libraryFeeds: document.getElementById('library-feeds'),
+  libSearchRow: document.getElementById('lib-search-row'),
+  libImportStatus: document.getElementById('lib-import-status'),
   libNewCollection: document.getElementById('lib-new-collection'),
-  libTabSites: document.getElementById('lib-tab-sites'),
-  libTabDownloads: document.getElementById('lib-tab-downloads'),
-  libTabTrash: document.getElementById('lib-tab-trash'),
+  libImportOpml: document.getElementById('lib-import-opml'),
   clearSites: document.getElementById('clear-sites'),
   clearDownloads: document.getElementById('clear-downloads'),
   libSearch: document.getElementById('lib-search'),
@@ -227,6 +226,7 @@ const els = {
   zoomOut: document.getElementById('zoom-out'),
   printBtn: document.getElementById('print-btn'),
   readerBtn: document.getElementById('reader-btn'),
+  feedBtn: document.getElementById('feed-btn'),
   askPageBtn: document.getElementById('ask-page-btn'),
   translateBtn: document.getElementById('translate-btn'),
   readAloudBtn: document.getElementById('read-aloud-btn'),
@@ -302,6 +302,13 @@ function ensureWebview(tab) {
 }
 
 function destroyWebview(tabId) {
+  // Per-tab side state keyed by this id, cleared before the no-webview bail so it's
+  // dropped even for a tab that never attached one. An evicted tab reloads on
+  // revisit and re-derives all of it, so this is safe and keeps the maps from
+  // accumulating entries for tabs that are gone.
+  const t = feedProbeTimers.get(tabId); if (t) { clearTimeout(t); feedProbeTimers.delete(tabId); }
+  const c = captureTimers.get(tabId); if (c) { clearTimeout(c); captureTimers.delete(tabId); }
+  tabFeed.delete(tabId);
   const wv = webviews.get(tabId);
   if (!wv) return;
   webviews.delete(tabId);
@@ -362,12 +369,15 @@ function prewarmPinnedTabs() {
 function attachWebviewEvents(wv, tabId) {
   const tabOf = () => tabs.find((t) => t.id === tabId) || null;
   wv.addEventListener('did-navigate', (e) => onWebviewNavigated(tabId, e.url));
-  wv.addEventListener('did-navigate-in-page', (e) => { if (e.isMainFrame) onWebviewNavigated(tabId, e.url); });
+  wv.addEventListener('did-navigate-in-page', (e) => { if (e.isMainFrame) { onWebviewNavigated(tabId, e.url); scheduleFeedProbe(tabId, wv); } });
   // Chromium resets zoom on each navigation — re-apply this tab's level + mute.
   wv.addEventListener('dom-ready', () => {
     const t = tabOf();
     try { wv.setZoomFactor(zoomForTab(t)); } catch { /* not ready */ }
     try { wv.setAudioMuted(!!(t && t.muted)); } catch { /* not ready */ }
+    // <link rel="alternate"> is in the server-rendered <head>, so dom-ready is
+    // early enough — no need to wait for did-stop-loading like capture does.
+    scheduleFeedProbe(tabId, wv);
   });
   // Your Web (RFC 0013): once a page has settled, keep its readable text so you can
   // search what you've read. Off unless the user turned it on; scheduleSiteCapture
@@ -605,6 +615,20 @@ let schedules = [];
 //   watcher = { id, url, title, condition, intervalMs, enabled, running, lastRun,
 //               lastValue, lastSummary, lastChangedAt, triggered }
 let watchers = [];
+// Your Feeds: subscriptions Chervil pulls on a cadence (RSS/Atom, podcasts,
+// newsletters, blogs, YouTube channels, subreddits).
+//   feed = { id, type, name, config, enabled, intervalMs, maxItems, createdAt, updatedAt }
+// Intent ONLY — no lastRun, no lastError, no running. This record syncs; where a
+// given machine got to does not, and lives in the page index's feed_state instead
+// (mirrored below in feedStatus). Items never come near this array: they'd be
+// re-serialized by scheduleSave on a 500ms debounce, which is the exact 3.93MB
+// problem RFC 0013 just moved the library out of state to escape.
+let feeds = [];
+// Per-feed runtime: this machine's feed_state mirrored at launch, plus in-flight
+// state. Purely in-memory, so unlike watchers (whose `running` persists and has to
+// be reset on restore, :10880) a crash mid-fetch can't wedge a feed.
+//   feedId -> { lastFetched, lastError, lastAdded, running }
+const feedStatus = new Map();
 // Agent files: imported personas/configs that shape Sprig's behavior.
 //   agent = { id, name, description, persona, model, provider, mcp:[names], starters:[] }
 let agents = [];
@@ -675,7 +699,10 @@ const CHERVIL_RUNTIME = `<script>(function(){
     var href = a.href;
     if(!/^(https?|tel):/i.test(href)) return;  // also forward tel: for one-tap call/send
     e.preventDefault();
-    try { parent.postMessage({ __chervil:true, type:'link', href: href, text: (a.textContent||'').trim() }, '*'); } catch(_){}
+    // The page can ask for a new tab with target="_blank"; ctrl/⌘-click is the
+    // universal "open in new tab" gesture and honored here too.
+    var newtab = a.target === '_blank' || e.ctrlKey || e.metaKey;
+    try { parent.postMessage({ __chervil:true, type:'link', href: href, text: (a.textContent||'').trim(), newtab: newtab }, '*'); } catch(_){}
   }, true);
 
   // 2. Two-way tool bridge.
@@ -1765,6 +1792,25 @@ function appendLinkified(container, text) {
   if (last < str.length) container.appendChild(document.createTextNode(str.slice(last)));
 }
 
+// A hover-revealed "copy this message" button, like Claude's. Copies the raw text,
+// not the linkified DOM, so a pasted message is clean.
+function addMsgCopy(bubble, text) {
+  const btn = document.createElement('button');
+  btn.className = 'msg-copy';
+  btn.title = 'Copy message';
+  btn.setAttribute('aria-label', 'Copy message');
+  btn.textContent = '⧉';
+  btn.addEventListener('click', async (e) => {
+    e.stopPropagation();
+    try {
+      await navigator.clipboard.writeText(String(text == null ? '' : text));
+      btn.textContent = '✓'; btn.classList.add('copied');
+      setTimeout(() => { btn.textContent = '⧉'; btn.classList.remove('copied'); }, 1200);
+    } catch { toast('Couldn’t copy.'); }
+  });
+  bubble.appendChild(btn);
+}
+
 function appendMessageEl(role, text, cls, sources) {
   // Bot messages come from Sprig, so pair them with his avatar.
   if (role === 'bot') {
@@ -1795,6 +1841,7 @@ function appendMessageEl(role, text, cls, sources) {
       });
       bubble.appendChild(foot);
     }
+    if (text && String(text).trim()) addMsgCopy(bubble, text);
     row.appendChild(sprigAvatar());
     row.appendChild(bubble);
     els.conversation.appendChild(row);
@@ -1803,6 +1850,7 @@ function appendMessageEl(role, text, cls, sources) {
   const el = document.createElement('div');
   el.className = `msg ${role}${cls ? ' ' + cls : ''}`;
   appendLinkified(el, text);
+  if (text && String(text).trim()) addMsgCopy(el, text);
   els.conversation.appendChild(el);
   return el;
 }
@@ -2080,16 +2128,33 @@ function hideWebviews() {
 // is still live.
 let liveSrcdoc = '';
 
-// Settings is the fourth thing that can occupy the viewport, beside the page
-// frame, the webviews and the welcome overlay. It lives in the main document
-// rather than in #page-frame because that frame is sandboxed without
-// allow-same-origin, and Settings needs `settings`, els.* and IPC directly.
+// --- Viewport page views ----------------------------------------------------
+//
+// Settings and the Library are full pages that live in the main document rather
+// than in #page-frame, because that frame is sandboxed without allow-same-origin
+// and they need `settings`/`library`, els.* and IPC directly. They sit inside
+// #viewport at z-index 3, so exactly one may be visible at a time.
+//
+// That mutex is what this owns, and ONLY that. It deliberately does not touch
+// els.frame, the webviews, els.overlay or liveSrcdoc: those genuinely differ per
+// render path (showOverlay and renderPageHtml leave the frame visible, renderSite
+// hides it and needs per-tab webview visibility rather than hideWebviews), so a
+// helper that hid everything would get all of them wrong.
+//
+// Named for what it does. `showViewportView(el)` would read as "this is all you
+// need to call", which it isn't.
+const VIEWPORT_VIEWS = () => [els.settingsView, els.libraryView];
+function hideViewportViews(except) {
+  for (const v of VIEWPORT_VIEWS()) if (v && v !== except) v.hidden = true;
+}
+
 function renderSettingsView(entry) {
   hideWebviews();
   els.frame.hidden = true;
   els.frame.removeAttribute('srcdoc');
   liveSrcdoc = '';
   els.overlay.hidden = true;
+  hideViewportViews(els.settingsView);
   els.settingsView.hidden = false;
   refreshSettingsUI();
   setSettingsTab((entry && entry.settingsGroup) || 'general');
@@ -2099,7 +2164,7 @@ function showOverlay() {
   els.frame.hidden = false;
   els.frame.removeAttribute('srcdoc');
   liveSrcdoc = '';
-  els.settingsView.hidden = true;
+  hideViewportViews();
   hideWebviews();
   els.overlay.hidden = false;
   renderSuggestions();
@@ -2109,7 +2174,7 @@ function renderPageHtml(html, scrollY = 0) {
   hideWebviews();
   els.frame.hidden = false;
   els.overlay.hidden = true;
-  els.settingsView.hidden = true;
+  hideViewportViews();
   // Append the Chervil runtime (link routing + applet bridge), plus an optional
   // scroll restore so the page doesn't jump to the top on each streaming re-render.
   const restore = scrollY > 0
@@ -2150,7 +2215,7 @@ function renderSite(url) {
   els.frame.removeAttribute('srcdoc');
   liveSrcdoc = '';
   els.overlay.hidden = true;
-  els.settingsView.hidden = true;
+  hideViewportViews();
   const tab = activeTab();
   if (!tab) return;
   const wv = ensureWebview(tab);
@@ -2209,6 +2274,14 @@ function renderCurrentPage() {
     setBadge('', 'settings');
     els.save.disabled = true;
     setRemixVisible(false);
+  } else if (entry.kind === 'library') {
+    // Same reason as settings above — a library entry has no html either, so a
+    // restored session would render a blank frame if this fell to the `else`.
+    renderLibraryView(entry);
+    setOmnibox('Library');
+    setBadge('', 'library');
+    els.save.disabled = true;
+    setRemixVisible(false);
   } else {
     renderPageHtml(entry.html);
     setOmnibox(entry.title || 'Chervil page');
@@ -2222,6 +2295,7 @@ function renderCurrentPage() {
   updatePlaceholder();
   updateBookmarkStar();
   updatePwFillButton();
+  updateFeedButton();
   applyZoom();
   const onLiveSite = !!(entry && entry.kind === 'navigate');
   if (els.reload) els.reload.disabled = !onLiveSite;       // reload = live sites only (pages have ↻ Refresh on the remix bar)
@@ -3422,15 +3496,17 @@ function startScheduler() {
 // with no records of its own, so without this the tick would never start (or would
 // stop itself) while ambient offers are on.
 function schedulerHasWork() {
-  return !!(living.length || schedules.length || watchers.length || dossierOffersEnabled());
+  return !!(living.length || schedules.length || watchers.length || feeds.length || dossierOffersEnabled());
 }
 
-// Master 30s tick: drives Living-page refresh, scheduled agents, and page watchers.
+// Master 30s tick: drives Living-page refresh, scheduled agents, page watchers, and feeds.
 function schedulerTick() {
   if (!schedulerHasWork()) { clearInterval(livingTimer); livingTimer = null; return; }
   tickLiving();
   tickSchedules();
   tickWatchers();
+  // Self-batching and re-entrancy-guarded; this tick is every 30s.
+  tickFeeds().catch(() => {});
   // Rate-limits itself to DOSSIER_SCAN_MS internally; this tick is every 30s.
   scanForDossierTopics().catch(() => {});
 }
@@ -3487,6 +3563,9 @@ async function runSchedule(sch) {
   renderSchedulesIfOpen();
   try {
     const before = currentEntry(tab);
+    // A schedule bound to a feeds agent picks up its items inside submitQuery —
+    // it resolves "run as" and "currently active" to the same place, so the rule
+    // lives there once instead of here and again for the interactive path.
     await submitQuery(sch.prompt, {
       tab, skipFollowup: true, allowNavigate: false, deep: !!sch.deep, background: true, agentId: sch.agentId || null, displayText: sch.prompt,
     });
@@ -3507,6 +3586,85 @@ async function runSchedule(sch) {
   sch.running = false;
   renderSchedulesIfOpen();
   scheduleSave();
+}
+
+/**
+ * Undigested items for a run as `agent`. Returns { context, ids }, or null when
+ * there's nothing to brief — in which case the run proceeds as an ordinary prompt
+ * and the agent says so, rather than being handed an empty list to pad out.
+ */
+// Digest context for feeds, optionally scoped to one folder by name. The shared
+// core behind both a feeds AGENT (folder from its frontmatter) and a natural-
+// language "summarize my <folder> feeds" ask. Resolves folder→feedIds from the
+// in-memory feeds (each item carries feedId), so scoping is a cheap renderer-side
+// filter — no SQL change. Returns { context, ids } or null when there's nothing.
+async function feedDigestForFolder(folderName, { undigestedOnly = true } = {}) {
+  if (!feeds.length || !window.chervil.index || !window.chervil.index.feeds) return null;
+  const scope = (folderName || '').trim().toLowerCase();
+  let allow = null;
+  if (scope) {
+    allow = new Set(feeds.filter((f) => (f.folder || '').trim().toLowerCase() === scope).map((f) => f.id));
+    if (!allow.size) return null; // a folder with no feeds — nothing to brief
+  }
+  try {
+    // A week's window, not a day's: a Monday briefing shouldn't silently skip
+    // everything the weekend published. undigestedOnly is what keeps a scheduled
+    // digest from repeating itself; an interactive ask sets it false to summarize
+    // whatever's there. Pull a wider batch when scoping so the SQL LIMIT doesn't
+    // crowd a small folder out before the filter runs.
+    const r = await window.chervil.index.feeds.recent({
+      sinceMs: Date.now() - 7 * 24 * 60 * 60 * 1000,
+      limit: allow ? 500 : 120,
+      undigestedOnly,
+    });
+    let items = (r && r.ok && r.items) || [];
+    if (allow) items = items.filter((it) => allow.has(it.feedId)).slice(0, 120);
+    if (!items.length) return null;
+    return { context: buildFeedContext(items), ids: items.map((i) => i.id) };
+  } catch {
+    return null; // no index, no digest — the schedule still runs as a normal prompt
+  }
+}
+
+async function feedDigestContext(agent) {
+  if (!agent || !agent.feeds || !feeds.length) return null;
+  return feedDigestForFolder(agent.feedFolder || '', { undigestedOnly: true });
+}
+
+// "Summarize / brief me on / what's new in my <name> feeds" → the name of a real
+// feed folder, or null. Requires BOTH a real folder name and a feed/folder word,
+// so it can't hijack a generic "summarize X". This is the fix for the model — which
+// has no feeds tool — improvising a navigation to a made-up chervil://feeds/<name>
+// URL and rendering a blank page.
+function parseFeedFolderDigest(query) {
+  const q = String(query || '').trim();
+  if (!q || !feeds.length) return null;
+  // No trailing \b: "summ" is a PREFIX of "summarize"/"summary" (no word boundary
+  // after it), so a closing \b would never match the most common phrasing.
+  if (!/\b(summ|brief|digest|recap|round-?up|catch me up|tl;?dr|what'?s\s+(?:new|happening|going on))/i.test(q)) return null;
+  if (!/\b(feeds?|folder)\b/i.test(q)) return null;
+  for (const f of allFeedFolders()) {
+    const esc = f.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    if (new RegExp(`\\b${esc}\\b`, 'i').test(q)) return f;
+  }
+  return null;
+}
+
+// Compose a digest of one feed folder from a natural-language request. Forces the
+// compose path (allowNavigate:false) so the model can't wander off to a URL.
+async function summarizeFeedFolder(tab, query, folder) {
+  els.prompt.value = '';
+  resetPromptHeight();
+  const ctx = await feedDigestForFolder(folder, { undigestedOnly: false });
+  if (!ctx) {
+    addMessage(tab, 'user', query);
+    addMessage(tab, 'bot', `Your “${folder}” feed folder has nothing to summarize yet — no items have come in. Give the feeds a moment to pull (Library → Feeds → Pull now), then ask again.`, 'note');
+    return;
+  }
+  submitQuery(query, {
+    tab, recallContext: ctx.context, recallMode: 'digest', allowNavigate: false, skipFollowup: true,
+    linksNewTab: true, // feed items open in new tabs; the summary stays home base
+  });
 }
 
 // --- Page watchers: poll a URL, notify when it changes / a condition is met --
@@ -3608,6 +3766,237 @@ function parseWatchIntent(text) {
   m = q.match(/^(?:tell|let|notify|ping|alert)\s+me(?:\s+know)?\s+(?:when|if)\s+(.+)$/i);
   if (m) return { condition: m[1].trim() };
   return null;
+}
+
+// --- Your Feeds: pull subscriptions on a cadence -----------------------------
+// Items land in the page index (its own tables, apart from your pages); this side
+// only decides what's due. The digest reads them back at run time — nothing is
+// summarized on ingest, per RFC 0013: browsing stays free, instant and offline,
+// and the model reads the top hits when you actually ask.
+
+// Loaded from main at launch — the adapters own the list of types and what each
+// one needs, so the form is built from their schema rather than a copy of it that
+// drifts. Empty until hydrateFeedStatus runs; the pane handles that.
+let FEED_TYPES = [];
+
+const FEED_INTERVALS = [
+  ['1800000', 'every 30 min'],
+  ['3600000', 'every hour'],
+  ['21600000', 'every 6 hours'],
+  ['43200000', 'every 12 hours'],
+  ['86400000', 'daily'],
+];
+const FEED_DEFAULT_INTERVAL = 3600000;
+
+// How long to keep a feed's items. Per-feed, replacing the old single global cut.
+// '0' = forever (no age eviction; the global count cap still applies so a forever
+// feed can't grow without bound). The default matches the old global 30 days, so a
+// feed with no retentionMs behaves exactly as before.
+const DAY_MS = 86400000;
+const FEED_RETENTIONS = [
+  ['86400000', '1 day'],
+  ['259200000', '3 days'],
+  ['604800000', '1 week'],
+  ['1209600000', '2 weeks'],
+  ['2592000000', '1 month'],
+  ['7776000000', '3 months'],
+  ['0', 'forever'],
+];
+const FEED_DEFAULT_RETENTION = 2592000000; // 30 days — the prior global FEED_MAX_AGE_MS
+
+// Fetch width. tickWatchers fires everything due at once, which is fine for a few
+// watchers and not for 30 feeds landing on the same daily slot — that's one
+// 30-way network storm on a single tick. PulseKeeper's collector used 3 too.
+const FEED_BATCH = 3;
+let feedCycleRunning = false;
+// Which feed rows have their ⚙ settings panel open. Transient UI state (a toggle),
+// so in-memory and never persisted.
+const expandedFeeds = new Set();
+
+// A feed's retention in ms, defaulting when unset. Kept as a helper because
+// `?? DEFAULT` (not `|| DEFAULT`) matters: 0 means forever and must survive.
+function feedRetentionMs(f) {
+  return (f && f.retentionMs != null) ? f.retentionMs : FEED_DEFAULT_RETENTION;
+}
+
+function feedStatusOf(id) {
+  let s = feedStatus.get(id);
+  if (!s) { s = { lastFetched: 0, lastError: '', lastAdded: 0, running: false }; feedStatus.set(id, s); }
+  return s;
+}
+
+function feedIntervalLabel(ms) {
+  const row = FEED_INTERVALS.find(([v]) => parseInt(v, 10) === ms);
+  return row ? row[1] : 'hourly';
+}
+
+function feedRetentionLabel(ms) {
+  const row = FEED_RETENTIONS.find(([v]) => parseInt(v, 10) === ms);
+  return row ? `keep ${row[1]}` : 'keep 1 month';
+}
+
+function tickFeeds() {
+  // A slow cycle must not overlap the next 30s tick: a feed that takes 40s would
+  // otherwise be started again while still in flight.
+  if (feedCycleRunning) return Promise.resolve();
+  const now = Date.now();
+  const due = feeds.filter((f) => f.enabled && !feedStatusOf(f.id).running
+    && now - (feedStatusOf(f.id).lastFetched || 0) >= (f.intervalMs || FEED_DEFAULT_INTERVAL));
+  if (!due.length) return Promise.resolve();
+  return runFeedCycle(due);
+}
+
+async function runFeedCycle(due) {
+  feedCycleRunning = true;
+  try {
+    for (let i = 0; i < due.length; i += FEED_BATCH) {
+      await Promise.allSettled(due.slice(i, i + FEED_BATCH).map((f) => runFeed(f)));
+    }
+    // Prune to each feed's own retention. Nothing else prunes feed items (the
+    // site-capture eviction has no feed equivalent), so if this isn't called they
+    // grow forever. A retention of 0 = forever: that feed is left out of the
+    // cutoff list and kept only by the global count cap.
+    try {
+      const now = Date.now();
+      const perFeed = feeds
+        .map((f) => ({ feedId: f.id, retentionMs: feedRetentionMs(f) }))
+        .filter((x) => x.retentionMs > 0)
+        .map((x) => ({ feedId: x.feedId, cutoffMs: now - x.retentionMs }));
+      await window.chervil.index.feeds.evict({ perFeed });
+    } catch { /* index unavailable */ }
+  } finally {
+    feedCycleRunning = false;
+  }
+}
+
+/**
+ * Fetch one feed. Main does the network AND the ingest in a single call — the
+ * items would only be handed straight back, and a busy feed pulls hundreds.
+ * Deliberately silent: a feed arriving is not news. Only the digest notifies.
+ */
+async function runFeed(f) {
+  const st = feedStatusOf(f.id);
+  if (st.running) return;
+  st.running = true;
+  renderFeedsIfOpen();
+  try {
+    const r = await window.chervil.index.feeds.fetch({
+      id: f.id, type: f.type, name: f.name || '', config: f.config || {}, maxItems: f.maxItems || 20,
+    });
+    st.lastFetched = Date.now();
+    if (r && r.ok) { st.lastError = ''; st.lastAdded = r.added || 0; }
+    else st.lastError = (r && r.error) || 'fetch failed';
+  } catch (err) {
+    st.lastFetched = Date.now();
+    st.lastError = String((err && err.message) || err || 'fetch failed');
+  }
+  st.running = false;
+  renderFeedsIfOpen();
+}
+
+/** Subscribe. Runs an immediate first pull so the feed isn't empty until its slot. */
+// pullNow defaults true — a single subscribe wants immediate feedback. A bulk
+// import passes false: with runFeed unconditional, importing 200 feeds fires 200
+// concurrent fetches, where the next 30s tick would instead sweep them into `due`
+// and drain them three at a time. That's the whole storm fix — no pool needed.
+function createFeed({ type, name, config, intervalMs, maxItems, folder, retentionMs, pullNow = true } = {}) {
+  const at = Date.now();
+  const f = {
+    id: uid(),
+    type: type || 'rss',
+    name: (name || '').trim() || 'Feed',
+    config: config || {},
+    enabled: true,
+    intervalMs: intervalMs || FEED_DEFAULT_INTERVAL,
+    maxItems: maxItems || 20,
+    folder: (folder || '').trim(),
+    // Only stamp a retention when one was chosen; unset reads as the default via
+    // feedRetentionMs, so old feeds and new-default feeds share one code path.
+    ...(retentionMs != null ? { retentionMs } : {}),
+    createdAt: at,
+    updatedAt: at,
+  };
+  feeds.push(f);
+  scheduleSave();
+  startScheduler();
+  if (pullNow) runFeed(f).catch(() => {});
+  return f;
+}
+
+// Folders are DERIVED from what's in use — no separate names array, no empty
+// folders (there's no "create an empty feed folder" flow; folders come from OPML
+// or from assigning a feed).
+function allFeedFolders() {
+  return [...new Set(feeds.map((f) => (f.folder || '').trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b));
+}
+
+// Any feed mutation must bump updatedAt or the sync merge (whole-record LWW by
+// updatedAt) can silently lose the edit — same reason the Pause toggle does.
+function moveFeedToFolder(id, folder) {
+  const f = feeds.find((x) => x.id === id);
+  if (!f) return;
+  f.folder = (folder || '').trim();
+  f.updatedAt = Date.now();
+  scheduleSave();
+  renderFeedsIfOpen();
+}
+
+function setFeedRetention(id, ms) {
+  const f = feeds.find((x) => x.id === id);
+  if (!f) return;
+  f.retentionMs = Math.max(0, parseInt(ms, 10) || 0);
+  f.updatedAt = Date.now();
+  scheduleSave();
+  renderFeedsIfOpen();
+}
+
+function setFeedInterval(id, ms) {
+  const f = feeds.find((x) => x.id === id);
+  if (!f) return;
+  f.intervalMs = parseInt(ms, 10) || FEED_DEFAULT_INTERVAL;
+  f.updatedAt = Date.now();
+  scheduleSave();
+  startScheduler();
+  renderFeedsIfOpen();
+}
+
+/** Unsubscribe. Takes the feed's items and this machine's cursor with it. */
+function removeFeed(id) {
+  feeds = feeds.filter((f) => f.id !== id);
+  feedStatus.delete(id);
+  expandedFeeds.delete(id); // don't leave a deleted feed's panel id lingering
+  addTombstone('feeds', id);
+  try { window.chervil.index.feeds.remove(id); } catch { /* index unavailable */ }
+  scheduleSave();
+  renderFeedsIfOpen();
+}
+
+/**
+ * Mirror this machine's fetch cursors into memory at launch, so a 30s tick can
+ * decide what's due without an IPC round trip per feed. feed_state stays the
+ * source of truth; this is a cache of it.
+ */
+async function hydrateFeedStatus() {
+  if (!window.chervil.index || !window.chervil.index.feeds) return;
+  try {
+    const t = await window.chervil.index.feeds.types();
+    if (t && t.ok) FEED_TYPES = t.types || [];
+  } catch { /* the pane will show no types rather than a wrong list */ }
+  if (!feeds.length) return;
+  try {
+    const r = await window.chervil.index.feeds.states();
+    if (!r || !r.ok) return;
+    for (const s of r.states || []) {
+      // Keep lastFetched so cadence resumes without a launch burst — the same
+      // reason watchers keep theirs (:10880). Living pages reset theirs to avoid
+      // a token-cost burst; a fetch costs nothing, and resetting would silently
+      // lose a day of items.
+      Object.assign(feedStatusOf(s.feedId), {
+        lastFetched: s.lastFetched || 0,
+        lastError: s.lastError || '',
+      });
+    }
+  } catch { /* index unavailable — every feed just looks due, which is harmless */ }
 }
 
 // Quietly re-run a living page's query and replace its content in place. Runs
@@ -4916,6 +5305,9 @@ function populateSchedAgentSelect() {
 function closeSched() { els.schedView.classList.remove('open'); }
 function renderSchedulesIfOpen() { if (els.schedView && els.schedView.classList.contains('open')) renderSchedules(); }
 function renderWatchersIfOpen() { if (els.schedView && els.schedView.classList.contains('open')) renderWatchers(); }
+// Feeds live in the Library now. Only re-render when the Library is showing the
+// Feeds section — a background pull shouldn't touch the DOM otherwise.
+function renderFeedsIfOpen() { if (libraryOpen() && drawerTab === 'feeds') renderFeeds(); }
 
 // The Page-watchers list in the Schedules panel.
 function renderWatchers() {
@@ -4972,6 +5364,433 @@ function renderWatchers() {
     item.appendChild(del);
     list.appendChild(item);
   }
+}
+
+// The Your-feeds list in the Schedules panel.
+// A folder <select> for one feed's expandable panel — mirrors favoriteFolderSelect.
+function feedFolderSelect(f) {
+  const sel = document.createElement('select');
+  sel.className = 'lib-folder-select';
+  const optU = document.createElement('option'); optU.value = ''; optU.textContent = 'Unfiled';
+  sel.appendChild(optU);
+  for (const name of allFeedFolders()) {
+    const o = document.createElement('option'); o.value = name; o.textContent = name;
+    sel.appendChild(o);
+  }
+  const optNew = document.createElement('option'); optNew.value = '__new__'; optNew.textContent = 'New folder…';
+  sel.appendChild(optNew);
+  sel.value = f.folder || '';
+  sel.addEventListener('change', () => {
+    if (sel.value === '__new__') {
+      const name = (prompt('New folder name:') || '').trim();
+      if (!name) { sel.value = f.folder || ''; return; }
+      moveFeedToFolder(f.id, name);
+    } else {
+      moveFeedToFolder(f.id, sel.value);
+    }
+  });
+  return sel;
+}
+
+// A labelled <select> built from an [[value, label], …] list — the interval and
+// retention pickers in a feed's settings panel.
+function feedPicker(labelText, options, current, onChange) {
+  const wrap = document.createElement('label');
+  wrap.className = 'feed-pick';
+  wrap.textContent = labelText + ' ';
+  const sel = document.createElement('select');
+  for (const [v, lbl] of options) {
+    const o = document.createElement('option'); o.value = v; o.textContent = lbl;
+    sel.appendChild(o);
+  }
+  sel.value = String(current);
+  sel.addEventListener('change', () => onChange(sel.value));
+  wrap.appendChild(sel);
+  return wrap;
+}
+
+function renderFeeds() {
+  const list = document.getElementById('feed-list');
+  if (!list) return;
+  // Keep the subscribe-form folder autocomplete in step with folders in use.
+  const dl = document.getElementById('feed-folder-list');
+  if (dl) { dl.innerHTML = ''; for (const name of allFeedFolders()) { const o = document.createElement('option'); o.value = name; dl.appendChild(o); } }
+  list.innerHTML = '';
+  if (!feeds.length) {
+    const e = document.createElement('div');
+    e.className = 'sched-empty';
+    e.textContent = 'No feeds yet. Subscribe above — paste a site’s URL and Chervil will find its feed.';
+    list.appendChild(e);
+    return;
+  }
+
+  const selecting = librarySelectMode; // FP3 wires the checkboxes; harmless until then
+  // Group by folder: sort by folder-name order with Unfiled last, then emit a
+  // collapsible header at each folder boundary (mirrors the favorites loop).
+  const order = allFeedFolders();
+  const ordered = feeds.slice().sort((a, b) => {
+    const fa = (a.folder || '').trim(); const fb = (b.folder || '').trim();
+    if (fa === fb) return (a.name || '').localeCompare(b.name || '');
+    if (!fa) return 1; if (!fb) return -1;          // Unfiled sinks to the bottom
+    return order.indexOf(fa) - order.indexOf(fb);
+  });
+  const counts = new Map();
+  for (const f of feeds) { const k = (f.folder || '').trim(); counts.set(k, (counts.get(k) || 0) + 1); }
+  const grouping = order.length > 0; // only show headers once at least one feed is foldered
+
+  let lastFolder = null;
+  let collapsedNow = false;
+  for (const f of ordered) {
+    if (grouping) {
+      const fk = (f.folder || '').trim();
+      if (fk !== lastFolder) {
+        lastFolder = fk;
+        collapsedNow = isFolderCollapsed('feeds', fk);
+        const head = document.createElement('div');
+        head.className = 'lib-folder-head' + (collapsedNow ? ' collapsed' : '');
+        head.textContent = `${collapsedNow ? '▸' : '▾'} ${fk || 'Unfiled'} · ${counts.get(fk) || 0}`;
+        head.title = collapsedNow ? 'Expand folder' : 'Collapse folder';
+        head.style.cursor = 'pointer';
+        head.addEventListener('click', () => toggleFolderCollapsed('feeds', fk));
+        list.appendChild(head);
+      }
+      if (collapsedNow) continue;
+    }
+
+    const st = feedStatusOf(f.id);
+    const type = FEED_TYPES.find((t) => t.id === f.type);
+    const item = document.createElement('div');
+    item.className = 'sched-item' + (selecting ? ' selecting' : '') + (selecting && selectedLibraryIds.has(f.id) ? ' sel' : '');
+
+    if (selecting) {
+      const chk = document.createElement('span');
+      chk.className = 'lib-check';
+      chk.textContent = selectedLibraryIds.has(f.id) ? '☑' : '☐';
+      item.appendChild(chk);
+    }
+
+    const main = document.createElement('div');
+    main.className = 'si-main';
+    const title = document.createElement('div');
+    title.className = 'si-title';
+    title.textContent = `${(type && type.emoji) || '📡'} ${f.name || 'Feed'}`;
+    const when = document.createElement('div');
+    when.className = 'si-when';
+    // Summary line: folder · interval · retention · status.
+    const bits = [];
+    if (f.folder) bits.push(f.folder);
+    bits.push(feedIntervalLabel(f.intervalMs));
+    bits.push(feedRetentionLabel(feedRetentionMs(f)));
+    if (!f.enabled) bits.push('paused');
+    if (st.running) bits.push('pulling…');
+    if (st.lastError) bits.push(`⚠ ${st.lastError.slice(0, 80)}`);
+    else if (st.lastFetched) bits.push('pulled ' + relTime(st.lastFetched));
+    when.textContent = bits.join(' · ');
+    main.appendChild(title);
+    main.appendChild(when);
+    // Toggle from a click ANYWHERE on the row (the whole thing reads as one
+    // control in select mode) — the checkbox is a sibling of `main`, so a handler
+    // on `main` alone would ignore clicks on the box itself.
+    if (selecting) item.addEventListener('click', () => toggleLibrarySelected(f.id));
+
+    item.appendChild(main);
+
+    // In select mode the row is a selection target only — no per-feed action buttons.
+    if (!selecting) {
+      const expanded = expandedFeeds.has(f.id);
+      const gear = document.createElement('button');
+      gear.className = 'si-btn' + (expanded ? ' on' : '');
+      gear.textContent = '⚙';
+      gear.title = 'Feed settings';
+      gear.addEventListener('click', () => { if (expanded) expandedFeeds.delete(f.id); else expandedFeeds.add(f.id); renderFeeds(); });
+      const pullBtn = document.createElement('button');
+      pullBtn.className = 'si-btn';
+      pullBtn.textContent = 'Pull now';
+      pullBtn.addEventListener('click', () => runFeed(f).then(renderFeeds));
+      const tog = document.createElement('button');
+      tog.className = 'si-btn';
+      tog.textContent = f.enabled ? 'Pause' : 'Resume';
+      tog.addEventListener('click', () => {
+        f.enabled = !f.enabled;
+        f.updatedAt = Date.now();
+        if (f.enabled) startScheduler();
+        scheduleSave();
+        renderFeeds();
+      });
+      const del = document.createElement('button');
+      del.className = 'si-btn';
+      del.textContent = 'Delete';
+      del.addEventListener('click', () => removeFeed(f.id));
+      item.appendChild(gear);
+      item.appendChild(pullBtn);
+      item.appendChild(tog);
+      item.appendChild(del);
+    }
+
+    list.appendChild(item);
+
+    // The expandable settings panel, as its own row under the feed.
+    if (!selecting && expandedFeeds.has(f.id)) {
+      const panel = document.createElement('div');
+      panel.className = 'feed-settings';
+      const folderRow = document.createElement('label');
+      folderRow.className = 'feed-pick';
+      folderRow.textContent = 'Folder ';
+      folderRow.appendChild(feedFolderSelect(f));
+      panel.appendChild(folderRow);
+      panel.appendChild(feedPicker('Pull', FEED_INTERVALS, f.intervalMs, (v) => setFeedInterval(f.id, v)));
+      panel.appendChild(feedPicker('Keep', FEED_RETENTIONS, feedRetentionMs(f), (v) => setFeedRetention(f.id, v)));
+      list.appendChild(panel);
+    }
+  }
+}
+
+/** Build the type picker + its config fields from the adapters' own form schema. */
+function populateFeedForm() {
+  const sel = document.getElementById('feed-type');
+  // Bail while FEED_TYPES is still empty (no index, or hydrate hasn't run) rather
+  // than wiring a picker with nothing in it — reopening the panel retries.
+  if (!sel || !FEED_TYPES.length || sel.options.length) return;
+  for (const t of FEED_TYPES) {
+    const o = document.createElement('option');
+    o.value = t.id;
+    o.textContent = `${t.emoji} ${t.label}`;
+    sel.appendChild(o);
+  }
+  sel.addEventListener('change', renderFeedFields);
+  renderFeedFields();
+}
+
+function selectedFeedType() {
+  const sel = document.getElementById('feed-type');
+  if (!sel || !FEED_TYPES.length) return null;
+  return FEED_TYPES.find((t) => t.id === sel.value) || FEED_TYPES[0];
+}
+
+function renderFeedFields() {
+  const wrap = document.getElementById('feed-fields');
+  const type = selectedFeedType();
+  if (!wrap || !type) return;
+  wrap.innerHTML = '';
+  const hint = document.createElement('p');
+  hint.className = 'sched-sub';
+  hint.textContent = type.description;
+  wrap.appendChild(hint);
+  for (const field of type.fields) {
+    const row = document.createElement('div');
+    row.className = 'sched-row';
+    const label = document.createElement('label');
+    label.textContent = field.label + ' ';
+    let input;
+    if (field.type === 'select') {
+      input = document.createElement('select');
+      for (const opt of field.options || []) {
+        const o = document.createElement('option');
+        o.value = opt; o.textContent = opt;
+        input.appendChild(o);
+      }
+      if (field.default) input.value = field.default;
+    } else {
+      input = document.createElement('input');
+      input.type = 'text';
+      input.placeholder = field.placeholder || '';
+      input.spellcheck = false;
+    }
+    input.id = `feed-cfg-${field.key}`;
+    input.dataset.key = field.key;
+    label.appendChild(input);
+    row.appendChild(label);
+    wrap.appendChild(row);
+  }
+}
+
+// Normalize a feed URL for identity — "already subscribed?" and OPML dedup must not
+// miss on cosmetic differences (http vs https, a trailing slash, a #fragment, or a
+// URL that discovery later resolves to a canonical one). Conservative on purpose:
+// it lowercases the host but keeps path case (some feeds are path-case-sensitive)
+// and keeps the query string (?format=rss vs ?format=atom are different feeds).
+//
+// Renderer-side because both callers are here — the chip's check and the OPML
+// dedup — and the preload is sandboxed, so lib/feeds/util.js isn't reachable.
+function feedUrlKey(url) {
+  const s = String(url == null ? '' : url).trim();
+  if (!s) return '';
+  try {
+    const u = new URL(/^https?:\/\//i.test(s) ? s : `https://${s}`);
+    u.hash = '';
+    const host = u.hostname.replace(/^www\./, '').toLowerCase();
+    return `${host}${u.pathname.replace(/\/+$/, '')}${u.search}`;
+  } catch { return s.toLowerCase(); }
+}
+function sameFeedUrl(a, b) { const k = feedUrlKey(a); return !!k && k === feedUrlKey(b); }
+
+// Is there already a feed pointing at this URL? YouTube stores a channel URL that
+// gets resolved elsewhere, so it can't be matched this way — the caller skips it.
+function feedForUrl(url) {
+  return feeds.find((f) => f.config && f.config.url && sameFeedUrl(f.config.url, url)) || null;
+}
+
+/**
+ * Subscribe to a URL, resolving the feed if the page itself isn't one. The single
+ * subscribe primitive behind the form, the omnibox chip and the right-click item.
+ * @returns {Promise<object|null>} the feed, an existing one if already subscribed, or null
+ */
+async function subscribeByUrl(rawUrl, { typeId = 'rss', name = '', intervalMs = FEED_DEFAULT_INTERVAL, retentionMs, folder = '', discover = true, quiet = false } = {}) {
+  let url = String(rawUrl || '').trim();
+  if (!url) return null;
+  if (!/^https?:\/\//i.test(url)) url = 'https://' + url;
+
+  // Finding the feed is our job, not the user's. YouTube resolves its own URLs.
+  if (discover && typeId !== 'youtube') {
+    if (!quiet) toast('Looking for a feed…');
+    try {
+      const d = await window.chervil.index.feeds.discover(url);
+      if (d && d.ok && d.url) url = d.url;
+      else if (d && d.ok && !d.url) { if (!quiet) toast('No feed found at that address.'); return null; }
+    } catch { /* keep what we have and let the first pull report */ }
+  }
+
+  const existing = feedForUrl(url);
+  if (existing) { if (!quiet) toast(`Already subscribed to “${existing.name}”.`); return existing; }
+
+  const config = { url };
+  const f = createFeed({
+    type: typeId,
+    name: (name || '').trim() || feedNameFromConfig(typeId, config),
+    config,
+    intervalMs,
+    retentionMs,
+    folder,
+  });
+  if (!quiet) toast(`Subscribed to “${f.name}”.`);
+  return f;
+}
+
+async function addFeedFromForm() {
+  const nameEl = document.getElementById('feed-name');
+  const intEl = document.getElementById('feed-interval');
+  const retEl = document.getElementById('feed-retention');
+  const folderEl = document.getElementById('feed-folder');
+  const type = selectedFeedType();
+  if (!type) { toast('Feeds aren’t available — the page index didn’t load.'); return; }
+
+  const config = {};
+  for (const field of type.fields) {
+    const el = document.getElementById(`feed-cfg-${field.key}`);
+    const v = ((el && el.value) || '').trim();
+    if (!v && field.required) { toast(`${type.label} needs ${field.label.toLowerCase()}.`); return; }
+    if (v) config[field.key] = v;
+  }
+  const intervalMs = parseInt(intEl && intEl.value, 10) || FEED_DEFAULT_INTERVAL;
+  const retentionMs = Math.max(0, parseInt(retEl && retEl.value, 10) || 0);
+  const folder = ((folderEl && folderEl.value) || '').trim();
+  const name = (nameEl && nameEl.value) || '';
+
+  // URL-based types route through subscribeByUrl (discovery + dedup); reddit has no
+  // URL, so it's created directly.
+  if (type.fields.some((fld) => fld.key === 'url')) {
+    if (!config.url) { toast(`${type.label} needs a URL.`); return; }
+    const f = await subscribeByUrl(config.url, { typeId: type.id, name, intervalMs, retentionMs, folder });
+    if (!f) return;
+  } else {
+    createFeed({ type: type.id, name: name.trim() || feedNameFromConfig(type.id, config), config, intervalMs, retentionMs, folder });
+  }
+
+  if (nameEl) nameEl.value = '';
+  if (folderEl) folderEl.value = '';
+  for (const field of type.fields) {
+    const el = document.getElementById(`feed-cfg-${field.key}`);
+    if (el && el.tagName === 'INPUT') el.value = '';
+  }
+  renderFeeds();
+}
+
+/** A readable name before the first pull has told us the feed's real title. */
+function feedNameFromConfig(type, config) {
+  if (type === 'reddit') return 'r/' + String(config.subreddit || '').replace(/^\/?r\//, '');
+  if (config.url) return hostOf(config.url) || 'Feed';
+  return 'Feed';
+}
+
+// Import an OPML export from another feed reader. Main picks the file and parses;
+// here we dedup (against existing feeds AND within the file — exporters routinely
+// list the same feed under two folders) and bulk-subscribe.
+async function importFeedsFromOpml() {
+  if (!window.chervil.index || !window.chervil.index.feeds || !window.chervil.importOpml) {
+    toast('Feeds aren’t available — the page index didn’t load.');
+    return;
+  }
+  let r;
+  try { r = await window.chervil.importOpml(); } catch { toast('OPML import failed.'); return; }
+  applyOpmlImport(r);
+}
+
+// The pick and the apply are split so the apply — dedup + the cadence sheet + the
+// bulk create — is testable without driving a native file dialog.
+function applyOpmlImport(r) {
+  if (!r || r.canceled) return;
+  if (!r.ok) {
+    const msg = r.error === 'no-feeds' ? 'No feeds found in that file.'
+      : r.error === 'too-big' ? 'That file is too large to be an OPML export.'
+        : 'Couldn’t read that OPML file.';
+    toast(msg);
+    return;
+  }
+
+  // Dedup: skip anything we're already subscribed to, and collapse duplicates
+  // within the file itself.
+  const fresh = [];
+  const seen = new Set();
+  let already = 0;
+  for (const item of r.feeds) {
+    const url = String(item.xmlUrl || '').trim();
+    if (!url) continue;
+    const key = feedUrlKey(url);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    if (feedForUrl(url)) { already++; continue; }
+    fresh.push(item);
+  }
+
+  if (!fresh.length) {
+    toast(r.feeds.length ? 'You’re already subscribed to every feed in that file.' : 'No feeds found in that file.');
+    return;
+  }
+
+  // Cadence is a real choice, not defensive UX: 200 feeds hourly is ~4,800
+  // fetches a day, forever. Default a bulk import to daily.
+  const keptFolders = new Set(fresh.map((it) => (it.folder || '').trim()).filter(Boolean)).size;
+  const doImport = (intervalMs) => {
+    for (const item of fresh) {
+      createFeed({
+        type: 'rss',
+        name: (item.title || '').trim() || feedNameFromConfig('rss', { url: item.xmlUrl }),
+        config: { url: item.xmlUrl },
+        folder: (item.folder || '').trim(),
+        intervalMs,
+        pullNow: false, // the scheduler sweeps them in 3-wide; no fetch storm
+      });
+    }
+    scheduleSave();
+    startScheduler();
+    if (libraryOpen() && drawerTab === 'feeds') renderFeeds();
+    const bits = [`Imported ${fresh.length} feed${fresh.length === 1 ? '' : 's'}${keptFolders ? ` in ${keptFolders} folder${keptFolders === 1 ? '' : 's'}` : ''}.`];
+    if (already) bits.push(`${already} already subscribed.`);
+    if (r.skipped) bits.push(`${r.skipped} had no feed URL.`);
+    const note = bits.join(' ');
+    toast(note);
+    if (els.libImportStatus) els.libImportStatus.textContent = note;
+  };
+
+  showActionSheet(
+    `Import ${fresh.length} feed${fresh.length === 1 ? '' : 's'}?`,
+    'How often should Chervil pull them? Daily is easy on your machine and the sources; you can change any feed later.',
+    [
+      { label: 'Daily (recommended)', primary: true, onClick: () => doImport(86400000) },
+      { label: 'Every 6 hours', onClick: () => doImport(21600000) },
+      { label: 'Hourly', onClick: () => doImport(3600000) },
+    ],
+  );
 }
 
 function addWatcherFromForm() {
@@ -5124,6 +5943,12 @@ function parseAgentFile(text, fallbackName) {
     provider: fm.provider ? String(fm.provider).toLowerCase() : '',
     mcp: list(fm.mcp || fm.mcpServers || fm.mcp_servers),
     starters: list(fm.starters || fm.starter || fm.examples),
+    // `feeds: true` means "this persona works from Your Feeds" — every run as it,
+    // scheduled or interactive, gets recent items attached. Declaring the need on
+    // the persona rather than on each schedule is what lets one rule cover both.
+    feeds: fm.feeds === true || String(fm.feeds || '').toLowerCase() === 'true',
+    // Optional: scope a feeds agent's digest to one folder ("brief my Tech feeds").
+    feedFolder: fm.feedFolder ? String(fm.feedFolder).trim() : '',
   };
 }
 
@@ -5228,6 +6053,8 @@ function serializeAgentFile(a) {
   if (a.model) lines.push(`model: ${esc(a.model)}`);
   if (a.provider) lines.push(`provider: ${esc(a.provider)}`);
   if (a.mcp && a.mcp.length) lines.push(`mcp: [${a.mcp.map(esc).join(', ')}]`);
+  if (a.feeds) lines.push('feeds: true');
+  if (a.feedFolder) lines.push(`feedFolder: ${esc(a.feedFolder)}`);
   if (a.starters && a.starters.length) {
     lines.push('starters:');
     a.starters.forEach((s) => lines.push(`  - ${esc(s)}`));
@@ -5262,6 +6089,7 @@ async function doPublishAgent(a, visibility) {
     agent: {
       id: a.id, name: a.name, description: a.description || '', persona: a.persona || '',
       model: a.model || '', provider: a.provider || '', mcp: a.mcp || [], starters: a.starters || [],
+      feeds: !!a.feeds,
     },
     visibility,
     sourceId: a.id, // stable id → re-publish updates in place
@@ -5293,6 +6121,8 @@ function importAgentDoc(doc) {
     provider: a.provider ? String(a.provider) : '',
     mcp: Array.isArray(a.mcp) ? a.mcp.map((s) => String(s)) : [],
     starters: Array.isArray(a.starters) ? a.starters.map((s) => String(s)) : [],
+    feeds: a.feeds === true,
+    feedFolder: a.feedFolder ? String(a.feedFolder).trim() : '',
   };
   agents.push(agent);
   scheduleSave();
@@ -6210,6 +7040,7 @@ const NAV_WORD_DENYLIST = new Set([
   'settings', 'downloads', 'download', 'history', 'bookmarks', 'bookmark',
   'help', 'file', 'menu', 'find', 'library', 'profile', 'account', 'tab',
   'page', 'devtools', 'console', 'cart', 'checkout', 'home', 'back', 'forward',
+  'feeds', 'feed',
 ]);
 
 // ---- Your places (Settings → You) ------------------------------------------
@@ -6716,6 +7547,15 @@ function handleComposerSubmit(text, opts = {}) {
     return;
   }
 
+  // "Summarize the <name> feeds/folder" → a digest of just that feed folder.
+  // Ahead of the dossier/compose paths: a feed folder is a specific, named thing,
+  // and without this the request falls through to the model, which — having no
+  // feeds tool — improvises a navigation to a made-up chervil://feeds/<name> URL.
+  {
+    const folder = parseFeedFolderDigest(query);
+    if (folder) { summarizeFeedFolder(tab, query, folder); return; }
+  }
+
   // Questions about the user's own reading (RFC 0013). Both are checked before the
   // answer cache: they ask ABOUT the user's history rather than repeating an
   // earlier question, so a cached page would answer something else entirely.
@@ -6899,6 +7739,30 @@ function buildRecallContext(hits, { limit = 5 } = {}) {
       `  Excerpt: ${body}`,
     ].join('\n');
   }).join('\n\n').slice(0, 24000);
+}
+
+// Format feed items for the digest. Deliberately NOT buildRecallContext: that one
+// labels anything not 'visited' as "a page Sprig composed for me", which for a feed
+// item is simply false — and a falsehood the user can't catch, since the whole
+// point is they haven't read these yet.
+//
+// Everything the model gets is here: a title, an author, and whatever summary the
+// feed chose to publish. We do not fetch the articles. That's RFC 0013's rule
+// (nothing distilled on ingest) and also just honest — the DIGEST_ADDENDUM tells
+// the model it's working from summaries so it doesn't write as if it read them.
+function buildFeedContext(items, { limit = 80 } = {}) {
+  return items.slice(0, limit).map((it, i) => {
+    const feed = feeds.find((f) => f.id === it.feedId);
+    const from = (feed && feed.name) || it.type || 'feed';
+    const summary = String(it.summary || '').slice(0, 600);
+    return [
+      `[${i + 1}] "${it.title || 'Untitled'}"`,
+      `  From: ${from}${it.author ? ` · ${it.author}` : ''}`,
+      `  When: ${relTime(it.publishedAt)}`,
+      it.url ? `  URL: ${it.url}` : '',
+      summary ? `  Summary: ${summary}` : '  Summary: (the feed published none — title only)',
+    ].filter(Boolean).join('\n');
+  }).join('\n\n').slice(0, 40000);
 }
 
 // ---- Ambient dossier offers (Bet 3, the automatic half) ----
@@ -7466,6 +8330,14 @@ async function submitQuery(text, opts = {}) {
   // Effective agent: a per-run override (e.g. a scheduled "run as" agent) or the active one.
   const runAgentObj = opts.agentId ? (agents.find((a) => a.id === opts.agentId) || null) : activeAgent();
 
+  // An agent that declares `feeds: true` (see agents/pulsekeeper.md) works from
+  // Your Feeds, so hand it what has arrived. Because runAgentObj already collapses
+  // "scheduled run-as" and "currently active" into one value, this single rule
+  // covers both — enabling the agent and asking works exactly like scheduling it.
+  const digest = (runAgentObj && runAgentObj.feeds && !opts.recallContext)
+    ? await feedDigestContext(runAgentObj)
+    : null;
+
   // Decide refine vs new + whether to send the current page as context.
   const curEntry = currentEntry(tab);
   const hasComposed = !!(curEntry && curEntry.kind === 'page');
@@ -7542,8 +8414,8 @@ async function submitQuery(text, opts = {}) {
       allowNavigate,
       refineMode,
       spaceContext: opts.spaceContext || null,
-      recallContext: opts.recallContext || null,
-      recallMode: opts.recallMode || 'find',
+      recallContext: opts.recallContext || (digest ? digest.context : null),
+      recallMode: opts.recallMode || (digest ? 'digest' : 'find'),
       deep,
       verify,
       profile: settings.profile || null,
@@ -7593,6 +8465,7 @@ async function submitQuery(text, opts = {}) {
         curEntry.sources = result.sources || [];
         curEntry.searches = result.searches || [];
         curEntry.query = query;
+        if (opts.linksNewTab || digest) curEntry.linksNewTab = true;
       } else {
         pushEntry(tab, {
           kind: 'page',
@@ -7601,6 +8474,12 @@ async function submitQuery(text, opts = {}) {
           sources: result.sources || [],
           searches: result.searches || [],
           query,
+          // A digest is a "home base" you asked for; its links open in new tabs so
+          // clicking a feed item doesn't replace the summary. handleLinkClick honors
+          // this on the entry regardless of what the model marked. Covers both the
+          // NL "summarize my X folder" path (opts.linksNewTab) and any feeds agent
+          // (the internal `digest`), scheduled or interactive.
+          ...((opts.linksNewTab || digest) ? { linksNewTab: true } : {}),
         });
       }
       tab.title = result.title || tab.title;
@@ -7619,6 +8498,14 @@ async function submitQuery(text, opts = {}) {
         content: `[${isRefine ? 'Refined' : 'Displayed'} a page titled "${result.title}"]`,
       });
       addToLibrary(tab, result, query);
+
+      // Those items have now been briefed. Only a scheduled run consumes them:
+      // that's the standing brief and the system of record. An interactive ask
+      // while the agent is active gets the same context but must not silently eat
+      // what tomorrow's digest was going to cover.
+      if (digest && opts.background) {
+        window.chervil.index.feeds.markDigested(digest.ids).catch(() => { /* they'll reappear next run */ });
+      }
 
       // Opt-in AI hero image for a freshly composed page (not refines, remixes,
       // or trust-checks). Runs after the page is shown; injects when ready.
@@ -7700,12 +8587,17 @@ function openMapsInChervil(href, text) {
 }
 
 // ---- Click-through links ----
-function handleLinkClick(href, text) {
+function handleLinkClick(href, text, newtab) {
   if (/^tel:/i.test(href)) { showPhoneActions(href, text); return; }
   if (!/^https?:\/\//i.test(href)) return;
   if (isMapsUrl(href)) { openMapsInChervil(href, text); return; }
   const tab = activeTab();
   if (!tab) return;
+  // Open in a NEW tab as a live site when the link asked for it (target="_blank" /
+  // ctrl-click) OR the composed page you're on wants its links preserved (a digest).
+  // The article opens alongside, so a summary you asked for stays home base.
+  const cur = currentEntry(tab);
+  if (newtab || (cur && cur.kind === 'page' && cur.linksNewTab)) { openUrlInNewTab(href); return; }
   const behavior = settings.linkBehavior || 'smart';
 
   if (behavior === 'live') {
@@ -8015,7 +8907,9 @@ async function synthesizeSavedSpace(query) {
   const sp = activeSavedSpace();
   const name = sp ? sp.name : 'Space';
   if (!docs.length) {
-    closeDrawer();
+    // No close: the Library is a page now, and the sidebar it reports into is
+    // visible alongside it. (Every closeDrawer() in this file went the same way —
+    // it used to hide an overlay; closing would now shut a tab.)
     const tab = activeTab();
     if (tab) addMessage(tab, 'bot', `"${name}" has no saved pages with content yet — save a few pages into it, then synthesize.`, 'error');
     return;
@@ -8027,7 +8921,8 @@ async function synthesizeSavedSpace(query) {
   if (settings.spaceFilesMode !== 'off') { try { attachments = await loadSpacePinnedAttachments(); } catch { attachments = []; } }
   const q = (query || '').trim() ||
     `Synthesize everything I've saved in my "${name}" Space into one clear overview — compare the pages, connect the themes, and tell me the key takeaways.`;
-  closeDrawer();
+  // Composing pushes onto this tab, so the synthesis replaces the Library view and
+  // Back returns to it — no close needed.
   submitQuery(q, {
     spaceContext,
     attachments,
@@ -8056,7 +8951,6 @@ async function publishCurrentSavedSpace() {
       if (res && res.ok && res.url) published.push({ title: it.title || it.query || 'Untitled page', url: res.url, createdAt: it.createdAt });
     } catch { /* skip this page, keep going */ }
   }
-  closeDrawer();
   const tab = activeTab();
   if (!published.length) {
     if (tab) addMessage(tab, 'bot', `Couldn’t publish "${spaceName}". Check your publish token and base URL in Settings → Publishing.`, 'error');
@@ -8139,7 +9033,6 @@ async function openLibraryItem(item) {
   };
   tabs.push(tab);
   activeId = tab.id;
-  closeDrawer();
   renderTabs();
   renderConversation();
   renderCurrentPage();
@@ -8197,8 +9090,14 @@ function toggleLibrarySelected(id) {
   else selectedLibraryIds.add(id);
   renderDrawer();
 }
+// The list that select mode acts on, per tab. Pages (History) and Feeds both
+// support it; anything else has no selectable list.
+function librarySelectList() {
+  if (drawerTab === 'feeds') return feeds;
+  return library.history; // Pages — a flat timeline of every composed page
+}
 function selectAllLibrary() {
-  const shown = library.history; // Activity is now a flat timeline of every composed page
+  const shown = librarySelectList();
   const allSel = shown.length > 0 && shown.every((it) => selectedLibraryIds.has(it.id));
   selectedLibraryIds = new Set(allSel ? [] : shown.map((it) => it.id));
   renderDrawer();
@@ -8208,7 +9107,13 @@ function deleteSelectedLibrary() {
   const ids = [...selectedLibraryIds];
   librarySelectMode = false;
   selectedLibraryIds.clear();
-  deleteLibraryItems(ids); // calls renderDrawer + scheduleSave
+  if (drawerTab === 'feeds') {
+    // removeFeed already tombstones + clears feed_items/feed_state per id.
+    for (const id of ids) removeFeed(id);
+    renderDrawer();
+    return;
+  }
+  deleteLibraryItems(ids); // Pages: soft-delete to Trash; calls renderDrawer + scheduleSave
 }
 
 function restoreLibraryItem(id) {
@@ -8363,7 +9268,7 @@ function toggleBookmark() {
     toast('Saved to Pages.');
   }
   updateBookmarkStar();
-  if (els.libraryDrawer.classList.contains('open') && drawerTab === 'bookmarks') renderDrawer();
+  if (libraryOpen() && drawerTab === 'bookmarks') renderDrawer();
   renderBookmarksBar();
   scheduleSave();
 }
@@ -8404,7 +9309,6 @@ function restoreTabSnapshot(snap, opts = {}) {
 }
 
 function openBookmark(b) {
-  closeDrawer();
   if (b.kind === 'site' && b.url) { openUrlInTab(b.url); return; }
   // New bookmarks carry a full tab snapshot; restore the whole session.
   if (b.tab && Array.isArray(b.tab.pages) && b.tab.pages.length) { restoreTabSnapshot(b.tab); return; }
@@ -8467,7 +9371,7 @@ function findCollectionByName(name) {
 }
 function touchCollection(c) { c.updatedAt = Date.now(); scheduleSave(); }
 function refreshCollectionsPanel() {
-  if (els.libraryDrawer.classList.contains('open') && drawerTab === 'collections') renderDrawer();
+  if (libraryOpen() && drawerTab === 'collections') renderDrawer();
 }
 async function createCollection() {
   const name = await showInputSheet({
@@ -8516,7 +9420,6 @@ function removeFromCollection(c, itemId) {
 }
 function openCollectionInTabs(c) {
   if (!c || !c.items.length) { toast('That collection is empty.'); return; }
-  closeDrawer();
   // Gather the opened pages under a tab group named after the collection, so the
   // whole set stays visually together (and can be collapsed away as one).
   const group = createTabGroup(c.name);
@@ -8583,7 +9486,7 @@ function toggleFavorite() {
     toast('Added to Favorites.');
   }
   updateFavoriteStar();
-  if (els.libraryDrawer.classList.contains('open') && drawerTab === 'favorites') renderDrawer();
+  if (libraryOpen() && drawerTab === 'favorites') renderDrawer();
   renderFavoritesBar();
   scheduleSave();
 }
@@ -8662,7 +9565,7 @@ function favoriteBarButton(f) {
   const t = document.createElement('span'); t.className = 'bmbar-label';
   t.textContent = f.title || f.url || 'Favorite';
   btn.appendChild(t);
-  btn.addEventListener('click', () => { closeDrawer(); openUrlInTab(f.url); });
+  btn.addEventListener('click', () => openUrlInTab(f.url));
   return btn;
 }
 function renderFavoritesBar() {
@@ -8715,7 +9618,7 @@ function mergeImportedFavorites(entries) {
   if (fresh.length) {
     favorites = favorites.concat(fresh); // keep imports in source order, after existing
     updateFavoriteStar();
-    if (els.libraryDrawer.classList.contains('open')) renderDrawer();
+    if (libraryOpen()) renderDrawer();
     renderFavoritesBar();
     scheduleSave();
   }
@@ -8772,7 +9675,7 @@ function mergeImportedHistory(entries) {
   if (fresh.length) {
     siteHistory = siteHistory.concat(fresh).sort((a, b) => (b.at || 0) - (a.at || 0));
     if (siteHistory.length > MAX_SITE_HISTORY) siteHistory.length = MAX_SITE_HISTORY;
-    if (els.libraryDrawer.classList.contains('open')) renderDrawer();
+    if (libraryOpen()) renderDrawer();
     scheduleSave();
   }
   return { added, skipped };
@@ -9128,7 +10031,7 @@ function openFavFolderMenu(e, items) {
     const fav = faviconImg(f.url, 'bmbar-favicon'); if (fav) row.appendChild(fav);
     const t = document.createElement('span'); t.textContent = f.title || f.url || 'Favorite';
     row.appendChild(t);
-    row.addEventListener('click', () => { closeBmFolderMenu(); closeDrawer(); openUrlInTab(f.url); });
+    row.addEventListener('click', () => { closeBmFolderMenu(); openUrlInTab(f.url); });
     menu.appendChild(row);
   }
   document.body.appendChild(menu);
@@ -9152,7 +10055,7 @@ function toggleFolderCollapsed(tab, folder) {
 }
 // Distinct folder buckets present in a grouped tab (incl. '' = Unfiled).
 function foldersInTab(tab) {
-  const src = tab === 'favorites' ? favorites : tab === 'bookmarks' ? bookmarks : [];
+  const src = tab === 'favorites' ? favorites : tab === 'bookmarks' ? bookmarks : tab === 'feeds' ? feeds : [];
   const set = new Set();
   for (const it of src) set.add(it.folder || '');
   return [...set];
@@ -9245,7 +10148,7 @@ function renderCollectionsPanel(q) {
       u.textContent = it.url;
       meta.append(t, u);
       meta.title = 'Open in a new tab';
-      meta.addEventListener('click', () => { closeDrawer(); openUrlInNewTab(it.url); });
+      meta.addEventListener('click', () => openUrlInNewTab(it.url));
       row.appendChild(meta);
       const rm = mkBtn('✕', 'Remove from collection', () => removeFromCollection(c, it.id));
       row.appendChild(rm);
@@ -9255,29 +10158,56 @@ function renderCollectionsPanel(q) {
 }
 
 function renderDrawer() {
-  els.libTabHistory.classList.toggle('active', drawerTab === 'history');
-  els.libTabTrash.classList.toggle('active', drawerTab === 'trash');
-  if (els.libTabBookmarks) els.libTabBookmarks.classList.toggle('active', drawerTab === 'bookmarks');
-  if (els.libTabFavorites) els.libTabFavorites.classList.toggle('active', drawerTab === 'favorites');
-  if (els.libTabCollections) els.libTabCollections.classList.toggle('active', drawerTab === 'collections');
-  if (els.libTabSites) els.libTabSites.classList.toggle('active', drawerTab === 'sites');
-  if (els.libTabDownloads) els.libTabDownloads.classList.toggle('active', drawerTab === 'downloads');
+  setLibraryTab(drawerTab);
   els.emptyTrash.hidden = drawerTab !== 'trash';
   if (els.clearSites) els.clearSites.hidden = drawerTab !== 'sites' || !siteHistory.length;
   if (els.clearDownloads) els.clearDownloads.hidden = drawerTab !== 'downloads' || !downloads.length;
   if (els.libNewFolder) els.libNewFolder.hidden = drawerTab !== 'favorites';
   if (els.libNewCollection) els.libNewCollection.hidden = drawerTab !== 'collections';
   if (els.libCollapseAll) {
-    const grpTab = drawerTab === 'favorites' && !librarySearch.trim();
-    const folders = grpTab ? foldersInTab(drawerTab) : [];
+    // Feeds group by folder too (Favorites is the other grouped tab). Only count
+    // real folders — the Unfiled bucket ('') isn't a foldering the user made, so a
+    // list that's all-Unfiled shouldn't offer Collapse all.
+    const grpTab = (drawerTab === 'favorites' || drawerTab === 'feeds') && !librarySearch.trim();
+    const folders = grpTab ? foldersInTab(drawerTab).filter((f) => f) : [];
     els.libCollapseAll.hidden = !(grpTab && folders.length >= 2);
     if (!els.libCollapseAll.hidden) {
       els.libCollapseAll.textContent = folders.some((f) => !isFolderCollapsed(drawerTab, f)) ? 'Collapse all' : 'Expand all';
     }
   }
-  // Select mode only applies to History; leaving History cancels it.
-  if (drawerTab !== 'history' && librarySelectMode) { librarySelectMode = false; selectedLibraryIds.clear(); }
+  // Select mode applies to Pages and Feeds; leaving those tabs cancels it.
+  if (drawerTab !== 'history' && drawerTab !== 'feeds' && librarySelectMode) { librarySelectMode = false; selectedLibraryIds.clear(); }
   renderSpaceBar();
+
+  // Feeds is the one section with its own form + list rather than the shared row
+  // list, so swap the two containers. Every other branch below assumes the row
+  // list is the visible one, so restore it here.
+  const onFeeds = drawerTab === 'feeds';
+  if (els.libraryFeeds) els.libraryFeeds.hidden = !onFeeds;
+  if (els.libraryList) els.libraryList.hidden = onFeeds;
+  if (els.libImportOpml) els.libImportOpml.hidden = !onFeeds;
+  if (onFeeds) {
+    if (els.libSearchRow) els.libSearchRow.hidden = true;
+    // Feeds support the same multi-select as Pages (prune an imported batch). The
+    // toggle shows when there are feeds and we're not already selecting; the bar
+    // shows while selecting — same logic as the shared list path below, but the
+    // feeds branch returns early so it has to be driven here.
+    if (els.libSelectToggle) els.libSelectToggle.hidden = librarySelectMode || !feeds.length;
+    if (els.libSelectBar) els.libSelectBar.hidden = !librarySelectMode;
+    if (librarySelectMode) {
+      const allSel = feeds.length > 0 && feeds.every((f) => selectedLibraryIds.has(f.id));
+      els.libSelectCount.textContent = `${selectedLibraryIds.size} selected`;
+      els.libSelectDelete.disabled = selectedLibraryIds.size === 0;
+      els.libSelectAll.textContent = allSel ? 'Select none' : 'Select all';
+    }
+    // From the RENDER path, not just an open path: as a mounted page the Library
+    // never re-opens, so populateFeedForm's self-healing retry (it early-returns
+    // until FEED_TYPES has loaded) only fires if render calls it.
+    populateFeedForm();
+    renderFeeds();
+    return;
+  }
+  if (els.libSearchRow) els.libSearchRow.hidden = false;
 
   // Collections render their own grouped panel (collection → items), not the
   // shared flat list below.
@@ -9442,7 +10372,7 @@ function renderDrawer() {
     } else if (drawerTab === 'favorites') {
       main.title = 'Open';
       main.style.cursor = 'pointer';
-      main.addEventListener('click', () => { closeDrawer(); openUrlInTab(item.url); });
+      main.addEventListener('click', () => openUrlInTab(item.url));
       actions.appendChild(favoriteFolderSelect(item));
       const del = document.createElement('button');
       del.className = 'lib-btn';
@@ -9452,7 +10382,7 @@ function renderDrawer() {
     } else if (drawerTab === 'sites') {
       main.title = 'Open';
       main.style.cursor = 'pointer';
-      main.addEventListener('click', () => { closeDrawer(); openUrlInTab(item.url); });
+      main.addEventListener('click', () => openUrlInTab(item.url));
       const del = document.createElement('button');
       del.className = 'lib-btn';
       del.textContent = 'Remove';
@@ -9495,18 +10425,81 @@ function renderDrawer() {
   }
 }
 
-function openDrawer() {
-  drawerTab = 'history';
-  librarySearch = '';
-  if (els.libSearch) els.libSearch.value = '';
-  renderDrawer();
-  els.libraryDrawer.classList.add('open');
+// The rail + the section heading. Mirrors setSettingsTab.
+const LIBRARY_TAB_LABELS = {
+  bookmarks: 'Saved Pages',
+  history: 'Pages',
+  favorites: 'Favorites',
+  collections: 'Collections',
+  feeds: 'Feeds',
+  downloads: 'Downloads',
+  sites: 'Sites',
+  trash: 'Trash',
+};
+function setLibraryTab(tab) {
+  if (!els.libraryNav) return;
+  els.libraryNav.querySelectorAll('.library-tab').forEach((b) => b.classList.toggle('active', b.dataset.libtab === tab));
+  if (els.libraryHeading) els.libraryHeading.textContent = LIBRARY_TAB_LABELS[tab] || 'Library';
 }
 
-function closeDrawer() {
+function libraryOpen() { return !!(els.libraryView && !els.libraryView.hidden); }
+
+// Persist what the visible Library is showing onto its entry, so a tab switch away
+// and back — or a restart — comes back to the same place. `drawerTab`/`librarySearch`
+// stay the live state (the DOM's twin); this is the mirror, exactly as Settings
+// mirrors its section onto entry.settingsGroup.
+function syncLibraryEntry() {
+  const e = currentEntry(activeTab());
+  if (!e || e.kind !== 'library') return;
+  e.libTab = drawerTab;
+  e.libSearch = librarySearch;
+  scheduleSave();
+}
+
+function renderLibraryView(entry) {
+  hideWebviews();
+  els.frame.hidden = true;
+  els.frame.removeAttribute('srcdoc');
+  liveSrcdoc = '';
+  els.overlay.hidden = true;
+  hideViewportViews(els.libraryView);
+  els.libraryView.hidden = false;
+  // Re-seed from the entry: this runs on every switch back, so the entry is the
+  // source of truth for a Library that isn't currently on screen.
+  drawerTab = (entry && entry.libTab) || 'history';
+  librarySearch = (entry && entry.libSearch) || '';
+  if (els.libSearch) els.libSearch.value = librarySearch;
+  renderDrawer();
+}
+
+/**
+ * Show the Library. Deliberately has no `= 'history'` default on `section`:
+ * unlike ⚙ (which always yanks you to General), 🕘 means "show me my Library",
+ * not "reset it". A page has memory; that's the point of it being a page.
+ */
+function openLibrary(section) {
+  const existing = tabs.find((t) => { const e = currentEntry(t); return e && e.kind === 'library'; });
+  if (existing) {
+    switchTab(existing.id);                 // re-renders, which re-seeds from the entry
+    if (section) { drawerTab = section; renderDrawer(); syncLibraryEntry(); }
+    return;
+  }
+  const tab = newTab(true);
+  pushEntry(tab, { kind: 'library', title: 'Library', libTab: section || 'history', libSearch: '' });
+  tab.title = 'Library';
+  renderTabs();
+  renderCurrentPage();
+  scheduleSave();
+}
+
+function closeLibrary() {
+  const tab = activeTab();
+  const entry = currentEntry(tab);
+  if (!entry || entry.kind !== 'library') return;
   librarySelectMode = false;
   selectedLibraryIds.clear();
-  els.libraryDrawer.classList.remove('open');
+  if (parentOf(tab, entry)) goBack();
+  else closeTab(tab.id);
 }
 
 // ---- Settings ----
@@ -10223,6 +11216,9 @@ function setSettingsTab(group) {
     if (el.classList.contains('settings-tab')) return; // the tab buttons themselves
     el.style.display = el.dataset.sgroup === group ? '' : 'none';
   });
+  // Land at the top of the new section — otherwise the content column keeps the
+  // scroll offset from wherever you were in the previous one.
+  if (els.settingsContent) els.settingsContent.scrollTop = 0;
 }
 
 // ---- Customizable top-bar buttons ----
@@ -10246,6 +11242,7 @@ const TOOLBAR_BUTTONS = [
   { key: 'sendPhone', id: 'send-phone-btn', label: 'Send to phone (📱)' },
   { key: 'emailPage', id: 'email-page-btn', label: 'Email this page (✉️)' },
   { key: 'shareFedica', id: 'share-fedica-btn', label: 'Share to Fedica (📣)' },
+  { key: 'feed', id: 'feed-btn', label: 'Subscribe to this site (📡)' },
   { key: 'reader', id: 'reader-btn', label: 'Reader view' },
   { key: 'pip', id: 'pip-btn', label: 'Picture-in-picture' },
   { key: 'zoom', id: 'zoom-controls', label: 'Zoom controls' },
@@ -10263,7 +11260,10 @@ const TOOLBAR_BUTTONS = [
 // doesn't have and the reason to switch to Chervil; burying them beyond reach
 // would trade the product for the paint. 🔑/💳 stay on because they're already
 // context-gated (hidden until a page actually has a saved login/card to fill).
-const TOOLBAR_BAR_DEFAULT = new Set(['history', 'bookmark', 'favorite', 'askPage', 'snip', 'pwFill', 'cardFill']);
+// 'feed' earns a seat on the same terms as 🔑/💳: it's context-gated — hidden
+// until the page in view actually declares a feed — so it costs nothing on the
+// pages that don't.
+const TOOLBAR_BAR_DEFAULT = new Set(['history', 'bookmark', 'favorite', 'askPage', 'snip', 'pwFill', 'cardFill', 'feed']);
 
 // Does this button sit in the bar itself? An explicit choice always wins; absent
 // one, the Chrome-like default above decides.
@@ -10361,7 +11361,7 @@ function showToolbarMenu(x, y) {
 // omitted (its 3-button cluster doesn't belong in a vertical menu) and stays
 // inline along with Settings and the ⋯ button itself.
 const OMNI_OVERFLOW_ORDER = [
-  'pip-btn', 'reader-btn', 'read-aloud-btn', 'translate-btn', 'send-phone-btn',
+  'pip-btn', 'feed-btn', 'reader-btn', 'read-aloud-btn', 'translate-btn', 'send-phone-btn',
   'share-fedica-btn', 'email-page-btn', 'snip-btn', 'ask-page-btn', 'save-btn',
   'sched-btn', 'agents-btn', 'map-btn', 'favorite-btn', 'bookmark-btn',
   'history-btn', 'print-btn',
@@ -10493,6 +11493,11 @@ function openSettings(group = 'general') {
   if (existing) {
     switchTab(existing.id);
     setSettingsTab(group);
+    // Write it to the entry too, not just the DOM: the entry is what a tab switch
+    // back re-seeds from, so without this ⚙ would show General and then snap back
+    // to whatever section was last persisted the moment you left and returned.
+    const e = currentEntry(existing);
+    if (e) { e.settingsGroup = group; scheduleSave(); }
     return;
   }
   const tab = newTab(true);
@@ -10647,7 +11652,10 @@ function scheduleSave() {
     // runs on a 500ms debounce from ~100 call sites including every message and
     // every checkbox click inside a page. Omitting it is the perf fix (RFC 0013).
     // Until the migration has run, keep writing it so a downgrade loses nothing.
-    const state = { tabs: persistTabs, activeId: persistActiveId, tabGroups, settings, bookmarks, bookmarkFolders, bookmarkTombstones, favorites, favoriteFolders, favoriteTombstones, collections, deletionTombstones, siteHistory, downloads, agentAudit, spaces, activeSpaceId, savedSpaces, activeSavedSpaceId, living, schedules, watchers, agents, activeAgentId, pipelines, pageStores, dossierOffers, dossierDismissed };
+    // `feeds` is subscriptions only — items live in the page index. Putting them
+    // here would grow this payload without bound, which is the thing the comment
+    // above is about.
+    const state = { tabs: persistTabs, activeId: persistActiveId, tabGroups, settings, bookmarks, bookmarkFolders, bookmarkTombstones, favorites, favoriteFolders, favoriteTombstones, collections, deletionTombstones, siteHistory, downloads, agentAudit, spaces, activeSpaceId, savedSpaces, activeSavedSpaceId, living, schedules, watchers, feeds, agents, activeAgentId, pipelines, pageStores, dossierOffers, dossierDismissed };
     if (!libraryFromIndex) state.library = library;
     window.chervil.saveState(state)
       .then((r) => { if (r && r.mtimeMs) lastStateMtimeMs = r.mtimeMs; }) // our own write — keep baseline current
@@ -10692,12 +11700,18 @@ async function reconcileNow() {
   if (Array.isArray(m.agents)) agents = m.agents;
   if (Array.isArray(m.schedules)) schedules = m.schedules;
   if (Array.isArray(m.watchers)) watchers = m.watchers.filter((w) => w && w.url).map((w) => ({ ...w, running: false }));
+  if (Array.isArray(m.feeds)) {
+    feeds = m.feeds.filter((f) => f && f.id && f.type && f.config);
+    // A feed subscribed on another machine has no cursor here, so it reads as due
+    // and pulls on the next tick — which is what you'd want.
+    startScheduler();
+  }
   if (r.mtimeMs) lastStateMtimeMs = r.mtimeMs;               // we just absorbed it — don't also prompt to reload
   if (migrateSiteBookmarksToFavorites()) scheduleSave();     // relocate any sites that arrived from another machine
   ensureSavedSpaces();                                       // file any saved pages that arrived from another machine
   updateBookmarkStar();
   applyPaneSizes();                                          // a pane width may have been resized on another machine
-  if (els.libraryDrawer.classList.contains('open')) renderDrawer();
+  if (libraryOpen()) renderDrawer();
   renderBookmarksBar();
   renderFavoritesBar();
   toast('Synced new items from another computer.');
@@ -10879,6 +11893,12 @@ async function init() {
       .filter((w) => w && w.url && w.intervalMs)
       .map((w) => ({ ...w, running: false })); // keep lastRun so cadence resumes without a launch burst
   }
+  if (restored && Array.isArray(restored.feeds)) {
+    // No `running:false` reset needed — unlike watchers, a feed's runtime never
+    // touches this record (it's in feedStatus, in memory), so a crash mid-fetch
+    // can't leave one wedged.
+    feeds = restored.feeds.filter((f) => f && f.id && f.type && f.config);
+  }
   if (restored && Array.isArray(restored.agents)) {
     agents = restored.agents.filter((a) => a && a.persona);
     activeAgentId = restored.activeAgentId && agents.find((a) => a.id === restored.activeAgentId) ? restored.activeAgentId : null;
@@ -10892,6 +11912,9 @@ async function init() {
       .filter((p) => p.stageAgentIds.length >= 2);
   }
   updateAgentChip();
+  // Mirror fetch cursors BEFORE the first tick: with an empty feedStatus every
+  // feed reads as due at once, and launch becomes a fetch burst.
+  await hydrateFeedStatus();
   startScheduler();
 
   applyTabLayout();
@@ -11348,7 +12371,6 @@ function importPageDoc(doc) {
   const page = doc && doc.page;
   if (!doc || doc.format !== 'chervil-page' || !page || !page.html) { toast('That isn’t a shareable Chervil page.'); return false; }
   const pid = uid();
-  closeDrawer();
   restoreTabSnapshot({
     title: page.title || 'Shared page',
     conversation: [{ role: 'bot', text: `Imported a shared page: “${page.title || 'Untitled'}”. Ask Sprig to change or extend it, or use the Remix bar.`, cls: '' }],
@@ -12015,6 +13037,7 @@ function onWebviewNavigated(tabId, url) {
   if (tabId === activeId) {
     updateNavButtons();
     updatePwFillButton();
+    updateFeedButton();
   }
 }
 
@@ -12046,6 +13069,87 @@ const CAPTURE_JS = `(function(){
     return { url: location.href, title: document.title || '', text: text, authy: authy };
   } catch (e) { return null; }
 })()`;
+
+// --- Feed detection: does the page in view offer a feed to subscribe to? -------
+//
+// Reads the <link rel="alternate"> tags out of the page already on screen — zero
+// network, unlike the on-demand discover (right-click), which will fetch. It does
+// NOT reuse the capture path: that's gated by settings.indexSites (off by default),
+// tab.private, indexExcludes, an authy check and a length floor — every one of
+// which is wrong here. Detection is a read of a page you're already looking at.
+const FEED_LINKS_JS = `(function(){
+  try {
+    var out = [], ls = document.querySelectorAll('link[rel~="alternate"][href]');
+    for (var i = 0; i < ls.length && out.length < 5; i++) {
+      var t = (ls[i].type || '').toLowerCase();
+      // The type filter is the whole thing: rel="alternate" without it also matches
+      // <link rel="alternate" hreflang="fr">, which is on a huge share of the web.
+      if (t.indexOf('rss') < 0 && t.indexOf('atom') < 0 && t.indexOf('xml') < 0 && t.indexOf('json') < 0) continue;
+      out.push({ href: ls[i].href, title: ls[i].title || '' }); // .href is already absolute
+    }
+    return out;
+  } catch (e) { return []; }
+})()`;
+
+const feedProbeTimers = new Map();
+
+// The feed a tab currently offers, keyed by tab id: { href, title } or null.
+// updateFeedButton reads this; the probe writes it.
+const tabFeed = new Map();
+
+function scheduleFeedProbe(tabId, wv) {
+  const tab = tabs.find((t) => t.id === tabId);
+  const entry = tab && currentEntry(tab);
+  if (!entry || entry.kind !== 'navigate') { tabFeed.delete(tabId); if (tabId === activeId) updateFeedButton(); return; }
+  if (feedProbeTimers.has(tabId)) clearTimeout(feedProbeTimers.get(tabId));
+  feedProbeTimers.set(tabId, setTimeout(() => {
+    feedProbeTimers.delete(tabId);
+    runFeedProbe(tabId, wv).catch(() => {});
+  }, 600));
+}
+
+async function runFeedProbe(tabId, wv) {
+  let host = '';
+  try { host = hostOf(wv.getURL() || '') || ''; } catch { /* not attached */ }
+  // YouTube declares a channel feed, but a subscription stores the @handle/channel
+  // URL and resolves the real feed elsewhere, so "already subscribed?" can't be
+  // answered here — skip the chip and let YouTube's own Subscribe button stand.
+  if (/(^|\.)youtube\.com$/.test(host) || host === 'youtu.be') { tabFeed.delete(tabId); if (tabId === activeId) updateFeedButton(); return; }
+  let links = [];
+  try { links = await wv.executeJavaScript(FEED_LINKS_JS, false); } catch { return; }
+  const first = Array.isArray(links) && links.find((l) => l && l.href);
+  if (first) tabFeed.set(tabId, { href: first.href, title: first.title || '' });
+  else tabFeed.delete(tabId);
+  if (tabId === activeId) updateFeedButton();
+}
+
+// Show/style the 📡 chip for the active tab. hidden when there's no feed (the common
+// case — a permanently-dim chip on every page is noise), .on when already subscribed.
+function updateFeedButton() {
+  const btn = els.feedBtn;
+  if (!btn) return;
+  const wasHidden = btn.hidden;
+  const feed = tabFeed.get(activeId);
+  btn.hidden = !feed || !toolbarVisible('feed');
+  if (!btn.hidden) {
+    const sub = feed && feedForUrl(feed.href);
+    btn.classList.toggle('on', !!sub);
+    btn.title = sub
+      ? 'Subscribed — open Library → Feeds'
+      : `Subscribe to ${feed.title || hostOf(feed.href) || 'this feed'}`;
+  }
+  // A visibility change alters the bar's width, and reflow doesn't watch for that.
+  // Only reflow when it actually flipped — reflow forces sync layout.
+  if (btn.hidden !== wasHidden) reflowOmnibar();
+}
+
+function onFeedButtonClick() {
+  const feed = tabFeed.get(activeId);
+  if (!feed) return;
+  const sub = feedForUrl(feed.href);
+  if (sub) { openLibrary('feeds'); return; }
+  subscribeByUrl(feed.href, { discover: false }).then((f) => { if (f) updateFeedButton(); });
+}
 
 // Debounce per tab: a single navigation can settle more than once (redirects,
 // SPA route changes), and we want one capture per page, not one per event.
@@ -12152,6 +13256,33 @@ window.addEventListener('drop', (e) => {
   if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length) addFiles(e.dataTransfer.files);
 });
 
+// Paste an image or file into the prompt — same destination as drag-drop and the
+// attach button (pendingAttachments → chips). A screenshot on the clipboard arrives
+// as an image item with no File name, so synthesize one. Only swallow the paste
+// when it actually carried files; plain text/URLs fall through to the default so
+// typing isn't disturbed.
+els.prompt.addEventListener('paste', (e) => {
+  const dt = e.clipboardData;
+  if (!dt) return;
+  const files = [];
+  for (const item of Array.from(dt.items || [])) {
+    if (item.kind !== 'file') continue;
+    const f = item.getAsFile();
+    if (f) files.push(f);
+  }
+  if (!files.length) return; // let normal text paste happen
+  e.preventDefault();
+  addFiles(files.map((f) => {
+    // A pasted screenshot is a nameless image/png blob; give it a readable name so
+    // the chip and the attachment aren't "file".
+    if (!f.name && /^image\//.test(f.type)) {
+      const ext = (f.type.split('/')[1] || 'png').replace('jpeg', 'jpg');
+      return new File([f], `pasted-image.${ext}`, { type: f.type });
+    }
+    return f;
+  }));
+});
+
 // Voice input: record the mic, transcribe via the configured Whisper endpoint.
 if (els.micBtn) els.micBtn.addEventListener('click', toggleVoiceInput);
 
@@ -12233,6 +13364,8 @@ document.getElementById('sched-close').addEventListener('click', closeSched);
 document.getElementById('sched-type').addEventListener('change', onSchedTypeChange);
 document.getElementById('sched-form').addEventListener('submit', (e) => { e.preventDefault(); addScheduleFromForm(); });
 { const wf = document.getElementById('watch-form'); if (wf) wf.addEventListener('submit', (e) => { e.preventDefault(); addWatcherFromForm(); }); }
+{ const ff = document.getElementById('feed-form'); if (ff) ff.addEventListener('submit', (e) => { e.preventDefault(); addFeedFromForm(); }); }
+if (els.libImportOpml) els.libImportOpml.addEventListener('click', importFeedsFromOpml);
 els.agentsBtn.addEventListener('click', openAgents);
 els.agentsView.addEventListener('click', (e) => { if (e.target === els.agentsView) closeAgents(); });
 document.getElementById('agents-close').addEventListener('click', closeAgents);
@@ -12699,7 +13832,7 @@ if (els.clearDataBtn) els.clearDataBtn.addEventListener('click', async () => {
   let r; try { r = await window.chervil.clearBrowsingData(); } catch { r = null; }
   siteHistory = [];
   downloads = [];
-  if (els.libraryDrawer.classList.contains('open')) renderDrawer();
+  if (libraryOpen()) renderDrawer();
   scheduleSave();
   toast(r && r.ok ? 'Browsing data cleared.' : 'Cleared local history; site data may not have fully cleared.');
 });
@@ -12723,26 +13856,35 @@ els.apiKeySave.addEventListener('click', async () => {
   }
 });
 
-// Library drawer
-els.historyBtn.addEventListener('click', openDrawer);
-els.libraryClose.addEventListener('click', closeDrawer);
-els.libraryDrawer.addEventListener('click', (e) => {
-  if (e.target === els.libraryDrawer) closeDrawer();
+// Library (a page, like Settings). Wire the toolbar button as a closure, NOT bare
+// `openLibrary` — it takes an optional section arg, so passing it directly would
+// hand it the click's MouseEvent as `section` and land drawerTab on an event.
+els.historyBtn.addEventListener('click', () => openLibrary());
+// One delegated listener for the whole rail, replacing the seven per-tab ones.
+if (els.libraryNav) els.libraryNav.addEventListener('click', (e) => {
+  const btn = e.target.closest('.library-tab');
+  if (!btn) return;
+  drawerTab = btn.dataset.libtab;
+  // Switching sections always exits select mode — carrying a feed selection into
+  // Pages (or vice versa) is meaningless, and both tabs support the mode so the
+  // renderDrawer gate alone wouldn't cancel it.
+  if (librarySelectMode) { librarySelectMode = false; selectedLibraryIds.clear(); }
+  renderDrawer();
+  syncLibraryEntry();   // remember the section on the entry (fixes the openSettings-style bug prospectively)
+  // Land at the top of the new section. Only on an actual rail click — NOT in
+  // renderDrawer/setLibraryTab, which also run on background re-renders (a download
+  // completing, sync landing) and would otherwise jerk the list to the top mid-scroll.
+  if (els.libraryList) els.libraryList.scrollTop = 0;
+  if (els.libraryFeeds) els.libraryFeeds.scrollTop = 0;
 });
-els.libTabHistory.addEventListener('click', () => { drawerTab = 'history'; renderDrawer(); });
-if (els.libTabBookmarks) els.libTabBookmarks.addEventListener('click', () => { drawerTab = 'bookmarks'; renderDrawer(); });
-if (els.libTabFavorites) els.libTabFavorites.addEventListener('click', () => { drawerTab = 'favorites'; renderDrawer(); });
-if (els.libTabSites) els.libTabSites.addEventListener('click', () => { drawerTab = 'sites'; renderDrawer(); });
-if (els.libTabDownloads) els.libTabDownloads.addEventListener('click', () => { drawerTab = 'downloads'; renderDrawer(); });
-if (els.libTabCollections) els.libTabCollections.addEventListener('click', () => { drawerTab = 'collections'; renderDrawer(); });
 if (els.libNewCollection) els.libNewCollection.addEventListener('click', createCollection);
-els.libTabTrash.addEventListener('click', () => { drawerTab = 'trash'; renderDrawer(); });
 if (els.clearSites) els.clearSites.addEventListener('click', clearSiteHistory);
 if (els.clearDownloads) els.clearDownloads.addEventListener('click', clearDownloads);
 if (els.libSearch) els.libSearch.addEventListener('input', () => {
   librarySearch = els.libSearch.value;
   scheduleLibraryFts();
   renderDrawer();
+  syncLibraryEntry();
 });
 if (els.libNewFolder) els.libNewFolder.addEventListener('click', () => (drawerTab === 'favorites' ? createFavoriteFolder() : createBookmarkFolder()));
 if (els.libCollapseAll) els.libCollapseAll.addEventListener('click', toggleCollapseAll);
@@ -12799,7 +13941,7 @@ document.addEventListener('keydown', (e) => {
     if (els.schedView.classList.contains('open')) { closeSched(); return; }
     if (els.mapView.classList.contains('open')) { closeMap(); return; }
     if (settingsOpen()) { closeSettings(); return; }
-    if (els.libraryDrawer.classList.contains('open')) { closeDrawer(); return; }
+    if (libraryOpen()) { closeLibrary(); return; }
     // Nothing else consumed Esc — stop the active tab if it's composing.
     if (activeId && isTabBusy(activeId)) { stopActiveCompose(); return; }
   }
@@ -12822,7 +13964,7 @@ document.addEventListener('keydown', (e) => {
 window.addEventListener('message', (e) => {
   const d = e.data;
   if (!d || d.__chervil !== true) return;
-  if (d.type === 'link' && d.href) { handleLinkClick(d.href, d.text || ''); return; }
+  if (d.type === 'link' && d.href) { handleLinkClick(d.href, d.text || '', !!d.newtab); return; }
   if (d.type === 'tool') { handleAppletTool(e.source, d); return; }
   if (d.type === 'tts') { handleFrameTts(e.source, d); return; }
   if (d.type === 'scroll' && typeof d.y === 'number') { previewScrollY = d.y; return; }
@@ -13132,6 +14274,17 @@ if (window.chervil.onContextAsk) {
   });
 }
 
+// Right-click → "Check this page for RSS feeds". Discovers (may fetch), then
+// subscribes or reports. subscribeByUrl handles the "already subscribed" and
+// "nothing found" cases and toasts either way.
+if (window.chervil.onContextFindFeeds) {
+  window.chervil.onContextFindFeeds((url) => {
+    const u = String(url || '').trim();
+    if (!u) return;
+    subscribeByUrl(u, { discover: true }).then((f) => { if (f) { updateFeedButton(); if (libraryOpen() && drawerTab === 'feeds') renderFeeds(); } });
+  });
+}
+
 // A file downloaded from an embedded site — record it in the Downloads shelf and
 // let the user know.
 if (window.chervil.onDownloadDone) {
@@ -13140,7 +14293,7 @@ if (window.chervil.onDownloadDone) {
     downloads.unshift({ id: uid(), filename: d.filename || 'file', path: d.path || '', at: Date.now(), ok: !!d.ok, state: d.state || (d.ok ? 'completed' : 'failed') });
     if (downloads.length > MAX_DOWNLOADS) downloads.length = MAX_DOWNLOADS;
     scheduleSave();
-    if (els.libraryDrawer.classList.contains('open') && drawerTab === 'downloads') renderDrawer();
+    if (libraryOpen() && drawerTab === 'downloads') renderDrawer();
     if (d.ok) toast(`⬇ Downloaded ${d.filename} to your Downloads folder.`);
     else toast(`Download failed: ${d.filename || ''}`);
   });
@@ -13161,6 +14314,7 @@ if (els.zoomIn) els.zoomIn.addEventListener('click', () => nudgeZoom(1));
 if (els.zoomOut) els.zoomOut.addEventListener('click', () => nudgeZoom(-1));
 if (els.printBtn) els.printBtn.addEventListener('click', () => printCurrentView());
 if (els.readerBtn) els.readerBtn.addEventListener('click', () => openReaderView());
+if (els.feedBtn) els.feedBtn.addEventListener('click', onFeedButtonClick);
 if (els.askPageBtn) els.askPageBtn.addEventListener('click', toggleAskPage);
 if (els.translateBtn) els.translateBtn.addEventListener('click', openTranslateSheet);
 if (els.readAloudBtn) els.readAloudBtn.addEventListener('click', readPageAloud);

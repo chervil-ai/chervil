@@ -134,7 +134,7 @@
         </div>
         <div id="omni-actions">
           <button id="map-btn" class="omni-btn text" title="Thinking canvas — map of this tab's pages">⌗ <span class="lbl">Map</span></button>
-          <button id="history-btn" class="omni-btn text" title="Library — Saved Pages, Activity, Favorites, History, Downloads &amp; Trash">🕘 <span class="lbl">Library</span></button>
+          <button id="history-btn" class="omni-btn text" title="Library — Saved Pages, Pages, Favorites, Collections, Feeds, Downloads, Sites &amp; Trash">🕘 <span class="lbl">Library</span></button>
           <button id="sched-btn" class="omni-btn text" title="Scheduled agents">⏰ <span class="lbl">Schedules</span></button>
           <button id="agents-btn" class="omni-btn text" title="Agents — personas &amp; tools">👤 <span class="lbl">Agents</span></button>
           <button id="autofill-pw-btn" class="omni-btn" title="Fill a saved login" hidden>🔑</button>
@@ -148,6 +148,7 @@
           <button id="send-phone-btn" class="omni-btn" title="Send this page to your phone (QR)" disabled>📱</button>
           <button id="email-page-btn" class="omni-btn" title="Email this page" disabled>✉️</button>
           <button id="share-fedica-btn" class="omni-btn" title="Share this page (Fedica, AddToAny…)" disabled>📣</button>
+          <button id="feed-btn" class="omni-btn" title="Subscribe to this site’s feed" hidden>📡</button>
           <button id="reader-btn" class="omni-btn" title="Reader view — declutter this page" disabled>📖</button>
           <button id="pip-btn" class="omni-btn" title="Picture-in-picture (pop out the video)" disabled>📺</button>
           <button id="save-btn" class="omni-btn text" title="Save this page to disk" disabled>⤓ <span class="lbl">Save</span></button>
@@ -774,6 +775,115 @@
           </div>
         </div>
 
+        <!-- Library: your pages, sites, favorites, collections, feeds and trash.
+             A page like Settings, not an overlay — it lives inside #viewport so the
+             toolbar and tabs stay live above it, and it gets back/forward for free. -->
+        <div id="library-view" hidden>
+          <nav id="library-nav" aria-label="Library sections">
+            <div class="settings-nav-head">Library</div>
+            <button class="library-tab" data-libtab="bookmarks">Saved Pages</button>
+            <button class="library-tab active" data-libtab="history">Pages</button>
+            <button class="library-tab" data-libtab="favorites">Favorites</button>
+            <button class="library-tab" data-libtab="collections">Collections</button>
+            <button class="library-tab" data-libtab="feeds">Feeds</button>
+            <button class="library-tab" data-libtab="downloads">Downloads</button>
+            <button class="library-tab" data-libtab="sites">Sites</button>
+            <button class="library-tab" data-libtab="trash">Trash</button>
+          </nav>
+          <div id="library-content">
+            <header id="library-header">
+              <h2 id="library-heading">Pages</h2>
+              <div id="library-actions">
+                <button id="lib-import-opml" class="lib-btn" title="Import subscriptions from another feed reader (OPML)" hidden>⤒ Import OPML</button>
+                <button id="lib-import-page" class="lib-btn" title="Import a shared Chervil page (.chervil)">⤒ Import page</button>
+                <button id="lib-new-folder" class="lib-btn" title="Create a folder" hidden>+ Folder</button>
+                <button id="lib-new-collection" class="lib-btn" title="Create a collection" hidden>+ Collection</button>
+                <button id="lib-collapse-all" class="lib-btn" hidden>Collapse all</button>
+                <button id="lib-select-toggle" class="lib-btn" hidden>Select</button>
+                <button id="clear-sites" class="lib-btn danger" hidden>Clear history</button>
+                <button id="clear-downloads" class="lib-btn danger" hidden>Clear list</button>
+                <button id="empty-trash" class="lib-btn danger" hidden>Empty Trash</button>
+              </div>
+            </header>
+
+            <div id="library-controls">
+              <!-- Multi-select bar (Pages): bulk-delete selected pages -->
+              <div id="lib-select-bar" hidden>
+                <span id="lib-select-count">0 selected</span>
+                <button id="lib-select-all">Select all</button>
+                <button id="lib-select-delete" class="danger">Delete selected</button>
+                <button id="lib-select-done">Done</button>
+              </div>
+
+              <!-- Space bar (Saved Pages): pick a Space, create one, synthesize or publish across it -->
+              <div id="space-bar">
+                <label class="space-label">Space</label>
+                <select id="space-select" title="Switch Space"></select>
+                <button id="new-space-btn" class="lib-btn" title="New Space">+ New</button>
+                <button id="synthesize-btn" class="lib-btn primary" title="Synthesize across this Space">✨ Synthesize</button>
+                <button id="publish-space-btn" class="lib-btn" title="Publish every page in this Space to the web">🌐 Publish</button>
+              </div>
+              <div id="new-space-row" hidden>
+                <input id="new-space-name" type="text" maxlength="40" placeholder="Name this Space…" />
+                <button id="create-space-btn" class="lib-btn">Create</button>
+              </div>
+              <div id="synth-row" hidden>
+                <input id="synth-input" type="text" placeholder="Ask across these pages…  (blank = full overview)" />
+                <button id="synth-go" class="lib-btn primary">Go</button>
+              </div>
+
+              <div id="lib-search-row">
+                <input id="lib-search" type="text" placeholder="Search this list…" spellcheck="false" autocomplete="off" />
+              </div>
+            </div>
+
+            <div id="library-list" class="drawer-list"></div>
+
+            <!-- Feeds section: shown only when the Feeds rail item is active. Its own
+                 form + list rather than the shared row list, so it lives beside
+                 #library-list and renderDrawer toggles between them. -->
+            <div id="library-feeds" hidden>
+              <p class="sched-sub">Subscribe to the sources you actually read — RSS, podcasts, newsletters, blogs, YouTube channels, subreddits. Chervil pulls them quietly in the background. Add the <b>PulseKeeper</b> agent (in 👤 Agents) and schedule it for a digest of what arrived. Switching from another reader? Use <b>⤒ Import OPML</b> above.</p>
+              <small id="lib-import-status" class="field-note"></small>
+              <form id="feed-form" class="sched-form" autocomplete="off">
+                <div class="sched-row">
+                  <label>Type
+                    <select id="feed-type"></select>
+                  </label>
+                  <label>Pull
+                    <select id="feed-interval">
+                      <option value="1800000">every 30 min</option>
+                      <option value="3600000" selected>hourly</option>
+                      <option value="21600000">every 6 hours</option>
+                      <option value="43200000">every 12 hours</option>
+                      <option value="86400000">daily</option>
+                    </select>
+                  </label>
+                  <label>Keep
+                    <select id="feed-retention">
+                      <option value="86400000">1 day</option>
+                      <option value="259200000">3 days</option>
+                      <option value="604800000">1 week</option>
+                      <option value="1209600000">2 weeks</option>
+                      <option value="2592000000" selected>1 month</option>
+                      <option value="7776000000">3 months</option>
+                      <option value="0">forever</option>
+                    </select>
+                  </label>
+                </div>
+                <div id="feed-fields"></div>
+                <div class="sched-row">
+                  <label>Name <input id="feed-name" type="text" placeholder="Optional — defaults to the feed’s own title" spellcheck="false" /></label>
+                  <label>Folder <input id="feed-folder" type="text" placeholder="Optional — e.g. Tech" spellcheck="false" list="feed-folder-list" /></label>
+                  <datalist id="feed-folder-list"></datalist>
+                  <button type="submit" class="sched-add">Subscribe</button>
+                </div>
+              </form>
+              <div id="feed-list" class="sched-list"></div>
+            </div>
+          </div>
+        </div>
+
         <!-- Remix bar: transform the current composed page -->
         <div id="remix-bar" hidden>
           <button id="remix-min" class="remix-btn remix-min" title="Minimize this bar">▾</button>
@@ -872,65 +982,6 @@
           <button id="folder-attach" class="lib-btn primary" disabled>Attach selected</button>
         </div>
       </section>
-    </div>
-  </div>
-
-  <!-- Library drawer (History / Trash) -->
-  <div id="library-drawer" class="drawer">
-    <div class="drawer-panel">
-      <header class="drawer-head">
-        <div class="drawer-tabs">
-          <button id="lib-tab-bookmarks" class="drawer-tab">Saved Pages</button>
-          <button id="lib-tab-history" class="drawer-tab active">Activity</button>
-          <button id="lib-tab-favorites" class="drawer-tab">Favorites</button>
-          <button id="lib-tab-collections" class="drawer-tab">Collections</button>
-          <button id="lib-tab-downloads" class="drawer-tab">Downloads</button>
-          <button id="lib-tab-sites" class="drawer-tab">History</button>
-          <button id="lib-tab-trash" class="drawer-tab">Trash</button>
-        </div>
-        <div class="drawer-head-right">
-          <button id="lib-import-page" class="lib-btn" title="Import a shared Chervil page (.chervil)">⤒ Import page</button>
-          <button id="lib-new-folder" class="lib-btn" title="Create a folder" hidden>+ Folder</button>
-          <button id="lib-new-collection" class="lib-btn" title="Create a collection" hidden>+ Collection</button>
-          <button id="lib-collapse-all" class="lib-btn" hidden>Collapse all</button>
-          <button id="lib-select-toggle" class="lib-btn" hidden>Select</button>
-          <button id="clear-sites" class="lib-btn danger" hidden>Clear history</button>
-          <button id="clear-downloads" class="lib-btn danger" hidden>Clear list</button>
-          <button id="empty-trash" class="lib-btn danger" hidden>Empty Trash</button>
-          <button id="library-close" class="modal-close" title="Close">✕</button>
-        </div>
-      </header>
-
-      <!-- Multi-select bar (History tab): bulk-delete selected pages -->
-      <div id="lib-select-bar" hidden>
-        <span id="lib-select-count">0 selected</span>
-        <button id="lib-select-all">Select all</button>
-        <button id="lib-select-delete" class="danger">Delete selected</button>
-        <button id="lib-select-done">Done</button>
-      </div>
-
-      <!-- Space bar (Saved Pages tab): pick a Space, create one, synthesize or publish across it -->
-      <div id="space-bar">
-        <label class="space-label">Space</label>
-        <select id="space-select" title="Switch Space"></select>
-        <button id="new-space-btn" class="lib-btn" title="New Space">+ New</button>
-        <button id="synthesize-btn" class="lib-btn primary" title="Synthesize across this Space">✨ Synthesize</button>
-        <button id="publish-space-btn" class="lib-btn" title="Publish every page in this Space to the web">🌐 Publish</button>
-      </div>
-      <div id="new-space-row" hidden>
-        <input id="new-space-name" type="text" maxlength="40" placeholder="Name this Space…" />
-        <button id="create-space-btn" class="lib-btn">Create</button>
-      </div>
-      <div id="synth-row" hidden>
-        <input id="synth-input" type="text" placeholder="Ask across these pages…  (blank = full overview)" />
-        <button id="synth-go" class="lib-btn primary">Go</button>
-      </div>
-
-      <div id="lib-search-row">
-        <input id="lib-search" type="text" placeholder="Search this list…" spellcheck="false" autocomplete="off" />
-      </div>
-
-      <div id="library-list" class="drawer-list"></div>
     </div>
   </div>
 

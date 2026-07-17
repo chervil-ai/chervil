@@ -6,6 +6,89 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.21.0] — 2026-07-17
+
+**Your feeds, briefed.** You already have a feed reader, and Chervil isn't trying to
+be a better one. It's the browser that reads your feeds *for* you: subscribe to the
+sources you follow, bring your whole list over from your old reader in one file, and
+ask — in plain language — *"summarize the Entertainment folder."* Chervil pulls what
+arrived and hands you a briefing of what's worth your time, from your own sources, no
+web search involved.
+
+The Library also grew up: it's a full page now, like Settings, instead of a pop-up.
+
+### Added
+
+- **Your Feeds — Chervil pulls the sources you actually read.** Subscribe to RSS and
+  Atom feeds, podcasts, newsletters, blogs, YouTube channels and subreddits in the
+  Library's new **Feeds** section. No API keys, no accounts. Items pull quietly in the
+  background, three at a time, and nothing notifies you per-item — a feed arriving is
+  not news.
+- **Brief me on my feeds.** Add the built-in **PulseKeeper agent** (👤 Agents →
+  starter agents) and schedule it — it composes a digest of what came in, grouped by
+  theme, ranked by what matters, every item linked. Or just ask in the sidebar:
+  *"summarize the feeds in the Entertainment folder,"* *"what's new in my Tech feeds."*
+  Not a web search — your own sources. Adapted from the standalone
+  [PulseKeeper](https://github.com/rod-trent/PulseKeeper) app.
+- **Import your feeds from another reader.** Switching from Feedly, Inoreader, FeedBro
+  or anything else? **Library → Feeds → ⤒ Import OPML** brings the whole list over —
+  **folders and all.** Duplicates are skipped, and a big list defaults to a once-a-day
+  pull so 200 feeds don't hammer your machine.
+- **Subscribe from any page.** When the page you're on offers a feed, a 📡 appears in
+  the toolbar — one click subscribes. Or right-click anywhere → **Check this page for
+  RSS feeds**, which finds one even on sites that don't advertise it. Because Chervil
+  *is* the browser, it sees the feed without an extension or a permission prompt.
+- **Feed folders.** Feeds group under collapsible folder headers; OPML import keeps
+  the folders your old reader had; and a folder can **scope a digest** — a feeds agent
+  with `feedFolder: Tech` briefs only your Tech feeds. Assign or change a feed's folder
+  from its ⚙ settings, or type one when subscribing.
+- **Per-feed retention.** Each feed decides how long to keep its items — 1 day to
+  forever — instead of one global cutoff. A busy subreddit for a day, a favorite blog
+  for a year. (Existing feeds keep the prior 30-day default.)
+- **Bulk select and delete feeds** — hit **Select** in the Feeds section to check any
+  or all and remove them at once, handy after a big import. Deleting a feed clears its
+  stored items too.
+- **Per-feed settings live in an expandable row** — click the ⚙ on a feed to reveal
+  its folder, pull interval, and retention without cluttering the list.
+- **`feeds: true` agent frontmatter** (optionally with `feedFolder`). Any agent that
+  declares it gets recent feed items on every run — scheduled or interactive — so you
+  can write your own briefer. See [agents/README.md](agents/README.md). Items count as
+  briefed only on scheduled runs, so asking interactively is a peek that won't eat
+  tomorrow's digest.
+- **The Library is a page now, not a pop-up.** It opens in a tab like Settings —
+  back/forward work, it remembers the section and search you left it on, and it never
+  dims the whole window. Two sections were renamed to read clearly in the new vertical
+  rail: **Pages** (what Sprig composed for you, was "Activity") and **Sites** (where
+  you've been, was "History").
+- **Digest links open in a new tab.** Clicking a feed item in a folder summary opens
+  the article alongside your brief instead of replacing it — the summary stays home
+  base. (Composed pages also honor `target="_blank"` and ctrl/⌘-click for opening any
+  link in a new tab.)
+- **Copy any chat message.** A copy button appears on hover over any message in the
+  sidebar — your prompts and Sprig's replies — so you don't have to select the text by
+  hand.
+
+### Fixed
+
+- **First open is no longer slow or frozen when your state file lives on OneDrive.**
+  Loading your session used a *synchronous* read, so when OneDrive had de-hydrated the
+  file (the "Automatic file downloads" popup), the seconds-long download blocked the
+  entire app — window, tray and all. The read is async now, so the app stays
+  responsive while the file comes down, and once it's warm later opens are instant.
+- **Settings and Library sections start at the top** when you switch to them, instead
+  of keeping the scroll position from the one you left.
+- **Paste images and files straight into the prompt** (Ctrl/⌘-V), the same as dragging
+  them in. A pasted screenshot attaches as an image.
+
+### Notes
+
+Feed items live in their own tables in the page index, deliberately apart from the
+pages you read: a busy morning's feeds would otherwise swamp the "what have you been
+reading about?" signal behind ambient dossier offers, and a feed item you went on to
+read would have quietly overwritten itself. Subscriptions sync between your machines;
+what each machine has already pulled does not. `chervil-state.json` stays flat no
+matter how many items accumulate.
+
 ## [0.20.0] — 2026-07-16
 
 **Chervil remembers what you read.** Until now it hoarded the pages it composed

@@ -16,12 +16,24 @@ description: One-line summary
 model: claude-opus-4-8        # applied only when it matches your current provider
 provider: claude              # optional hint
 mcp: [server-name, other]     # restrict the agent to these configured MCP servers
+feeds: true                   # give this agent what's new in Your Feeds (see below)
 starters:                     # one-click prompts shown in the Agents panel
   - Do the thing
   - Another starter
 ---
 You are ... (the persona, voice, priorities, and rules)
 ```
+
+### `feeds: true`
+
+Attaches recent unread items from **Your Feeds** (⏰ Schedules, watchers & feeds)
+to every run as this agent — whether you activate it and ask, or bind it to a
+schedule. `pulsekeeper.md` is the built-in example: subscribe to some feeds, add
+the agent, schedule it for 8am, and you get a digest of your own sources instead
+of a web search.
+
+Items are marked as briefed only on **scheduled** runs, so asking interactively is
+a peek that won't eat what tomorrow's digest was going to cover.
 
 The examples in this folder are starting points — copy and tweak them.
 
