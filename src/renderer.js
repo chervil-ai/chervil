@@ -11571,9 +11571,20 @@ async function renderAccountBox() {
     ? 'Thanks for supporting Chervil. Manage your account and everything you’ve published on the web.'
     : 'You’re on the free plan. Chervil Pro adds hosted publishing — shareable links, a public profile, and analytics.'));
 
+  // Pro includes Chervil Chat — Sprig in a mobile browser. Point Pro members at it
+  // with the add-to-home-screen steps (the link opens on desktop too, but the
+  // instructions are for their phone).
+  if (res.pro) {
+    const host = base.replace(/^https?:\/\//, '');
+    const mobile = hint(`📱 Chervil on your phone: your Pro plan includes Chervil Chat — chat with Sprig in any mobile browser, no app to install. On your phone, open ${host}/chat and sign in, then add it to your home screen — iPhone: Share → Add to Home Screen · Android: ⋮ menu → Install app.`);
+    mobile.style.margin = '8px 0 0';
+    box.appendChild(mobile);
+  }
+
   const acts = document.createElement('div');
   acts.className = 'account-actions';
   acts.appendChild(linkBtn('Open your account →', base + '/me', true));
+  if (res.pro) acts.appendChild(linkBtn('Chervil on your phone', base + '/chat'));
   if (res.username) acts.appendChild(linkBtn('View public profile', base + '/profile/' + encodeURIComponent(res.username)));
   if (!res.pro) acts.appendChild(linkBtn('Get Chervil Pro', base + '/pro'));
   box.appendChild(acts);
