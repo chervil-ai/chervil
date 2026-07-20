@@ -4618,9 +4618,9 @@ setInterval(() => {
 // On becoming visible again, also check for a newer synced session (RFC 0005).
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) { if (settings.credsAutoLock !== 'never') lockVault('hide'); }
-  else reconcileNow().then(checkSyncConflict);
+  else { reconcileNow().then(checkSyncConflict); checkPhoneHandoffs(); }
 });
-window.addEventListener('focus', () => { reconcileNow().then(checkSyncConflict); });
+window.addEventListener('focus', () => { reconcileNow().then(checkSyncConflict); checkPhoneHandoffs(); });
 
 // A labeled auto-lock <select>, built for the (configured) credential panel.
 function credsAutoLockRow() {
@@ -11745,6 +11745,31 @@ async function checkSyncConflict() {
   }
 }
 
+// Claim chats the mobile app sent here ("Send to desktop") and open each in a chat
+// tab. The server claims-on-fetch, so whatever comes back is adopted immediately
+// (never lost). Runs on launch and when the window regains focus; throttled.
+let handoffChecking = false;
+let lastHandoffCheck = 0;
+async function checkPhoneHandoffs() {
+  if (handoffChecking || !settings.publishToken || !window.chervil.fetchHandoffs) return;
+  const now = Date.now();
+  if (now - lastHandoffCheck < 10000) return;               // don't hammer on bursty focus events
+  lastHandoffCheck = now;
+  handoffChecking = true;
+  try {
+    const base = (settings.publishBase || 'https://getchervil.com').replace(/\/+$/, '');
+    const res = await window.chervil.fetchHandoffs({ token: settings.publishToken, baseUrl: base });
+    if (res && res.ok && Array.isArray(res.handoffs) && res.handoffs.length) {
+      for (const h of res.handoffs) adoptChatHistory(h.messages, h.title);
+      const n = res.handoffs.length;
+      toast(n === 1
+        ? '📱 Opened a chat from your phone — continue or compose it here.'
+        : `📱 Opened ${n} chats from your phone.`);
+    }
+  } catch { /* ignore — try again next focus */ }
+  finally { handoffChecking = false; }
+}
+
 function sanitizeTab(t) {
   const pages = Array.isArray(t.pages) ? t.pages : [];
   // Migrate older linear histories: give every node an id and link it to the previous
@@ -11970,6 +11995,7 @@ async function init() {
   // place a moment later. Deferred past the save debounce because reconcileNow
   // yields to a pending write of our own.
   setTimeout(() => { reconcileNow().then(checkSyncConflict).catch(() => {}); }, 1500);
+  setTimeout(() => { checkPhoneHandoffs().catch(() => {}); }, 2500); // pick up any chats sent from the phone
 }
 
 // ---- Save (to disk) ----
@@ -14248,24 +14274,31 @@ if (window.chervil.onQuickChatRun) {
   });
 }
 
-// "Open in Chervil" — adopt the floating conversation into a real chat tab so it
-// can continue with full context and history.
+// Adopt a chat history into a real chat tab so it can continue with full context —
+// and be composed from. Shared by the floating quick panel's "Open in Chervil" and
+// by phone handoffs ("Send to desktop"). Lands in chat mode, matching both sources.
+function adoptChatHistory(history, title) {
+  const list = (Array.isArray(history) ? history : []).filter((m) => m && m.content);
+  if (!list.length) return null;
+  const tab = newTab(true);
+  for (const m of list) {
+    addMessage(tab, m.role === 'user' ? 'user' : 'bot', m.content);
+    tab.history.push({ role: m.role === 'assistant' ? 'assistant' : 'user', content: m.content });
+  }
+  const t = String(title || list[0].content || 'Chat').trim();
+  tab.title = t.length > 40 ? t.slice(0, 37) + '…' : t;
+  setChatMode(true);
+  renderTabs();
+  scheduleSave();
+  if (els.prompt) els.prompt.focus();
+  return tab;
+}
+
+// "Open in Chervil" — adopt the floating conversation into a real chat tab.
 if (window.chervil.onQuickOpenInApp) {
   window.chervil.onQuickOpenInApp(() => {
-    const tab = newTab(true);
-    for (const m of quickChatHistory) {
-      addMessage(tab, m.role === 'user' ? 'user' : 'bot', m.content);
-      tab.history.push({ role: m.role, content: m.content });
-    }
-    if (quickChatHistory.length) {
-      const first = quickChatHistory[0].content;
-      tab.title = first.length > 40 ? first.slice(0, 37) + '…' : first;
-    }
+    adoptChatHistory(quickChatHistory, quickChatHistory.length ? quickChatHistory[0].content : 'Chat');
     quickChatHistory = []; // handed off into this tab — don't let a later handoff re-duplicate it
-    setChatMode(true); // continued messages stay in chat, matching the floating panel
-    renderTabs();
-    scheduleSave();
-    els.prompt.focus();
   });
 }
 

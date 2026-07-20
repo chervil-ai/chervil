@@ -841,6 +841,23 @@ ipcMain.handle('chervil:account-status', async (_event, payload) => {
   }
 });
 
+// Claim any "Send to desktop" handoffs the mobile chat left for this account
+// (publish-token auth). Claim-on-fetch: the server marks them delivered, so the
+// renderer must adopt what it gets. Runs in main to avoid the file:// CORS wall.
+ipcMain.handle('chervil:fetch-handoffs', async (_event, payload) => {
+  try {
+    const token = payload && payload.token;
+    if (!token) return { ok: false, error: 'No token' };
+    const base = String((payload && payload.baseUrl) || 'https://getchervil.com').replace(/\/+$/, '');
+    const res = await fetch(`${base}/api/handoff`, { headers: { Authorization: `Bearer ${token}` } });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) return { ok: false, error: data.error || `Handoff check failed (${res.status}).` };
+    return { ok: true, handoffs: Array.isArray(data.handoffs) ? data.handoffs : [] };
+  } catch (err) {
+    return { ok: false, error: String(err && err.message ? err.message : err) };
+  }
+});
+
 // Deliver an imported page doc to the renderer (chervil://import deep link).
 function deliverImportDoc(doc) {
   if (!mainWindow || mainWindow.isDestroyed()) createWindow();

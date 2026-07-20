@@ -274,6 +274,8 @@ contextBridge.exposeInMainWorld('chervil', {
   osAction: (payload) => ipcRenderer.invoke('chervil:os-action', payload),
   /** Account status for Settings → You: { ok, pro, username }. */
   accountStatus: (payload) => ipcRenderer.invoke('chervil:account-status', payload),
+  /** Claim "Send to desktop" chat handoffs from the mobile app: { ok, handoffs }. */
+  fetchHandoffs: (payload) => ipcRenderer.invoke('chervil:fetch-handoffs', payload),
 
   /** Sync folder (#1): point the state file at a synced folder, read it, or unlink. */
   getSyncFolder: () => ipcRenderer.invoke('chervil:get-sync-folder'),
