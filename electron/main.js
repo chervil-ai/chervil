@@ -964,8 +964,14 @@ function createQuickWindow() {
     },
   });
   quickWindow.loadFile(path.join(__dirname, '..', 'src', 'quick.html'));
-  // Spotlight behavior: clicking away (blur) dismisses it.
-  quickWindow.on('blur', () => { if (quickWindow && quickWindow.isVisible()) quickWindow.hide(); });
+  // Spotlight behavior: for the compact ask bar, clicking away (blur) dismisses it.
+  // In chat mode the panel must persist through focus loss (switching apps or
+  // monitors) so a reply can finish streaming and stay readable — it stays up
+  // until the user closes it (Esc / ✕ / the hotkey), never on blur.
+  quickWindow.on('blur', () => {
+    if (quickChatMode) return;
+    if (quickWindow && quickWindow.isVisible()) quickWindow.hide();
+  });
   quickWindow.on('close', (e) => { if (!isQuitting) { e.preventDefault(); quickWindow.hide(); } });
 }
 

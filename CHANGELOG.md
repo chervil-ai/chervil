@@ -6,6 +6,32 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.22.0] — 2026-07-20
+
+**Sprig in your pocket.** Chervil Chat is a new, hosted chat-only Chervil that runs
+in any phone's browser — sign in, and Sprig is a tap away on your home screen, no app
+to install. It's the same assistant, grounded in live web search, now wherever you
+are. And the desktop quick-chat you already use got the fix it needed: it stays put
+while it answers you.
+
+### Added
+
+- **Chervil Chat — Sprig on your phone.** A hosted, chat-only Chervil at
+  **[getchervil.com/chat](https://getchervil.com/chat)** that runs in a mobile
+  browser: sign in and talk to Sprig from anywhere, with answers grounded in live web
+  search. **Add it to your home screen** and it opens full-screen like a native app —
+  no download, no API key, nothing to set up. It runs on Chervil's managed AI, so it's
+  part of **Chervil Pro**. (This is a companion web app — it is not part of this
+  Windows installer.)
+
+### Fixed
+
+- **The quick-chat panel stays open while it answers.** When you held a chat in the
+  **Ctrl+Shift+Space** quick bar and then switched to another app or moved to a second
+  monitor, the panel would disappear mid-reply. In chat mode it now stays put until
+  *you* close it — **Esc**, the **✕**, or the hotkey — so Sprig can finish and you can
+  read the answer. The compact ask bar still dismisses when you click away, as before.
+
 ## [0.21.0] — 2026-07-17
 
 **Your feeds, briefed.** You already have a feed reader, and Chervil isn't trying to
@@ -1104,7 +1130,10 @@ First public, build-in-public alpha. Run from source; no packaged installer yet.
 - API keys encrypted at rest via OS-native storage; never round-tripped through
   the UI.
 
-[Unreleased]: https://github.com/chervil-ai/chervil/compare/v0.19.3...HEAD
+[Unreleased]: https://github.com/chervil-ai/chervil/compare/v0.22.0...HEAD
+[0.22.0]: https://github.com/chervil-ai/chervil/compare/v0.21.0...v0.22.0
+[0.21.0]: https://github.com/chervil-ai/chervil/compare/v0.20.0...v0.21.0
+[0.20.0]: https://github.com/chervil-ai/chervil/compare/v0.19.3...v0.20.0
 [0.19.3]: https://github.com/chervil-ai/chervil/compare/v0.19.2...v0.19.3
 [0.19.2]: https://github.com/chervil-ai/chervil/compare/v0.19.1...v0.19.2
 [0.19.1]: https://github.com/chervil-ai/chervil/compare/v0.19.0...v0.19.1
