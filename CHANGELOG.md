@@ -6,6 +6,39 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.23.0] — 2026-07-20
+
+**Beam a chat from your phone to your desk.** Start a conversation in Chervil Chat on
+your phone, tap **↗ To desktop**, and it lands in a chat tab here — ready to keep going
+or compose into a page. And Chervil Chat itself grew up: talk to it, show it photos,
+and it remembers where you left off.
+
+### Added
+
+- **"Send to desktop" — continue a phone chat on your computer.** In Chervil Chat on
+  your phone, tap **↗ To desktop**; the next time the desktop app is in focus it picks
+  the conversation up and opens it in a chat tab, so you can keep going or compose it
+  into a page. It travels through your account — the phone signs in, the desktop uses
+  its publish token (**Settings → Publishing**), both on the same account.
+- **Your Pro plan includes Chervil on your phone.** **Settings → You** now points Pro
+  members to Chervil Chat with the add-to-home-screen steps.
+
+### Chervil Chat (the companion web app at getchervil.com/chat) also gained
+
+- **Voice** — tap the mic and dictate your message (where your browser supports it).
+- **Photo chat** — attach a picture and ask Sprig about it.
+- **Saved conversations** — close and reopen, and your chat is still there.
+- **Home-screen shortcuts** — long-press the icon for New chat / Talk to Sprig / Photo
+  chat (Android).
+- **Formatted replies** with a copy button on every message.
+
+### Fixed
+
+- **Managed AI works again on Grok.** xAI retired both the old model default and its
+  Live Search API, which had quietly broken managed inference — mobile chat, hosted
+  page applets, and living-page refreshes. All three now run on the current model
+  through xAI's Agent Tools API.
+
 ## [0.22.0] — 2026-07-20
 
 **Sprig in your pocket.** Chervil Chat is a new, hosted chat-only Chervil that runs
@@ -1130,7 +1163,8 @@ First public, build-in-public alpha. Run from source; no packaged installer yet.
 - API keys encrypted at rest via OS-native storage; never round-tripped through
   the UI.
 
-[Unreleased]: https://github.com/chervil-ai/chervil/compare/v0.22.0...HEAD
+[Unreleased]: https://github.com/chervil-ai/chervil/compare/v0.23.0...HEAD
+[0.23.0]: https://github.com/chervil-ai/chervil/compare/v0.22.0...v0.23.0
 [0.22.0]: https://github.com/chervil-ai/chervil/compare/v0.21.0...v0.22.0
 [0.21.0]: https://github.com/chervil-ai/chervil/compare/v0.20.0...v0.21.0
 [0.20.0]: https://github.com/chervil-ai/chervil/compare/v0.19.3...v0.20.0
