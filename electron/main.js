@@ -1555,13 +1555,39 @@ ipcMain.handle('chervil:cards-for-fill', async (_e, payload) => {
 });
 
 // --- Plain chat ("Just a chatbot" mode): a text reply, no page composed ----
-ipcMain.handle('chervil:chat', async (_event, payload) => {
+ipcMain.handle('chervil:chat', async (event, payload) => {
+  const { query, history, profile, pageContext, pageMeta, tabsContext, requestId, chatModel } = payload || {};
+  const send = (channel, data) => {
+    if (!event.sender.isDestroyed()) event.sender.send(channel, data);
+  };
+  // Chat streams over the SAME channels as compose (chervil:status / chervil:chunk),
+  // tagged with requestId so the renderer routes deltas to the originating tab.
+  // This handler used to just await the finished text, which is why chat sat on
+  // "Sprig is typing…" for the whole generation while compose painted as it went.
+  const aborter = new AbortController();
+  if (requestId) askAborters.set(requestId, aborter);
+
   try {
-    const { query, history, profile, pageContext, pageMeta, tabsContext } = payload || {};
-    const res = await runChat({ query, history: history || [], profile: profile || null, pageContext: pageContext || null, pageMeta: pageMeta || null, tabsContext: tabsContext || null, config: providerConfigFrom(payload) });
+    const res = await runChat({
+      query,
+      history: history || [],
+      profile: profile || null,
+      pageContext: pageContext || null,
+      pageMeta: pageMeta || null,
+      tabsContext: tabsContext || null,
+      config: providerConfigFrom(payload),
+      signal: aborter.signal,
+      chatModel: typeof chatModel === 'string' ? chatModel : '',
+      onStatus: (status) => send('chervil:status', { requestId, status }),
+      onDelta: requestId ? (delta) => send('chervil:chunk', { requestId, delta }) : null,
+    });
     return { ok: true, text: res.text, sources: res.sources || [] };
   } catch (err) {
+    // A user-pressed Stop is not an error — the renderer keeps what already streamed.
+    if (aborter.signal.aborted) return { ok: true, text: '', sources: [], aborted: true };
     return { ok: false, error: String(err && err.message ? err.message : err) };
+  } finally {
+    if (requestId) askAborters.delete(requestId);
   }
 });
 
@@ -2864,13 +2890,23 @@ function defaultStateFile() {
 function configFile() {
   return path.join(app.getPath('userData'), 'chervil-config.json');
 }
+// Cached: this is a tiny machine-local file, but readConfig sits under stateFile(),
+// which every save/load/state-info call goes through — twice per save. That made a
+// synchronous read of it one of the most frequent FS calls in the app. Only this
+// process writes it, so the cache is invalidated in writeConfig rather than by mtime.
+let configCache = null;
 function readConfig() {
-  try { return JSON.parse(fs.readFileSync(configFile(), 'utf8')) || {}; }
-  catch { return {}; }
+  if (configCache) return configCache;
+  try { configCache = JSON.parse(fs.readFileSync(configFile(), 'utf8')) || {}; }
+  catch { configCache = {}; }
+  return configCache;
 }
 function writeConfig(cfg) {
-  try { fs.writeFileSync(configFile(), JSON.stringify(cfg), 'utf8'); return true; }
-  catch { return false; }
+  try {
+    fs.writeFileSync(configFile(), JSON.stringify(cfg), 'utf8');
+    configCache = cfg && typeof cfg === 'object' ? cfg : null;
+    return true;
+  } catch { configCache = null; return false; }
 }
 
 // The active state file: a user-chosen sync location if set AND its folder is
@@ -2909,6 +2945,16 @@ function readStateWithMtime(p, { newest = false } = {}) {
     const state = JSON.parse(fs.readFileSync(p, 'utf8'));
     const mtimeMs = newest ? Number.MAX_SAFE_INTEGER : fs.statSync(p).mtimeMs;
     return { state, mtimeMs };
+  } catch { return null; }
+}
+
+// Same, off the event loop — for the save path, which runs constantly while the
+// user is working. The sync version above is still used by reconciliation, which
+// is rare and already reads a whole directory of orphans.
+async function readStateWithMtimeAsync(p) {
+  try {
+    const [raw, st] = await Promise.all([fs.promises.readFile(p, 'utf8'), fs.promises.stat(p)]);
+    return { state: JSON.parse(raw), mtimeMs: st.mtimeMs };
   } catch { return null; }
 }
 
@@ -3050,7 +3096,9 @@ ipcMain.handle('chervil:index-migrate', async () => {
         storeKey: it.storeKey,
         createdAt: it.createdAt || Date.now(),
       });
-      if (trashed) idx.trash(it.id);
+      // Preserve when it was actually deleted — the retention sweep reads this,
+      // and stamping "now" would give every migrated page a fresh window.
+      if (trashed) idx.trash(it.id, it.updatedAt || it.createdAt);
       migrated++;
     };
     for (const it of hist) put(it, false);
@@ -3099,6 +3147,12 @@ ipcMain.handle('chervil:index-trash', withIndex((idx, p) => { idx.trash(p.id); r
 ipcMain.handle('chervil:index-restore', withIndex((idx, p) => { idx.restore(p.id); return {}; }));
 ipcMain.handle('chervil:index-remove', withIndex((idx, p) => { idx.remove(p.id); return {}; }));
 ipcMain.handle('chervil:index-empty-trash', withIndex((idx) => { idx.emptyTrash(); return {}; }));
+ipcMain.handle('chervil:index-trash-stats', withIndex((idx) => idx.trashStats()));
+ipcMain.handle('chervil:index-purge-trash', withIndex((idx, p) => {
+  const days = Number(p.days);
+  if (!Number.isFinite(days) || days <= 0) return { removed: 0 };   // "never" — nothing to do
+  return { removed: idx.purgeTrashOlderThan(Date.now() - days * 24 * 60 * 60 * 1000) };
+}));
 ipcMain.handle('chervil:index-stats', withIndex((idx) => ({ stats: idx.stats() })));
 
 // --- Your Feeds -------------------------------------------------------------
@@ -3178,9 +3232,80 @@ ipcMain.handle('chervil:index-forget-all', withIndex((idx, p) => {
   return { stats: idx.stats() };
 }));
 
+// Pull any `library` a legacy (pre-RFC-0013) machine synced in INTO the index,
+// then drop the key so it never round-trips through the state file again.
+//
+// This is the other half of the mergeStates change: merge no longer resurrects the
+// key, but a machine still on an old build can keep sending one, and those pages
+// must not be stranded. We ingest what the index doesn't already have and delete
+// the key from what we write. Only runs once the one-time migration has completed
+// — before that the state file is still the system of record and must keep its
+// pages. Best-effort: if the index is unavailable we leave `library` alone, which
+// is exactly the pre-RFC-0013 behaviour.
+function absorbLegacyLibrary(state) {
+  if (!state || !state.library) return;
+  const hist = Array.isArray(state.library.history) ? state.library.history : [];
+  const trash = Array.isArray(state.library.trash) ? state.library.trash : [];
+  if (!hist.length && !trash.length) { delete state.library; return; }
+
+  const idx = getPageIndex();
+  if (!idx) return;                                   // keep the pages where they are
+  try {
+    const done = idx._db.prepare('SELECT value FROM meta WHERE key = ?').get('library_migrated');
+    if (!done) return;                                // migration owns this file still
+    // Existence check by id only. idx.get() would pull the full row — up to 200KB of
+    // HTML per page, for every page, just to answer "do we have this?".
+    const has = idx._db.prepare('SELECT 1 FROM pages WHERE id = ? LIMIT 1');
+    const ingest = (it, trashed) => {
+      if (!it || !it.id) return;
+      if (has.get(it.id)) return;                     // already ours — don't clobber
+      idx.putComposed({
+        id: it.id,
+        title: it.title || '',
+        query: it.query || '',
+        html: it.html || '',
+        body: stripHtmlText(it.html),
+        sources: it.sources || [],
+        conversation: it.conversation || [],
+        history: it.history || [],
+        spaceId: it.spaceId,
+        storeKey: it.storeKey,
+        createdAt: it.createdAt || Date.now(),
+      });
+      // updatedAt is stamped when the page was moved to trash, so it carries the
+      // original deletion time across from the other machine.
+      if (trashed) idx.trash(it.id, it.updatedAt || it.createdAt);
+    };
+    for (const it of hist) ingest(it, false);
+    for (const it of trash) ingest(it, true);
+    delete state.library;
+  } catch { /* leave the key in place rather than risk losing pages */ }
+}
+
+// Serialize saves. The renderer debounces to 500ms, but an await inside this
+// handler means a second save can now start before the first finishes; two
+// interleaved read-merge-write cycles on one file would let the older one win.
+// Each save waits for the one before it.
+let savePromise = Promise.resolve();
+
 ipcMain.handle('chervil:save-state', async (event, state) => {
   // Secondary (ephemeral) windows must not write over the primary's saved session.
   if (primaryWcId != null && event.sender.id !== primaryWcId) return { ok: true, mtimeMs: 0 };
+  const run = savePromise.then(() => writeStateFile(state), () => writeStateFile(state));
+  savePromise = run.catch(() => {});                  // a failed save must not wedge the chain
+  return run;
+});
+
+// Everything here is ASYNC on purpose. This used to be readFileSync + JSON.parse +
+// merge + JSON.stringify + writeFileSync + renameSync + statSync, all on the
+// main-process event loop — and it runs on a 500ms debounce from ~100 renderer call
+// sites (every tab switch, navigation, message, checkbox). Blocking the loop blocks
+// EVERY window, the tray and all IPC, which is the "app locks up, then catches up"
+// freeze. Same reasoning as load-state above: on a cloud-synced statePath these
+// reads and writes can stall for seconds on hydration, so they belong on the libuv
+// threadpool. The stringify is still sync (it has to be), but it's ~11ms on a 3MB
+// state and shrinks a lot once `library` stops round-tripping.
+async function writeStateFile(state) {
   try {
     const p = stateFile();
     let toWrite = state;
@@ -3189,32 +3314,46 @@ ipcMain.handle('chervil:save-state', async (event, state) => {
     // newest/base. Deletion tombstones keep our removals from being resurrected.
     const cfg = readConfig();
     if (cfg.statePath && p === cfg.statePath) {
-      const onDisk = readStateWithMtime(p);
+      const onDisk = await readStateWithMtimeAsync(p);
       if (onDisk) {
         const merged = mergeStates([{ state, mtimeMs: Number.MAX_SAFE_INTEGER }, onDisk]);
         if (merged) toWrite = merged;
       }
     }
+    absorbLegacyLibrary(toWrite);
     // Atomic write so a sync client never reads a half-written file.
     const tmp = p + '.tmp';
-    fs.writeFileSync(tmp, JSON.stringify(toWrite), 'utf8');
-    fs.renameSync(tmp, p);
+    await fs.promises.writeFile(tmp, JSON.stringify(toWrite), 'utf8');
+    await fs.promises.rename(tmp, p);
     let mtimeMs = 0;
-    try { mtimeMs = fs.statSync(p).mtimeMs; } catch { /* ignore */ }
+    try { mtimeMs = (await fs.promises.stat(p)).mtimeMs; } catch { /* ignore */ }
     return { ok: true, mtimeMs };
   } catch (err) {
     return { ok: false, error: String(err && err.message ? err.message : err) };
   }
-});
+}
 
 // Re-run conflict-copy reconciliation on demand. The renderer calls this on
 // window focus so orphans heal mid-session, not only at launch. Returns whether
 // anything changed (and the merged state so the renderer can adopt new items).
+//
+// Throttled, because "on window focus" means every single alt-tab back into
+// Chervil, and this is the heaviest synchronous path left in the app: a readdirSync
+// over the sync folder plus, if any orphan exists, a read+parse+merge+write of
+// every copy. Conflict copies appear on the timescale of a sync round-trip, not a
+// window focus, so a minute between passes heals them just as promptly. Launch is
+// unthrottled — the first call after boot always runs.
+const RECONCILE_MIN_MS = 60 * 1000;
+let lastReconcileAt = 0;
+
 ipcMain.handle('chervil:reconcile-state', async () => {
   try {
     const cfg = readConfig();
     const active = stateFile();
     if (!cfg.statePath || active !== cfg.statePath) return { ok: true, changed: false };
+    const now = Date.now();
+    if (now - lastReconcileAt < RECONCILE_MIN_MS) return { ok: true, changed: false, throttled: true };
+    lastReconcileAt = now;
     const merged = reconcileConflictCopies(active);
     let mtimeMs = 0;
     try { mtimeMs = fs.statSync(active).mtimeMs; } catch { /* ignore */ }

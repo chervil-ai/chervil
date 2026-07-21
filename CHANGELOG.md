@@ -6,6 +6,73 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.24.0] — 2026-07-21
+
+**The tune-up.** No new vertical this time — this one is about how Chervil *feels*.
+The app used to freeze for about half a second at a time while you worked, chat sat
+silent until the whole answer was ready, and the Trash quietly kept everything you
+ever deleted, forever. All three are fixed, and chat now starts answering in under
+half a second.
+
+### Fixed
+
+- **The app no longer locks up while you use it.** Chervil saved your session by
+  blocking everything else — the window, the tabs, the tray — for about **450 ms**,
+  and it did that on a half-second timer while you worked. So a click would land,
+  nothing would happen, and then everything would catch up at once. Saving now happens
+  out of the way: the same save blocks for about **11 ms**. That's the "sometimes it
+  seems locked up" problem, gone.
+- **Your session file stopped growing forever.** A merge bug meant the pages Chervil
+  had already moved into your local index kept getting written back into the session
+  file on every save, so it could never shrink. On a real profile it dropped from
+  **3.17 MB to 1.51 MB** on the first save, with nothing lost. Syncing between
+  computers is unaffected — pages from a machine on an older build are still absorbed.
+- **Alt-tabbing back into Chervil is cheap again.** Every time the window took focus,
+  Chervil scanned your sync folder for conflict copies. That check now runs at most
+  once a minute.
+- **A rate-limited AI provider no longer breaks the reply.** If your provider is busy
+  and returns "too many requests," Chervil now waits a moment and retries — up to
+  three times, with the delay it asks for — instead of showing you an error. You'll
+  see a short "retrying" note instead of a dead end. (Claude already did this; Grok,
+  Gemini, OpenAI and Azure now do too.)
+- **Chat prompts are cacheable, so repeat questions cost less.** The current time was
+  being written near the *front* of every chat prompt, which changed the prompt every
+  minute and defeated your provider's prompt caching entirely. It now goes at the end,
+  where it belongs, and the reusable part is marked for caching.
+- **Stopping a chat keeps what Sprig already wrote.** Half an answer is still an
+  answer — unlike half a page, which is why Stop discards a composing page but keeps
+  a chat reply.
+
+### Added
+
+- **Chat replies appear as Sprig types them.** Chat mode used to show "Sprig is
+  typing…" for the entire answer, then drop the whole thing at once — even though the
+  words were already arriving. They now stream into the conversation as they're
+  written, with a Stop button that actually does something. On a fast model, the first
+  words land in about **0.4 seconds** instead of **4.5**.
+- **Pick the model that answers in chat.** **Settings → Chat** now has a *Chat model*
+  dropdown — a faster model by default, your main model if you'd rather, or any
+  specific model your provider offers. It only affects chat; composed pages, Deep Dive
+  and skills still use your main model. This matters most on a *reasoning* model, which
+  thinks before writing a single word: measured on the same questions, one provider's
+  reasoning model took **6.1 s** to the first word where its non-reasoning model took
+  **0.4 s**.
+- **Trash empties itself.** Deleted pages used to sit in the Trash forever. They're now
+  removed after **30 days** by default — change it (or turn it off) under
+  **Settings → Your Web → Trash**, which also shows what the Trash is actually holding.
+- **The Trash tells you when it's heavy.** Past 50 MB or 200 pages, the Trash tab shows
+  a bar with the real size and count and an **Empty now** button. It also stops
+  under-reporting: the list only ever showed 100 items, so anything beyond that was
+  invisible while still taking up disk.
+- **Emptying the Trash actually reclaims the space.** It deleted the rows but left the
+  file the same size; it now compacts, like the other privacy controls always did.
+
+### Chervil Chat (the companion web app at getchervil.com/chat)
+
+- **Fixed: "Sprig couldn't reply."** A busy moment on the shared managed AI surfaced
+  straight to your phone as an error. It now retries automatically, and a chat turn is
+  given enough time to finish instead of being cut short.
+
 ## [0.23.0] — 2026-07-20
 
 **Beam a chat from your phone to your desk.** Start a conversation in Chervil Chat on

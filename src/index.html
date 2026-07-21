@@ -281,6 +281,20 @@
       </section>
 
       <section class="setting-group" data-sgroup="general">
+        <h3>Chat</h3>
+        <p class="group-hint">“Just a chatbot” mode (the 💬 button) answers in the conversation instead of composing a page. Replies stream in as Sprig writes them.</p>
+        <label class="opt-row">
+          <span>Chat model</span>
+          <select id="chat-model-select">
+            <option value="">Faster model when available (default)</option>
+            <option value="main">Same as my main model</option>
+          </select>
+        </label>
+        <small class="field-note">Chat is a conversation you're waiting on, so a quicker model usually wins. It matters most on a <strong>reasoning</strong> model, which thinks before it writes a single word — picking a non-reasoning variant here can be the difference between waiting three seconds and half a second. Your main model is untouched: composed pages, Deep Dive and skills all still use it.</small>
+        <p id="chat-model-note" class="field-note"></p>
+      </section>
+
+      <section class="setting-group" data-sgroup="general">
         <h3>Search</h3>
         <label class="opt-row">
           <span>Search engine</span>
@@ -612,6 +626,22 @@
           <button id="index-delete-all" type="button" class="lib-btn">Delete everything</button>
         </span>
         <small class="field-note">These really delete — the rows are removed and the file compacted, not just hidden from the list.</small>
+
+        <h3 style="margin-top:22px;">Trash</h3>
+        <p class="group-hint">Pages you delete from the Library go to Trash so you can get them back. Composed pages are large — a page with an illustration is around 150 KB — so a Trash you never empty quietly becomes the biggest thing on disk.</p>
+        <div class="field">
+          <label class="field-label" for="trash-retention">Delete pages in the Trash after</label>
+          <select id="trash-retention">
+            <option value="7">7 days</option>
+            <option value="14">14 days</option>
+            <option value="30">30 days</option>
+            <option value="60">60 days</option>
+            <option value="90">90 days</option>
+            <option value="0">Never — keep until I empty it</option>
+          </select>
+          <small class="field-note">Counted from when you deleted the page, and only ever applies to pages already in the Trash. Runs when Chervil starts and twice a day after.</small>
+        </div>
+        <p id="trash-stats" class="group-hint">—</p>
 
         <h3 style="margin-top:22px;">Noticing what you’re researching</h3>
         <p class="group-hint">When you read around the same subject across a few different sites, Chervil can offer to pull it all together into one page — what you found, where your sources disagree, and what you haven’t looked at yet.<br /><br />

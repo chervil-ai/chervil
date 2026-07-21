@@ -209,6 +209,8 @@ const els = {
   indexExcludes: document.getElementById('index-excludes'),
   indexExcludesSave: document.getElementById('index-excludes-save'),
   indexStats: document.getElementById('index-stats'),
+  trashRetention: document.getElementById('trash-retention'),
+  trashStatsLine: document.getElementById('trash-stats'),
   indexForgetHour: document.getElementById('index-forget-hour'),
   indexForgetDay: document.getElementById('index-forget-day'),
   indexForgetSite: document.getElementById('index-forget-site'),
@@ -452,11 +454,19 @@ let settings = {
   sidebarCollapsed: false,   // hide the left chat sidebar for a full-width page (Ctrl+\)
   tabsBarHidden: false,      // hide the tab strip for full-height pages (Ctrl+Shift+\); top/left edge peeks it
   chatMode: false,           // "Just a chatbot" — plain conversational replies, no page composed
+  // Which model answers in chat. '' = the provider's fast tier when it has one
+  // (Claude → Haiku), otherwise the main model; 'main' = always the main model;
+  // anything else is an explicit model id from that provider's live list.
+  // A dropdown rather than a toggle because only Claude has a fast tier we can
+  // name safely — on Grok the equivalent win is picking the non-reasoning variant,
+  // which is account-specific and has to come from the live model list.
+  chatModel: '',
   heroImages: false,         // generate an AI hero image for composed pages (opt-in; BYO image key, costs money)
   pageStyle: 'balanced',     // composed-page richness: 'balanced' | 'rich' | 'minimal'
   spaceFilesMode: 'synthesize', // pinned Space files feed the model: 'synthesize' | 'always' | 'off'
   toolbar: {},               // which top-bar buttons to show — { key: false } hides one (missing = shown)
   credsAutoLock: 'hide',     // password vault auto-lock: 'hide' | '5' | '15' | '30' (min idle) | 'never'
+  trashRetentionDays: 30,    // auto-delete trashed pages after N days (0 = keep forever)
   pageZoom: 1,               // default viewport zoom (Ctrl +/−/0) — composed pages, and sites with no remembered level
   siteZoom: {},              // per-site zoom memory: { hostname: factor } — zooming on a live site remembers it for that site
   searchEngine: 'google',    // engine used by omnibox search escapes (g!/ddg!/b!/s!) — 'google' | 'duckduckgo' | 'bing'
@@ -1740,6 +1750,12 @@ function renderConversation() {
   if (!tab) return;
   for (const m of tab.conversation) appendMessageEl(m.role, m.text, m.cls, m.sources);
   const rs = runState.get(tab.id);
+  // An in-flight chat reply isn't in tab.conversation yet (it's committed on
+  // finish), so re-hang the live bubble or switching tabs mid-reply loses it.
+  if (rs && rs.genId && rs.isChat && rs.chatStream) {
+    const bubble = chatStreamEl(tab.id);
+    if (bubble) appendLinkified(bubble, rs.chatStream);
+  }
   if (rs && rs.genId) setStatus(rs.status || rs.statusText || 'Thinking…', rs.startedAt);
   els.conversation.scrollTop = els.conversation.scrollHeight;
 }
@@ -5118,6 +5134,15 @@ function stopActiveCompose() {
   const rs = runState.get(tab.id);
   if (!rs || !rs.genId) return;
   const requestId = rs.genId;
+
+  // Stopping a CHAT keeps what already streamed — a half-written answer is still
+  // an answer the user read, unlike a half-written HTML document. chatSubmit owns
+  // the teardown, so just cancel the network and let its abort path commit the text.
+  if (rs.isChat) {
+    if (window.chervil.abort) window.chervil.abort(requestId);
+    return;
+  }
+
   cancelledRequests.add(requestId);
   if (window.chervil.abort) window.chervil.abort(requestId); // best-effort network cancel
   rs.genId = null;
@@ -8244,6 +8269,57 @@ async function tabsChatContext(query, activeTabRef) {
 // "Just a chatbot" mode: send a plain conversational turn and append Sprig's
 // text reply to the chat panel — no page composed. Reuses the tab's single-flight
 // run state so it can't collide with a composing request.
+// ---- Streaming chat bubble ----
+// Chat replies now paint as they arrive (see chatSubmit). The in-flight text lives
+// on runState, not in tab.conversation, so it survives a tab switch without being
+// persisted half-written; it's committed as a real message when the turn finishes.
+const CHAT_PAINT_MS = 60;   // ~16/s: reads as live typing without relayout thrash
+const chatPaintTimers = new Map();
+
+// The live bubble for a tab, created on the first delta so the "Sprig is typing…"
+// status owns the gap before any text exists.
+function chatStreamEl(tabId) {
+  if (tabId !== activeId) return null;
+  let row = els.conversation.querySelector('.bot-row.streaming');
+  if (!row) {
+    row = document.createElement('div');
+    row.className = 'bot-row streaming';
+    const bubble = document.createElement('div');
+    bubble.className = 'msg bot';
+    row.appendChild(sprigAvatar());
+    row.appendChild(bubble);
+    els.conversation.appendChild(row);
+  }
+  return row.querySelector('.msg');
+}
+
+function clearChatStreamEl() {
+  const row = els.conversation.querySelector('.bot-row.streaming');
+  if (row) row.remove();
+}
+
+// Repaint the live bubble from the accumulated buffer. Rebuilds rather than
+// appending because linkification needs the whole string — chat replies are a few
+// KB, so this is cheap, and the throttle keeps it off the per-token path.
+function paintChatStream(tabId) {
+  if (chatPaintTimers.has(tabId)) return;
+  chatPaintTimers.set(tabId, setTimeout(() => {
+    chatPaintTimers.delete(tabId);
+    const rs = runState.get(tabId);
+    if (!rs || !rs.isChat || !rs.genId) return;
+    const bubble = chatStreamEl(tabId);
+    if (!bubble) return;
+    bubble.textContent = '';
+    appendLinkified(bubble, rs.chatStream);
+    els.conversation.scrollTop = els.conversation.scrollHeight;
+  }, CHAT_PAINT_MS));
+}
+
+function stopChatPaint(tabId) {
+  const t = chatPaintTimers.get(tabId);
+  if (t) { clearTimeout(t); chatPaintTimers.delete(tabId); }
+}
+
 async function chatSubmit(tab, text) {
   const query = (text || '').trim();
   if (!query || !tab || isTabBusy(tab.id) || agentRunning) return;
@@ -8254,9 +8330,12 @@ async function chatSubmit(tab, text) {
   const requestId = uid();
   const rs = runStateFor(tab.id);
   rs.genId = requestId;
+  rs.isChat = true;
+  rs.chatStream = '';
   rs.statusText = 'Sprig is typing…';
   rs.status = normalizeStatus({ phase: 'working', text: rs.statusText });
   rs.startedAt = Date.now();
+  reqToTab.set(requestId, tab.id);   // routes chervil:chunk deltas back to this tab
 
   addMessage(tab, 'user', query);
   if (tab.title === 'New Tab') tab.title = query.length > 40 ? query.slice(0, 37) + '…' : query;
@@ -8283,28 +8362,50 @@ async function chatSubmit(tab, text) {
     if (live) { pageContext = live.text; pageMeta = live.meta; }
   }
 
+  // Tear down the live bubble and hand the turn back. Returns whatever streamed,
+  // so an abort or a truncated turn still keeps the words the user already read.
+  const finishStream = () => {
+    stopChatPaint(tab.id);
+    const streamed = rs.chatStream || '';
+    rs.genId = null; rs.isChat = false; rs.chatStream = '';
+    rs.statusText = ''; rs.status = null; rs.startedAt = 0;
+    reqToTab.delete(requestId);
+    if (isActive()) { clearStatus(); clearChatStreamEl(); }
+    return streamed;
+  };
+
   try {
     const resp = await window.chervil.chat({
       query,
+      requestId,
       history: sentHistory,
       profile: settings.profile || null,
       pageContext,
       pageMeta,
       tabsContext,
+      chatModel: settings.chatModel || '',
       config: providerConfig(),
     });
-    rs.genId = null; rs.statusText = ''; rs.status = null; rs.startedAt = 0;
-    if (isActive()) clearStatus();
+    const streamed = finishStream();
+    if (cancelledRequests.has(requestId)) { cancelledRequests.delete(requestId); return; }
     if (!resp || !resp.ok) {
       addMessage(tab, 'bot', (resp && resp.error) || 'Something went wrong.', 'error');
     } else {
-      const reply = resp.text || '…';
+      // Prefer the finished text (it's authoritative), but fall back to what
+      // streamed — an aborted turn returns ok with empty text and a partial buffer.
+      const reply = (resp.text && resp.text.trim()) || streamed.trim() || '…';
       addMessage(tab, 'bot', reply, '', resp.sources || []);
       tab.history.push({ role: 'assistant', content: reply });
     }
   } catch (e) {
-    rs.genId = null; rs.statusText = ''; rs.status = null; rs.startedAt = 0;
-    if (isActive()) clearStatus();
+    const streamed = finishStream();
+    if (cancelledRequests.has(requestId)) { cancelledRequests.delete(requestId); return; }
+    // Keep a partial reply rather than replacing it with the error — the user
+    // already read it, and losing it on a dropped connection feels like a bug.
+    if (streamed.trim()) {
+      addMessage(tab, 'bot', streamed.trim(), '', []);
+      tab.history.push({ role: 'assistant', content: streamed.trim() });
+    }
     addMessage(tab, 'bot', String(e && e.message ? e.message : e), 'error');
   } finally {
     if (isActive()) { setSendBusy(false); setBadge('', 'ready'); els.prompt.focus(); }
@@ -9135,8 +9236,82 @@ function emptyTrash() {
   // A real DELETE in the index, not a tombstone — emptying the trash has to
   // actually remove the page text, or "delete" is a lie (RFC 0013, privacy).
   if (window.chervil.index) window.chervil.index.emptyTrash().catch(() => {});
+  trashStats = null;
   renderDrawer();
   scheduleSave();
+}
+
+// ---- Trash retention (auto-expiry + the "trash is heavy" banner) ----
+//
+// Trash used to be kept forever: `trash(id)` stamps trashed_at and nothing ever
+// read it back, so the only way a page left was the Empty button. MAX_LIBRARY
+// looked like a bound but isn't — it truncates the in-memory array and `listTrash`
+// takes LIMIT 100, so past 100 the DB kept growing while the UI kept saying 100.
+const TRASH_SWEEP_MS = 12 * 60 * 60 * 1000;  // twice a day is plenty for a day-grained rule
+const TRASH_WARN_BYTES = 50 * 1024 * 1024;   // banner threshold — size, not count: one
+const TRASH_WARN_COUNT = 200;                // hero-bearing page is ~150KB, so count lies
+let trashStats = null;                       // { count, bytes, oldestAt } — null until first read
+let trashSweepTimer = null;
+// Session-only on purpose: dismissing is "not now", not "never". A nag about disk
+// the user chose not to act on should come back next launch, but not persist into
+// the synced state file and start nagging on their other machine too.
+let trashBannerDismissed = false;
+
+// True trash weight, straight from the table (not the capped list). Cached on
+// `trashStats` so renderDrawer can paint the banner synchronously.
+async function refreshTrashStats() {
+  if (!window.chervil.index || !window.chervil.index.trashStats) return null;
+  try {
+    const r = await window.chervil.index.trashStats();
+    if (r && r.ok) trashStats = { count: r.count || 0, bytes: r.bytes || 0, oldestAt: r.oldestAt || 0 };
+  } catch { /* leave the previous reading */ }
+  return trashStats;
+}
+
+// Delete trashed pages past the retention window, then refresh the banner figures.
+// Deliberately NOT on the 30s scheduler tick: that tick only runs when there are
+// living pages/schedules/watchers/feeds to drive, so retention would silently not
+// happen for a user with none of those — and a day-grained rule has no business
+// firing 2,880 times a day regardless.
+async function sweepTrashRetention() {
+  const days = Number(settings.trashRetentionDays);
+  if (window.chervil.index && window.chervil.index.purgeTrash && Number.isFinite(days) && days > 0) {
+    try {
+      const r = await window.chervil.index.purgeTrash(days);
+      if (r && r.ok && r.removed > 0) {
+        // Drop them from the in-memory mirror too, and tombstone so the delete
+        // propagates instead of another machine syncing them back.
+        const cutoff = Date.now() - days * 24 * 60 * 60 * 1000;
+        const expired = library.trash.filter((it) => it && (it.trashedAt || it.updatedAt || it.createdAt || 0) < cutoff);
+        for (const it of expired) addTombstone('trash', it.id);
+        if (expired.length) {
+          library.trash = library.trash.filter((it) => !expired.includes(it));
+          scheduleSave();
+        }
+        console.info(`[chervil] trash retention: removed ${r.removed} page(s) older than ${days}d`);
+      }
+    } catch { /* best effort — a failed sweep just retries in 12h */ }
+  }
+  await refreshTrashStats();
+  if (drawerTab === 'trash') renderDrawer();
+}
+
+function startTrashSweep() {
+  if (trashSweepTimer) return;
+  sweepTrashRetention().catch(() => {});
+  trashSweepTimer = setInterval(() => { sweepTrashRetention().catch(() => {}); }, TRASH_SWEEP_MS);
+}
+
+function trashIsHeavy() {
+  return !!trashStats && (trashStats.bytes >= TRASH_WARN_BYTES || trashStats.count >= TRASH_WARN_COUNT);
+}
+
+function formatBytes(n) {
+  const b = Number(n) || 0;
+  if (b >= 1024 * 1024 * 1024) return (b / 1024 / 1024 / 1024).toFixed(1) + ' GB';
+  if (b >= 1024 * 1024) return Math.round(b / 1024 / 1024) + ' MB';
+  if (b >= 1024) return Math.round(b / 1024) + ' KB';
+  return b + ' B';
 }
 
 // Search your own pages by content (RFC 0013, phase 1b). Debounced so typing
@@ -10265,6 +10440,32 @@ function renderDrawer() {
 
   els.libraryList.innerHTML = '';
 
+  // Trash weight banner. Sits above the list rather than firing a toast or an OS
+  // notification: this is housekeeping, so it belongs where you'd act on it, and
+  // costs nothing when you're not looking at the Trash tab. `trashStats` is the
+  // real table count — the list below is capped at MAX_LIBRARY and will disagree.
+  if (drawerTab === 'trash' && trashIsHeavy() && !trashBannerDismissed) {
+    const days = Number(settings.trashRetentionDays);
+    const bar = document.createElement('div');
+    bar.className = 'lib-trash-banner';
+    const msg = document.createElement('span');
+    msg.textContent = `Trash is using ${formatBytes(trashStats.bytes)} across ${trashStats.count} page${trashStats.count === 1 ? '' : 's'}.`
+      + (days > 0 ? ` Pages older than ${days} days are removed automatically.` : ' Auto-delete is off.');
+    bar.appendChild(msg);
+    const act = document.createElement('button');
+    act.className = 'lib-trash-banner-act';
+    act.textContent = 'Empty now';
+    act.addEventListener('click', () => { emptyTrash(); });
+    bar.appendChild(act);
+    const dismiss = document.createElement('button');
+    dismiss.className = 'lib-trash-banner-x';
+    dismiss.title = 'Dismiss';
+    dismiss.textContent = '✕';
+    dismiss.addEventListener('click', () => { trashBannerDismissed = true; renderDrawer(); });
+    bar.appendChild(dismiss);
+    els.libraryList.appendChild(bar);
+  }
+
   if (!items.length) {
     const empty = document.createElement('div');
     empty.className = 'lib-empty';
@@ -10657,6 +10858,7 @@ function applySettingsToUI() {
   if (els.sttKeyInput) els.sttKeyInput.value = '';
   if (els.heroToggle) els.heroToggle.checked = !!settings.heroImages;
   { const ps = document.getElementById('page-style-select'); if (ps) ps.value = settings.pageStyle || 'balanced'; }
+  populateChatModelSelect();
   { const sf = document.getElementById('space-files-select'); if (sf) sf.value = settings.spaceFilesMode || 'synthesize'; }
   { const se = document.getElementById('search-engine-select'); if (se) se.value = settings.searchEngine || 'google'; }
   refreshSttKeyStatus();
@@ -11167,7 +11369,46 @@ function populateModelSelect() {
 
 function rebuildModelSelect() {
   populateModelSelect();      // immediate, from curated + cached live
+  populateChatModelSelect();
   fetchModelsFor(settings.provider); // async refresh from the provider's API
+}
+
+// The Chat-model dropdown: the two policy choices, then every model this provider
+// actually offers. Populated from the SAME live list as the main model select, so
+// it can never offer a model the account doesn't have — which is why this is a
+// dropdown and not a hardcoded "fast model" name. Only Claude has a fast tier we
+// could name safely; on Grok the equivalent win is the non-reasoning variant,
+// which only the live list knows about.
+function populateChatModelSelect() {
+  const sel = document.getElementById('chat-model-select');
+  if (!sel) return;
+  const cur = settings.chatModel || '';
+  sel.innerHTML = '';
+  const add = (value, label) => {
+    const o = document.createElement('option');
+    o.value = value; o.textContent = label;
+    sel.appendChild(o);
+  };
+  add('', 'Faster model when available (default)');
+  add('main', 'Same as my main model');
+  const models = liveModels[settings.provider] || [];
+  for (const m of models) add(m, m);
+  // A model saved before (or from another provider) must not silently vanish.
+  if (cur && cur !== 'main' && !models.includes(cur)) add(cur, `${cur} (not in this provider's list)`);
+  sel.value = cur;
+
+  const note = document.getElementById('chat-model-note');
+  if (note) {
+    const hint = /non-reasoning|haiku|flash|mini|fast/i;
+    const quick = models.filter((m) => hint.test(m) && !/image|video/i.test(m));
+    note.textContent = cur === 'main'
+      ? 'Chat uses your main model. Accurate, but you wait for it to finish thinking before the first word appears.'
+      : cur
+        ? `Chat uses ${cur}.`
+        : (quick.length
+          ? `Your provider offers quicker options — e.g. ${quick.slice(0, 2).join(', ')}.`
+          : 'This provider advertises no separate fast model, so chat uses your main model.');
+  }
 }
 
 // Pull the live model list from the provider and repopulate if it's still showing.
@@ -11178,6 +11419,7 @@ function fetchModelsFor(p) {
       liveModels[p] = res.models;
       if (settings.provider === p && settingsOpen()) {
         populateModelSelect();
+        populateChatModelSelect();
       }
     }
   }).catch(() => {});
@@ -11878,6 +12120,7 @@ async function init() {
     };
   }
   await migrateAndHydrateIndex();
+  startTrashSweep();   // expire old trash once now, then twice a day
   if (restored && Array.isArray(restored.dossierOffers)) dossierOffers = restored.dossierOffers.filter((o) => o && o.term);
   if (restored && Array.isArray(restored.dossierDismissed)) dossierDismissed = restored.dossierDismissed.filter((d) => d && d.term);
   if (restored && Array.isArray(restored.bookmarks)) bookmarks = restored.bookmarks;
@@ -13683,11 +13926,25 @@ async function renderIndexStats() {
   } catch { els.indexStats.textContent = ''; }
 }
 
+// What's actually sitting in the Trash right now. Reads the table, not the capped
+// list, so it stays honest past MAX_LIBRARY.
+async function renderTrashStats() {
+  if (!els.trashStatsLine) return;
+  if (!window.chervil.index || !window.chervil.index.trashStats) { els.trashStatsLine.textContent = ''; return; }
+  const s = await refreshTrashStats();
+  if (!s) { els.trashStatsLine.textContent = ''; return; }
+  if (!s.count) { els.trashStatsLine.textContent = 'The Trash is empty.'; return; }
+  const age = s.oldestAt ? Math.floor((Date.now() - s.oldestAt) / (24 * 60 * 60 * 1000)) : 0;
+  els.trashStatsLine.textContent = `In the Trash now: ${s.count.toLocaleString()} page${s.count === 1 ? '' : 's'}, `
+    + `${formatBytes(s.bytes)}${age > 0 ? `. Oldest was deleted ${age} day${age === 1 ? '' : 's'} ago.` : '.'}`;
+}
+
 function dossierMinPagesLabel(n) {
   return `${n} pages on one subject`;
 }
 
 function renderIndexSettings() {
+  if (els.trashRetention) els.trashRetention.value = String(Number(settings.trashRetentionDays) || 0);
   if (els.indexSitesToggle) els.indexSitesToggle.checked = !!settings.indexSites;
   if (els.indexExcludes) els.indexExcludes.value = (settings.indexExcludes || []).join(', ');
   if (els.dossierOffersToggle) {
@@ -13701,6 +13958,7 @@ function renderIndexSettings() {
     if (els.dossierMinPagesVal) els.dossierMinPagesVal.textContent = dossierMinPagesLabel(n);
   }
   renderIndexStats();
+  renderTrashStats();
 }
 
 if (els.dossierOffersToggle) els.dossierOffersToggle.addEventListener('change', () => {
@@ -13731,6 +13989,18 @@ if (els.indexSitesToggle) els.indexSitesToggle.addEventListener('change', () => 
   toast(settings.indexSites
     ? 'Chervil will keep the text of sites you read — on this computer only.'
     : 'Stopped keeping sites you read. What’s already kept stays until you delete it.');
+});
+
+if (els.trashRetention) els.trashRetention.addEventListener('change', () => {
+  const days = Number(els.trashRetention.value) || 0;
+  settings.trashRetentionDays = days;
+  scheduleSave();
+  // Apply the new window immediately — picking "7 days" and seeing a 3-month-old
+  // page still sitting there until tomorrow's sweep would read as broken.
+  sweepTrashRetention().then(renderTrashStats).catch(() => {});
+  toast(days > 0
+    ? `Trash now clears after ${days} day${days === 1 ? '' : 's'}.`
+    : 'Trash will be kept until you empty it yourself.');
 });
 
 if (els.indexExcludesSave) els.indexExcludesSave.addEventListener('click', () => {
@@ -13808,6 +14078,17 @@ if (els.heroToggle) els.heroToggle.addEventListener('change', () => {
   if (sf) sf.addEventListener('change', () => { settings.spaceFilesMode = sf.value; scheduleSave(); });
   const se = document.getElementById('search-engine-select');
   if (se) se.addEventListener('change', () => { settings.searchEngine = se.value; scheduleSave(); });
+  const cm = document.getElementById('chat-model-select');
+  if (cm) cm.addEventListener('change', () => {
+    settings.chatModel = cm.value;
+    scheduleSave();
+    populateChatModelSelect();   // refresh the explanatory note under it
+    toast(cm.value === 'main'
+      ? 'Chat now uses your main model.'
+      : cm.value
+        ? `Chat now uses ${cm.value}.`
+        : 'Chat will use a faster model when your provider has one.');
+  });
 }
 
 // Browsing & privacy controls (default browser, ad-block, clear data).
@@ -13906,6 +14187,9 @@ if (els.libraryNav) els.libraryNav.addEventListener('click', (e) => {
   // Pages (or vice versa) is meaningless, and both tabs support the mode so the
   // renderDrawer gate alone wouldn't cancel it.
   if (librarySelectMode) { librarySelectMode = false; selectedLibraryIds.clear(); }
+  // Re-read the true trash weight on the way into Trash, so the banner reflects
+  // deletes made since the last sweep rather than a reading up to 12h stale.
+  if (drawerTab === 'trash') refreshTrashStats().then(() => { if (drawerTab === 'trash') renderDrawer(); });
   renderDrawer();
   syncLibraryEntry();   // remember the section on the entry (fixes the openSettings-style bug prospectively)
   // Land at the top of the new section. Only on an actual rail click — NOT in
@@ -14179,7 +14463,13 @@ window.chervil.onStatus(({ requestId, status } = {}) => {
   const rs = runStateFor(tabId);
   const s = normalizeStatus(status);
   if (s.phase === 'retrying') {
+    // A retry re-streams the response from the beginning, so whatever arrived on
+    // the failed attempt has to go — otherwise the reply is silently duplicated.
     rs.streamBuffer = '';
+    if (rs.isChat) {
+      rs.chatStream = '';
+      if (tabId === activeId) { stopChatPaint(tabId); clearChatStreamEl(); }
+    }
     if (tabId === activeId && previewTimer) { clearTimeout(previewTimer); previewTimer = null; }
   }
   rs.status = s;
@@ -14196,6 +14486,13 @@ window.chervil.onChunk(({ requestId, delta } = {}) => {
   const tabId = reqToTab.get(requestId);
   if (!tabId) return;
   const rs = runStateFor(tabId);
+  // Chat streams prose into the conversation bubble; compose streams HTML into the
+  // page. Same channel, different destination.
+  if (rs.isChat) {
+    rs.chatStream += delta;
+    if (tabId === activeId) paintChatStream(tabId);
+    return;
+  }
   rs.streamBuffer += delta;
   if (tabId === activeId && hasDoctype(rs.streamBuffer)) {
     rs.statusText = 'Sprig is composing your page…';

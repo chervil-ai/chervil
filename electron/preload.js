@@ -81,6 +81,10 @@ contextBridge.exposeInMainWorld('chervil', {
     restore: (id) => ipcRenderer.invoke('chervil:index-restore', { id }),
     remove: (id) => ipcRenderer.invoke('chervil:index-remove', { id }),
     emptyTrash: () => ipcRenderer.invoke('chervil:index-empty-trash'),
+    /** True trash weight — { count, bytes, oldestAt }. Not capped by a list LIMIT. */
+    trashStats: () => ipcRenderer.invoke('chervil:index-trash-stats'),
+    /** Drop trashed pages older than `days`. Returns { removed }. days<=0 = never. */
+    purgeTrash: (days) => ipcRenderer.invoke('chervil:index-purge-trash', { days }),
     stats: () => ipcRenderer.invoke('chervil:index-stats'),
     /** What has the user been reading about lately? Local term clustering — no model. */
     topics: (payload) => ipcRenderer.invoke('chervil:index-topics', payload || {}),

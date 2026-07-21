@@ -1848,6 +1848,45 @@ body.resizing #web-views { pointer-events: none; }
 
 .lib-empty { color: var(--muted); font-size: 14px; text-align: center; padding: 40px 0; }
 
+/* Live chat reply: a caret while the text streams in, so a pause between tokens
+   reads as "still writing" rather than "finished, oddly short". */
+.bot-row.streaming .msg::after {
+  content: '';
+  display: inline-block;
+  width: 2px; height: 1em;
+  margin-left: 2px;
+  vertical-align: text-bottom;
+  background: currentColor;
+  opacity: 0.6;
+  animation: chat-caret 1.05s steps(1, end) infinite;
+}
+@keyframes chat-caret { 0%, 49% { opacity: 0.6; } 50%, 100% { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) {
+  .bot-row.streaming .msg::after { animation: none; }
+}
+
+/* "Your Trash is heavy" bar, above the Trash list. Advisory, not an error — it
+   reports disk use, so it should read as information with an action, not alarm. */
+.lib-trash-banner {
+  display: flex; align-items: center; gap: 10px;
+  margin: 0 0 10px; padding: 10px 12px;
+  border: 1px solid var(--border, #d9dee6); border-radius: 10px;
+  background: var(--panel-alt, rgba(127, 140, 160, 0.08));
+  color: var(--fg); font-size: 13px; line-height: 1.4;
+}
+.lib-trash-banner span { flex: 1; min-width: 0; }
+.lib-trash-banner-act {
+  flex: none; padding: 5px 10px; border-radius: 8px; cursor: pointer;
+  border: 1px solid var(--border, #d9dee6); background: var(--bg, #fff);
+  color: var(--fg); font: inherit; font-weight: 600;
+}
+.lib-trash-banner-act:hover { border-color: var(--accent, #2e7d5b); color: var(--accent, #2e7d5b); }
+.lib-trash-banner-x {
+  flex: none; border: 0; background: none; cursor: pointer;
+  color: var(--muted); font-size: 13px; line-height: 1; padding: 4px;
+}
+.lib-trash-banner-x:hover { color: var(--fg); }
+
 .settings-version { text-align: center; color: var(--muted); font-size: 12px; margin: 18px 0 4px; }
 .link-btn { background: none; border: 0; padding: 0; font: inherit; color: var(--accent, #2e7d5b); cursor: pointer; text-decoration: underline; }
 .link-btn:hover { opacity: 0.85; }
