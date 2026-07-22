@@ -6,6 +6,77 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.25.0] — 2026-07-22
+
+**Show your work.** An AI that answers in one confident voice is hiding something: the
+places its sources didn't agree. This release is about Chervil showing you the seams —
+where the web contradicts itself, which claims it actually checked, and what came from
+your own reading. It also starts remembering the things you tell it it got wrong.
+
+### Added
+
+- **Composed pages now show you where sources disagree.** When the pages Sprig read give
+  materially different answers — a price, a date, a measured figure — it no longer picks
+  one quietly or splits the difference. Both positions appear on the page, each with the
+  source that makes it, and a line on which is more credible or whether it's genuinely
+  unsettled. The Sources button carries a ⚖️ when a page has one. This is the thing a
+  list of blue links did better than an AI answer: ten links let you *see* the
+  disagreement. Now you can see it here too.
+- **✓ Verify now checks the claims your page rests on, and marks them on the page.**
+  Instead of composing a separate report you have to read, Sprig picks the few claims the
+  page's usefulness actually depends on, checks them against the live web, and puts the
+  verdict right there in the text — ✅ verified, ⚖️ contested, ❓ unverified, ❌ false —
+  with what it found in the tooltip and the full list in the Sources panel. Trust stops
+  being a mode you remember to run and becomes something the page carries. The old
+  whole-page **Trust Check** is still there, one click away in the Sources panel, for
+  when a verdict makes you want the wider report.
+- **Tell Sprig when it's wrong, and it remembers.** Type `/correct` followed by what's
+  actually true — *"/correct our office moved to Dayton in March"* — and Sprig applies it
+  to every page it composes from then on. Corrections are dated, listed in
+  **Settings → You**, and removable one by one. They beat what the model was trained on,
+  but they don't beat today's evidence: if Sprig finds a live source saying the world has
+  moved on, it goes with what it found and tells you, so an old note can't quietly outlive
+  the truth.
+- **Answer from your own reading first (optional).** If you keep an index of the sites you
+  read, Chervil can check it before composing anything and use what you've already read
+  where it genuinely helps — marking those parts so you can get back to the original.
+  It's **off until you turn it on** under **Settings → Security → Your Web**, because it
+  means pages from your reading travel with your question rather than only when you ask.
+  Whatever gets used is listed in the Sources panel, so it's never invisible.
+- **Living pages now tell you what changed, not just that something did.** A page that
+  keeps itself current gets rewritten every time it refreshes, so "this page changed" was
+  nearly always true and almost never useful. Chervil now compares the *figures* —
+  *starting price $899 → $849*, *launch date Sept 12 → Sept 19* — and shows them in the
+  Sources panel, with the count next to the live indicator. If only the wording moved, it
+  says so, which is its own kind of useful: you don't need to read it again.
+- **Watch a number, not a page.** On a page that's keeping itself current, say *"tell me
+  when the price drops below $1,500"* and Chervil watches that figure and tells you when
+  it crosses. It costs nothing extra — the check runs on the refresh the page was already
+  doing. It notifies when the number *enters* the range you asked about, not every time it
+  moves around inside it, and everything you're watching is listed (and cancellable) in
+  the Sources panel.
+
+### Fixed
+
+- **Quick chat no longer answers in raw markdown.** The floating chat
+  (**Ctrl+Shift+Space**) was showing `**bold**` and bracketed link syntax as literal
+  characters, because nothing in Chervil renders markdown in the first place. Replies are
+  now plain prose, and the panel shows the sources it used underneath — which it had been
+  quietly throwing away.
+- **Your feed briefings were being written by the wrong instructions.** On Grok, Gemini,
+  OpenAI and Azure, a feed digest reached the AI described as *"pages you read and are
+  trying to re-find"* — for articles you haven't read. Every provider now gets the proper
+  briefing instructions, and is told plainly that it only has headlines and summaries and
+  must not write as though it read the articles.
+- **Composed pages are cacheable now, so repeat work costs less.** The same problem chat
+  had in 0.24.0: the current time sat near the front of every compose prompt, which
+  changed it every minute and defeated your provider's caching. It now goes last, and the
+  page you're refining is sent *before* your request rather than after, so refining the
+  same page twice reuses the expensive part instead of re-sending it.
+- **"Switch providers" when your key was simply missing.** Features that need web access
+  read an unset API key as a provider that can't do the job, and told you to change
+  providers when you were already on the right one. They now say which key to add.
+
 ## [0.24.0] — 2026-07-21
 
 **The tune-up.** No new vertical this time — this one is about how Chervil *feels*.
@@ -1230,7 +1301,9 @@ First public, build-in-public alpha. Run from source; no packaged installer yet.
 - API keys encrypted at rest via OS-native storage; never round-tripped through
   the UI.
 
-[Unreleased]: https://github.com/chervil-ai/chervil/compare/v0.23.0...HEAD
+[Unreleased]: https://github.com/chervil-ai/chervil/compare/v0.25.0...HEAD
+[0.25.0]: https://github.com/chervil-ai/chervil/compare/v0.24.0...v0.25.0
+[0.24.0]: https://github.com/chervil-ai/chervil/compare/v0.23.0...v0.24.0
 [0.23.0]: https://github.com/chervil-ai/chervil/compare/v0.22.0...v0.23.0
 [0.22.0]: https://github.com/chervil-ai/chervil/compare/v0.21.0...v0.22.0
 [0.21.0]: https://github.com/chervil-ai/chervil/compare/v0.20.0...v0.21.0
