@@ -203,6 +203,8 @@ const els = {
   adblockToggle: document.getElementById('adblock-toggle'),
   // Your Web (RFC 0013)
   indexSitesToggle: document.getElementById('index-sites-toggle'),
+  recallAutoToggle: document.getElementById('recall-auto-toggle'),
+  correctionsList: document.getElementById('corrections-list'),
   dossierOffersToggle: document.getElementById('dossier-offers-toggle'),
   dossierMinPages: document.getElementById('dossier-min-pages'),
   dossierMinPagesVal: document.getElementById('dossier-min-pages-val'),
@@ -478,6 +480,10 @@ let settings = {
   // recording my browsing" is an unrecoverable first impression. Composed pages
   // are indexed regardless — you knowingly made those.
   indexSites: false,         // keep the readable text of sites you visit, so Sprig can answer from your own reading
+  // OFF by default on purpose: Settings promises "no AI ever sees a page just
+  // because you read it", and this is the one feature that would send indexed
+  // text without the user framing the question as being about their reading.
+  recallAuto: false,         // check the index before every compose, not just when asked
   indexExcludes: [],         // hosts never captured (substring match), e.g. ["bank.com", "myhealth"]
   indexMaxSites: 5000,       // captured-site budget; oldest are evicted past this (text-only, so ~hundreds of MB at worst)
   // Ambient dossiers (Bet 3). Default OFF. When on, Chervil notices you've been
@@ -613,6 +619,15 @@ let activeSpaceId = null;
 // A saved page carries `spaceId`; Synthesize/Publish operate on the active Space.
 let savedSpaces = [];
 let activeSavedSpaceId = null;
+
+// Corrections the user has made to Sprig's answers. Unlike `settings.profile`
+// (one hand-written blob about who they are), each of these is a dated FACT the
+// user asserted after seeing Sprig get something wrong, and they're injected into
+// every compose so the same mistake doesn't recur. Dated on purpose: a correction
+// that was true in March must lose to a live source that disagrees today.
+//   correction = { id, text, createdAt, updatedAt, sourceQuery }
+let corrections = [];
+const MAX_CORRECTIONS = 60; // the prompt budget is the real limit, not the UI
 
 // Living pages: composed pages that re-ground themselves on a schedule.
 //   record = { id, tabId, entryId, query, intervalMs, lastRun, title, refreshing }
@@ -3123,6 +3138,104 @@ function expandRemix() {
   scheduleSave();
 }
 
+// ---- Claim-level verification ------------------------------------------------
+// Verify composes a separate Trust Check report. This marks verdicts on the page
+// the user is already reading, which means anchoring each claim to the sentence it
+// came from. The model is asked to echo the claim verbatim (see CHECK_CLAIMS_SYSTEM);
+// here we find that text and drop a badge after it.
+//
+// Anchoring is best-effort ON PURPOSE. A quote can span inline markup —
+// "costs <strong>$899</strong> today" is one sentence but three text nodes — and
+// stitching across nodes to force a match risks corrupting a model-authored
+// document. So a claim either anchors cleanly in one text node or it doesn't get a
+// badge; either way it appears in the panel. Losing a marker is cosmetic, mangling
+// the page is not.
+const CLAIM_MARK = {
+  verified: { icon: '✅', color: '#1a7f4b', label: 'Checked — sources agree' },
+  contested: { icon: '⚖️', color: '#a66300', label: 'Sources disagree' },
+  unverified: { icon: '❓', color: '#6b7280', label: 'Couldn’t find sourcing either way' },
+  false: { icon: '❌', color: '#b42318', label: 'Sources contradict this' },
+};
+
+const normWs = (s) => String(s || '').replace(/\s+/g, ' ').trim();
+
+function applyClaimMarks(html, claims) {
+  let anchored = 0;
+  let doc;
+  try { doc = new DOMParser().parseFromString(String(html || ''), 'text/html'); }
+  catch { return { html, anchored: 0 }; }
+  // Drop any badges from a previous run so re-checking doesn't stack them up.
+  doc.querySelectorAll('.chervil-check').forEach((el) => el.remove());
+
+  for (const c of claims) {
+    const needle = normWs(c.quote);
+    if (needle.length < 8) continue; // too short to anchor safely
+    const walker = doc.createTreeWalker(doc.body || doc, NodeFilter.SHOW_TEXT);
+    let hit = null;
+    while (walker.nextNode()) {
+      const node = walker.currentNode;
+      if (!node.nodeValue || !node.parentNode) continue;
+      const tag = node.parentNode.nodeName;
+      if (tag === 'SCRIPT' || tag === 'STYLE') continue;
+      const idx = normWs(node.nodeValue).indexOf(needle);
+      if (idx >= 0) { hit = node; break; }
+    }
+    if (!hit) continue;
+    const mark = CLAIM_MARK[c.verdict] || CLAIM_MARK.unverified;
+    const sup = doc.createElement('sup');
+    sup.className = 'chervil-check';
+    sup.setAttribute('data-verdict', c.verdict);
+    sup.setAttribute('title', `${mark.label}${c.note ? ' — ' + c.note : ''}${c.source ? ' (' + c.source + ')' : ''}`);
+    sup.setAttribute('style', `font-size:.75em;margin-left:.15em;cursor:help;color:${mark.color};`);
+    sup.textContent = mark.icon;
+    // After the sentence, not wrapping it: the page's own styling stays untouched.
+    if (hit.parentNode) hit.parentNode.insertBefore(sup, hit.nextSibling);
+    anchored++;
+    c.anchored = true;
+  }
+  const out = doc.documentElement ? '<!DOCTYPE html>' + doc.documentElement.outerHTML : html;
+  return { html: out, anchored };
+}
+
+async function checkPageClaims() {
+  const tab = activeTab();
+  const cur = currentEntry(tab);
+  if (!cur || cur.kind !== 'page' || isTabBusy(tab.id)) return;
+  els.sourcesPanel.hidden = true;
+  const requestId = uid();
+  const rs = runStateFor(tab.id);
+  rs.genId = requestId;
+  rs.startedAt = Date.now();
+  rs.status = normalizeStatus({ phase: 'verifying', text: 'Sprig is checking the key claims…' });
+  reqToTab.set(requestId, tab.id);
+  const isActive = () => tab.id === activeId;
+  if (isActive()) { setStatus(rs.status, rs.startedAt); setBadge('working', 'verifying'); setSendBusy(true); }
+  try {
+    const res = await window.chervil.checkClaims({
+      html: cur.html, title: cur.title || '', requestId, config: providerConfig(),
+    });
+    if (cancelledRequests.has(requestId)) { cancelledRequests.delete(requestId); return; }
+    if (!res || !res.ok) { toast((res && res.error) || 'Couldn’t check the claims.'); return; }
+    const claims = res.claims || [];
+    if (!claims.length) { toast('Sprig didn’t find a load-bearing claim worth checking on this page.'); return; }
+    const { html, anchored } = applyClaimMarks(cur.html, claims);
+    cur.html = html;
+    cur.claimChecks = { at: Date.now(), claims, sources: res.sources || [] };
+    if (isActive()) renderCurrentPage();
+    const bad = claims.filter((c) => c.verdict === 'false' || c.verdict === 'contested').length;
+    toast(bad
+      ? `Checked ${claims.length} claim${claims.length === 1 ? '' : 's'} — ${bad} need${bad === 1 ? 's' : ''} a look. See Sources.`
+      : `Checked ${claims.length} claim${claims.length === 1 ? '' : 's'}${anchored < claims.length ? ` (${anchored} marked on the page)` : ''}.`);
+  } catch (e) {
+    toast(errText(e, 'Couldn’t check the claims.'));
+  } finally {
+    rs.genId = null; rs.status = null; rs.startedAt = 0;
+    reqToTab.delete(requestId);
+    if (isActive()) { clearStatus(); setBadge('', 'ready'); setSendBusy(false); }
+    scheduleSave();
+  }
+}
+
 // ---- Trust layer: Verify + Sources ----
 function verifyPage() {
   const tab = activeTab();
@@ -3162,12 +3275,18 @@ function updateSourcesButton() {
   const cur = currentEntry(activeTab());
   const n = cur && cur.kind === 'page' ? (cur.sources || []).length : 0;
   const searched = cur && cur.kind === 'page' ? (cur.searches || []).length : 0;
-  els.sourcesBtn.textContent = n ? `Sources (${n})` : 'Sources';
+  // A contested page earns a scale on the button — the one thing worth noticing
+  // before you read it is that the sources didn't agree.
+  const conflicts = cur && cur.kind === 'page' ? disagreementsIn(cur.html).length : 0;
+  els.sourcesBtn.textContent = (conflicts ? '⚖️ ' : '') + (n ? `Sources (${n})` : 'Sources');
   // Dim when there's nothing to show (knowledge-only page).
   els.sourcesBtn.classList.toggle('dim', !n && !searched);
   // Ambient freshness: surface the freshest-source recency in the tooltip.
   const fresh = n ? freshnessSummary(cur.sources || []) : '';
-  els.sourcesBtn.title = fresh ? `Sources Sprig used — ${fresh}` : 'Sources Sprig used';
+  const parts = [];
+  if (conflicts) parts.push(`${conflicts} point${conflicts === 1 ? '' : 's'} where sources disagree`);
+  if (fresh) parts.push(fresh);
+  els.sourcesBtn.title = parts.length ? `Sources Sprig used — ${parts.join(' · ')}` : 'Sources Sprig used';
 }
 
 // Try to turn a web-search "page age" string (e.g. "April 30, 2025",
@@ -3208,6 +3327,30 @@ function freshnessSummary(sources) {
   return `Freshest source ${relativeAge(newest)} · ${dated.length} of ${sources.length} dated`;
 }
 
+// Composed pages mark genuine source conflicts with <aside class="chervil-disagree">
+// (see the compose prompts). Pull out what each one is about so the Sources panel
+// can say "these two things are contested" without the user having to spot the
+// callouts mid-page. Parsing is inert — parseFromString never runs scripts.
+let disagreeMemo = { html: null, list: [] };
+function disagreementsIn(html) {
+  const s = String(html || '');
+  if (!s.includes('chervil-disagree')) return []; // cheap bail: almost every page
+  // Both callers run on page display and ask about the same HTML back to back —
+  // one slot is enough to keep the parse off the tab-switch path.
+  if (s === disagreeMemo.html) return disagreeMemo.list;
+  try {
+    const doc = new DOMParser().parseFromString(s, 'text/html');
+    const list = Array.from(doc.querySelectorAll('.chervil-disagree')).map((el) => {
+      const head = el.querySelector('h1,h2,h3,h4,h5,h6,strong,b');
+      const text = (head ? head.textContent : el.textContent) || '';
+      const t = text.replace(/\s+/g, ' ').replace(/^sources disagree:?\s*/i, '').trim();
+      return t.length > 90 ? t.slice(0, 87) + '…' : t;
+    }).filter(Boolean);
+    disagreeMemo = { html: s, list };
+    return list;
+  } catch { return []; }
+}
+
 function toggleSourcesPanel() {
   if (!els.sourcesPanel.hidden) { els.sourcesPanel.hidden = true; return; }
   const cur = currentEntry(activeTab());
@@ -3225,6 +3368,181 @@ function toggleSourcesPanel() {
       chip.textContent = '🔎 ' + q;
       sec.appendChild(chip);
     }
+    els.sourcesList.appendChild(sec);
+  }
+
+  // Thresholds the user set on this page's figures. Listed so a watch can never
+  // become invisible background behaviour they can't find or stop.
+  const liveRec = cur && cur.kind === 'page' ? livingFor(cur.id) : null;
+  if (liveRec && liveRec.alerts && liveRec.alerts.length) {
+    const sec = document.createElement('div');
+    sec.className = 'src-section';
+    sec.innerHTML = `<div class="src-label">Watching (${liveRec.alerts.length})</div>`;
+    for (const a of liveRec.alerts) {
+      const row = document.createElement('div');
+      row.className = 'src-item';
+      const t = document.createElement('span');
+      t.className = 'src-title';
+      t.textContent = '🔔 ' + describeAlert(a) + (a.lastValue ? ` · now ${a.lastValue}` : '');
+      const stop = document.createElement('span');
+      stop.className = 'src-age';
+      stop.textContent = 'Stop';
+      row.appendChild(t);
+      row.appendChild(stop);
+      row.title = 'Stop watching this';
+      row.addEventListener('click', () => {
+        liveRec.alerts = liveRec.alerts.filter((x) => x.id !== a.id);
+        scheduleSave();
+        updateLiveControls();
+        toast('Stopped watching that.');
+        els.sourcesPanel.hidden = true;
+      });
+      sec.appendChild(row);
+    }
+    els.sourcesList.appendChild(sec);
+  }
+
+  // Claim verdicts lead the panel: if the user asked Sprig to check this page,
+  // the answer is the reason they opened it.
+  const checks = cur && cur.claimChecks;
+  if (checks && checks.claims && checks.claims.length) {
+    const sec = document.createElement('div');
+    sec.className = 'src-section';
+    sec.innerHTML = `<div class="src-label">Claims checked · ${relTime(checks.at)}</div>`;
+    for (const c of checks.claims) {
+      const mark = CLAIM_MARK[c.verdict] || CLAIM_MARK.unverified;
+      const row = document.createElement('div');
+      row.className = 'src-claim';
+      const head = document.createElement('div');
+      head.className = 'src-claim-head';
+      const icon = document.createElement('span');
+      icon.textContent = mark.icon;
+      icon.title = mark.label;
+      const quote = document.createElement('span');
+      quote.className = 'src-claim-quote';
+      quote.textContent = c.quote;
+      if (!c.anchored) quote.title = 'Couldn’t be marked on the page — the wording spans formatting.';
+      head.appendChild(icon);
+      head.appendChild(quote);
+      row.appendChild(head);
+      if (c.note) {
+        const note = document.createElement('div');
+        note.className = 'src-claim-note';
+        note.textContent = c.note;
+        row.appendChild(note);
+      }
+      if (c.url) {
+        const a = document.createElement('div');
+        a.className = 'src-item';
+        const t = document.createElement('span');
+        t.className = 'src-title';
+        t.textContent = c.source || hostOf(c.url) || c.url;
+        a.title = c.url;
+        a.appendChild(t);
+        a.addEventListener('click', () => { els.sourcesPanel.hidden = true; handleLinkClick(c.url, c.source || ''); });
+        row.appendChild(a);
+      }
+      sec.appendChild(row);
+    }
+    els.sourcesList.appendChild(sec);
+  }
+
+  // The full Trust Check is the ESCALATION from a claim check, not a peer of it —
+  // so it lives here, at the moment you've just seen a verdict you don't like,
+  // rather than taking a permanent seat on the bar. Offered on any composed page
+  // so it stays reachable before a check has been run.
+  if (cur && cur.kind === 'page' && !cur.lesson && !cur.skill) {
+    const sec = document.createElement('div');
+    sec.className = 'src-section';
+    const act = document.createElement('div');
+    act.className = 'src-item';
+    const t = document.createElement('span');
+    t.className = 'src-title';
+    t.textContent = '⚖️ Run a full trust check';
+    act.appendChild(t);
+    act.title = 'Fact-check the whole page and write a separate Trust Check report';
+    act.addEventListener('click', () => { els.sourcesPanel.hidden = true; verifyPage(); });
+    sec.appendChild(act);
+    const hint = document.createElement('div');
+    hint.className = 'src-empty';
+    hint.textContent = checks && checks.claims && checks.claims.length
+      ? 'Goes wider than the claims above — every factual claim, as its own report.'
+      : '✓ Verify checks the few claims this page rests on. This goes wider: every factual claim, as its own report.';
+    sec.appendChild(hint);
+    els.sourcesList.appendChild(sec);
+  }
+
+  // What moved on the last living-page refresh. First, because the user usually
+  // wasn't watching when it happened — this is the one thing they came back for.
+  const delta = cur && cur.lastDelta;
+  if (deltaCount(delta)) {
+    const sec = document.createElement('div');
+    sec.className = 'src-section';
+    sec.innerHTML = `<div class="src-label">What changed · ${relTime(delta.at)}</div>`;
+    // Built as nodes, not innerHTML: every label and value here was extracted from
+    // model-authored page HTML, so it is never trusted as markup.
+    const row = (parts) => {
+      const d = document.createElement('div');
+      d.className = 'src-change';
+      for (const [cls, txt] of parts) {
+        const s = document.createElement('span');
+        if (cls) s.className = cls;
+        s.textContent = txt;
+        d.appendChild(s);
+        d.appendChild(document.createTextNode(' '));
+      }
+      sec.appendChild(d);
+    };
+    for (const c of delta.changes) row([['lbl', c.label], ['was', c.from], ['', '→'], ['now', c.to]]);
+    for (const a of delta.added) row([['lbl', a.label], ['now', a.to], ['lbl', '(new)']]);
+    for (const r of delta.removed) row([['lbl', r.label], ['was', r.from], ['lbl', '(gone)']]);
+    els.sourcesList.appendChild(sec);
+  }
+
+  // Anything pulled from the user's own reading is listed whether or not the model
+  // ended up leaning on it — the panel is the honest record of what was SENT, which
+  // is the thing the privacy copy in Settings is promising about.
+  const recalled = (cur && cur.recalled) || [];
+  if (recalled.length) {
+    const sec = document.createElement('div');
+    sec.className = 'src-section';
+    sec.innerHTML = `<div class="src-label">From your own reading (${recalled.length})</div>`;
+    for (const r of recalled) {
+      const row = document.createElement('div');
+      row.className = 'src-item';
+      row.title = r.url || 'A page Sprig composed for you';
+      const t = document.createElement('span');
+      t.className = 'src-title';
+      t.textContent = (r.kind === 'read' ? '📖 ' : '🌿 ') + r.title;
+      row.appendChild(t);
+      const when = document.createElement('span');
+      when.className = 'src-age';
+      when.textContent = r.when || '';
+      row.appendChild(when);
+      if (r.url) row.addEventListener('click', () => { els.sourcesPanel.hidden = true; handleLinkClick(r.url, r.title || ''); });
+      else row.style.cursor = 'default';
+      sec.appendChild(row);
+    }
+    els.sourcesList.appendChild(sec);
+  }
+
+  // Contested claims come before the source list: if Sprig found the sources
+  // disagreeing, that's the most useful thing on this panel.
+  const conflicts = disagreementsIn(cur && cur.html);
+  if (conflicts.length) {
+    const sec = document.createElement('div');
+    sec.className = 'src-section';
+    sec.innerHTML = `<div class="src-label">Sources disagree (${conflicts.length})</div>`;
+    for (const c of conflicts) {
+      const row = document.createElement('div');
+      row.className = 'src-conflict';
+      row.textContent = '⚖️ ' + c;
+      sec.appendChild(row);
+    }
+    const hint = document.createElement('div');
+    hint.className = 'src-empty';
+    hint.textContent = 'Sprig kept both positions on the page instead of picking one.';
+    sec.appendChild(hint);
     els.sourcesList.appendChild(sec);
   }
 
@@ -3478,6 +3796,11 @@ function livingFor(entryId) {
 
 function setLiving(tab, entry, intervalMs) {
   if (!entry.id) entry.id = uid();
+  // This replaces the record rather than editing it, so anything hanging off the
+  // old one has to be carried across — changing the interval must not silently
+  // discard the thresholds the user set on this page's figures.
+  const prev = living.find((r) => r.entryId === entry.id);
+  const keptAlerts = (prev && Array.isArray(prev.alerts)) ? prev.alerts : [];
   living = living.filter((r) => r.entryId !== entry.id);
   if (intervalMs > 0) {
     living.push({
@@ -3489,9 +3812,14 @@ function setLiving(tab, entry, intervalMs) {
       lastRun: Date.now(),
       title: entry.title,
       refreshing: false,
+      alerts: keptAlerts,
     });
     startScheduler();
     toast(`Sprig will keep “${entry.title || 'this page'}” updated ${intervalLabel(intervalMs)}.`);
+  } else if (keptAlerts.length) {
+    // Turning live off means the figures stop moving, so the alerts can never
+    // fire again. Say so rather than leaving them quietly dead.
+    toast(`Stopped updating this page — the ${keptAlerts.length} alert${keptAlerts.length === 1 ? '' : 's'} on it ${keptAlerts.length === 1 ? 'is' : 'are'} off too.`);
   }
   updateLiveControls();
   scheduleSave();
@@ -4015,6 +4343,207 @@ async function hydrateFeedStatus() {
   } catch { /* index unavailable — every feed just looks due, which is harmless */ }
 }
 
+// ---- What changed on a living-page refresh ----------------------------------
+// A living page is RE-COMPOSED from scratch, so its prose is almost always
+// different even when nothing it says has changed — which is why the old
+// `stripText(a) !== stripText(b)` check fired on nearly every cycle and the toast
+// meant very little. A sentence diff would inherit that problem and just show the
+// model's rewording back to the user.
+//
+// So diff FACTS, not text: figures, prices, percentages, measured quantities and
+// dates, each keyed by the couple of content words in front of it. "price $899 →
+// $849" is the thing a returning user wants; "this paragraph was rephrased" is not.
+const FACT_RE = new RegExp([
+  '[$£€¥]\\s?\\d[\\d,]*(?:\\.\\d+)?(?:\\s?(?:million|billion|trillion|bn|k))?', // money
+  '\\d[\\d,]*(?:\\.\\d+)?\\s?%',                                                 // percentages
+  '\\d[\\d,]*(?:\\.\\d+)?\\s?(?:hours?|hrs?|minutes?|mins?|seconds?|days?|weeks?|months?|years?|km|miles?|mph|kg|lbs?|gb|tb|mb|ghz|mhz|inches|cm|mm|°[cf])\\b',
+  '\\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\\.?\\s+\\d{1,2}(?:,\\s*\\d{4})?', // Sept 12, 2026
+  '\\b\\d{4}-\\d{2}-\\d{2}\\b',                                                  // ISO dates
+].join('|'), 'gi');
+
+// Each fact carries the content words immediately before it (what turns a bare
+// "$849" into "starting price") and a KIND, which is what lets an old value be
+// paired with the new one that replaced it. Bare integers are deliberately NOT
+// matched: they're everywhere in prose and would bury the real changes in noise.
+function factKind(value) {
+  if (/^[$£€¥]/.test(value)) return 'money';
+  if (/%$/.test(value)) return 'percent';
+  if (/^\d{4}-/.test(value) || /^[a-z]{3}/i.test(value)) return 'date';
+  const unit = value.replace(/^[\d.,\s]+/, '').toLowerCase();
+  return unit || 'number'; // "hours" and "months" are different kinds, and shouldn't pair
+}
+
+function pageFacts(html) {
+  const text = stripText(html);
+  const facts = [];
+  let m;
+  FACT_RE.lastIndex = 0;
+  while ((m = FACT_RE.exec(text))) {
+    const before = text.slice(Math.max(0, m.index - 60), m.index);
+    const words = before.toLowerCase().replace(/[^a-z0-9\s]/g, ' ').split(/\s+/)
+      .filter((w) => w.length > 2 && !CACHE_STOP.has(w));
+    if (!words.length) continue;
+    const value = m[0].replace(/\s+/g, ' ').trim();
+    facts.push({ value, kind: factKind(value), label: words.slice(-2).join(' '), words: words.slice(-3) });
+    if (facts.length > 400) break; // a pathological page must not stall the tick
+  }
+  return facts;
+}
+
+const DELTA_MAX = 6;
+// VALUE-FIRST, label second — and that ordering is the whole trick.
+//
+// The first cut keyed facts by their label and compared values. It fell apart on
+// exactly the case this feature exists for: a living page is re-composed, so
+// "the starting price is $899" becomes "the price remains $899", the label moves
+// from "starting price" to "price remains", and an unchanged figure is reported as
+// one removal plus one addition. A pure rewording produced eight phantom changes.
+//
+// So: any value present in BOTH versions is unchanged, whatever words now surround
+// it. Only values that actually appeared or vanished are candidates, and those get
+// paired into a "X → Y" when they're the same kind and their labels still overlap.
+function pageDelta(oldHtml, newHtml) {
+  const before = pageFacts(oldHtml);
+  const after = pageFacts(newHtml);
+  const oldValues = new Set(before.map((f) => f.value));
+  const newValues = new Set(after.map((f) => f.value));
+  const gone = before.filter((f) => !newValues.has(f.value));
+  const appeared = after.filter((f) => !oldValues.has(f.value));
+
+  const changes = [];
+  // Pass 1: same kind AND a shared label word — "starting price $899" → "price $849".
+  for (const g of gone) {
+    const hit = appeared.find((a) => !a.paired && a.kind === g.kind && a.words.some((w) => g.words.includes(w)));
+    if (hit) { changes.push({ label: g.label, from: g.value, to: hit.value }); g.paired = true; hit.paired = true; }
+  }
+  // Pass 2: exactly one unpaired value of a kind on each side — it can only be the
+  // same fact, even if the page renamed everything around it.
+  for (const g of gone.filter((f) => !f.paired)) {
+    const rest = appeared.filter((a) => !a.paired && a.kind === g.kind);
+    const others = gone.filter((f) => !f.paired && f.kind === g.kind);
+    if (rest.length === 1 && others.length === 1) {
+      changes.push({ label: g.label, from: g.value, to: rest[0].value });
+      g.paired = true; rest[0].paired = true;
+    }
+  }
+  const removed = gone.filter((f) => !f.paired).map((f) => ({ label: f.label, from: f.value }));
+  const added = appeared.filter((f) => !f.paired).map((f) => ({ label: f.label, to: f.value }));
+  return {
+    changes: changes.slice(0, DELTA_MAX),
+    added: added.slice(0, DELTA_MAX),
+    removed: removed.slice(0, DELTA_MAX),
+    // Nothing measurable moved: the page was reworded. Worth saying explicitly —
+    // it tells the user they don't need to re-read it.
+    wordingOnly: !changes.length && !added.length && !removed.length,
+  };
+}
+
+// ---- Watch a number, not a page ---------------------------------------------
+// Watchers poll an external URL and pay for a model call each time to decide
+// whether a condition holds. This is the other half: the fact comes from a page
+// Sprig SYNTHESIZED across many sources, and the comparison is local, free, and
+// exact — so "tell me when the price drops below $1,500" costs nothing beyond the
+// refresh the living page was already doing.
+//
+// Parsed with a regex rather than a model call on purpose: the phrasing is narrow,
+// and a threshold the user set must not be silently misread by a model.
+const ALERT_OPS = [
+  { re: /\b(?:drops?|falls?|goes?|gets?)\s+(?:down\s+)?(?:below|under)\b|\bis\s+(?:below|under|less\s+than)\b|\bunder\b/i, op: 'below' },
+  { re: /\b(?:goes?|rises?|climbs?|gets?)\s+(?:up\s+)?(?:above|over)\b|\bis\s+(?:above|over|more\s+than|greater\s+than)\b|\bexceeds?\b|\bover\b/i, op: 'above' },
+  { re: /\b(?:hits?|reaches?|gets?\s+to)\b/i, op: 'reaches' },
+  { re: /\bchanges?\b|\bmoves?\b|\bis\s+different\b/i, op: 'changes' },
+];
+
+// "$1,499.00" → 1499, "31 hours" → 31, "12.5%" → 12.5. Returns null when there's
+// no number to compare, which is how a malformed alert stays inert instead of
+// firing on every refresh.
+function factValue(s) {
+  const m = String(s || '').replace(/,/g, '').match(/-?\d+(?:\.\d+)?/);
+  return m ? Number(m[0]) : null;
+}
+
+function parseFactAlert(text) {
+  const t = String(text || '').trim();
+  const m = t.match(/^(?:can\s+you\s+)?(?:please\s+)?(?:tell|let|alert|notify|ping|warn)\s+me\s+(?:know\s+)?(?:when|if)\s+(.+)$/i);
+  if (!m) return null;
+  const rest = m[1].trim();
+  const hit = ALERT_OPS.find((o) => o.re.test(rest));
+  if (!hit) return null;
+  const [before, after] = rest.split(hit.re.exec(rest)[0]);
+  const label = String(before || '').replace(/^\s*(?:the|its|it'?s|my)\s+/i, '').replace(/[^\w\s%$£€.]/g, ' ').replace(/\s+/g, ' ').trim().toLowerCase();
+  const target = hit.op === 'changes' ? null : factValue(after);
+  if (!label) return null;
+  if (hit.op !== 'changes' && target === null) return null; // "below" with nothing to compare to
+  return { label, op: hit.op, target, targetText: String(after || '').trim() };
+}
+
+// Which extracted fact does this alert mean? Labels drift as the page is
+// re-composed ("starting price" → "price today"), so match on a shared word
+// rather than the whole phrase, preferring the longest overlap.
+function matchFactForAlert(facts, label) {
+  const want = String(label).split(/\s+/).filter((w) => w.length > 2);
+  if (!want.length) return null;
+  let best = null;
+  let bestScore = 0;
+  for (const f of facts) {
+    const words = String(f.label).split(/\s+/);
+    const score = want.filter((w) => words.includes(w) || String(f.label).includes(w)).length;
+    if (score > bestScore) { bestScore = score; best = f; }
+  }
+  return bestScore ? best : null;
+}
+
+// Returns the alerts that fired this cycle, updating their state in place.
+function evaluateFactAlerts(rec, facts) {
+  const fired = [];
+  for (const a of (rec.alerts || [])) {
+    const fact = matchFactForAlert(facts, a.label);
+    if (!fact) continue;
+    const now = factValue(fact.value);
+    const prev = a.lastValue;
+    a.lastValue = fact.value;
+    if (a.op === 'changes') {
+      // "Tell me when it changes" means every change, so this one is edge-shaped
+      // by definition — no latch.
+      if (prev != null && fact.value !== prev) { a.firedAt = Date.now(); fired.push({ alert: a, fact }); }
+      continue;
+    }
+    if (now === null) continue;
+    const met = a.op === 'below' ? now < a.target
+      : a.op === 'above' ? now > a.target
+        : now === a.target;
+    // Latch on the TRANSITION into the met state, not on each new value while it
+    // holds. Keying this on the value instead (the first cut) meant a price
+    // drifting $1,450 → $1,400 re-fired every refresh, even though it never left
+    // the range the user asked about. Re-arms only when it comes back out.
+    if (met && !a.wasMet) { a.firedAt = Date.now(); fired.push({ alert: a, fact }); }
+    a.wasMet = met;
+  }
+  return fired;
+}
+
+function describeAlert(a) {
+  if (a.op === 'changes') return `${a.label} changes`;
+  const verb = a.op === 'below' ? 'drops below' : a.op === 'above' ? 'goes above' : 'reaches';
+  return `${a.label} ${verb} ${a.targetText || a.target}`;
+}
+
+// One line for a toast / notification: the most useful change, plus a count.
+function deltaSummary(d) {
+  if (!d) return '';
+  if (d.wordingOnly) return 'reworded — no figures changed';
+  const first = d.changes[0]
+    ? `${d.changes[0].label} ${d.changes[0].from} → ${d.changes[0].to}`
+    : d.added[0] ? `new: ${d.added[0].label} ${d.added[0].to}`
+      : `dropped: ${d.removed[0].label} ${d.removed[0].from}`;
+  const total = d.changes.length + d.added.length + d.removed.length;
+  return total > 1 ? `${first}, +${total - 1} more` : first;
+}
+
+function deltaCount(d) {
+  return d ? d.changes.length + d.added.length + d.removed.length : 0;
+}
+
 // Quietly re-run a living page's query and replace its content in place. Runs
 // independently of the per-tab single-flight (no streaming preview, no composer block).
 async function refreshLiving(rec) {
@@ -4041,20 +4570,44 @@ async function refreshLiving(rec) {
     if (resp && resp.ok && resp.result && resp.result.kind === 'page') {
       const r = resp.result;
       const changed = stripText(r.html) !== stripText(entry.html);
+      const delta = changed ? pageDelta(entry.html, r.html) : null;
       entry.html = r.html;
       entry.title = r.title || entry.title;
       entry.sources = r.sources || [];
       rec.title = entry.title;
+      // Kept on the entry, not just announced: the user is usually away when this
+      // runs, so the answer to "what changed?" has to still be there when they
+      // come back. Cleared only by the next refresh that changes something.
+      if (delta && !delta.wordingOnly) entry.lastDelta = { at: Date.now(), ...delta };
+      // Fact alerts run off the SAME extraction the delta uses, so watching a
+      // number costs nothing beyond this refresh — no extra fetch, no model call.
+      const fired = (rec.alerts && rec.alerts.length) ? evaluateFactAlerts(rec, pageFacts(r.html)) : [];
       if (activeTab() === tab && currentEntry(tab) === entry) renderCurrentPage();
-      if (changed) {
-        toast(`Sprig refreshed “${entry.title}”.`);
-        // If the user isn't looking (window minimized/unfocused), raise an OS
-        // notification so background refreshes don't go unnoticed.
-        const unattended = typeof document !== 'undefined' && (document.hidden || !document.hasFocus());
-        if (settings.notifications && unattended && window.chervil.notify) {
+      for (const f of fired) {
+        const line = `${f.alert.label} is ${f.fact.value} — you asked to know when it ${f.alert.op === 'below' ? 'dropped below' : f.alert.op === 'above' ? 'went above' : f.alert.op === 'reaches' ? 'reached' : 'changed'} ${f.alert.op === 'changes' ? '' : (f.alert.targetText || f.alert.target)}`.trim();
+        toast(`🔔 ${line}`);
+        // A threshold the user explicitly set is worth an OS notification even
+        // when they're looking at something else — that's the whole point of it.
+        if (settings.notifications && window.chervil.notify) {
           window.chervil.notify({
-            title: 'Chervil · page updated',
-            body: `Sprig refreshed “${entry.title}”.`,
+            title: `Chervil · ${entry.title}`,
+            body: line,
+            tabId: tab.id,
+            entryId: entry.id,
+          });
+        }
+      }
+      if (changed) {
+        const summary = deltaSummary(delta);
+        toast(`Sprig refreshed “${entry.title}” — ${summary}.`);
+        // If the user isn't looking (window minimized/unfocused), raise an OS
+        // notification so background refreshes don't go unnoticed. A reworded page
+        // is not worth interrupting for — only real movement earns a notification.
+        const unattended = typeof document !== 'undefined' && (document.hidden || !document.hasFocus());
+        if (settings.notifications && unattended && window.chervil.notify && delta && !delta.wordingOnly) {
+          window.chervil.notify({
+            title: `Chervil · ${entry.title}`,
+            body: summary,
             tabId: tab.id,
             entryId: entry.id,
           });
@@ -4077,11 +4630,17 @@ function updateLiveControls() {
   els.liveSelect.value = rec ? String(rec.intervalMs) : 'off';
   if (rec) {
     els.liveStatus.hidden = false;
+    const n = deltaCount(cur && cur.lastDelta);
     els.liveStatus.textContent = rec.refreshing
       ? '● refreshing…'
-      : `● live · updated ${relTime(rec.lastRun)}`;
+      : `● live · updated ${relTime(rec.lastRun)}${n ? ` · ${n} change${n === 1 ? '' : 's'}` : ''}`;
+    // The changes are worth a click, so make it read like one — but only when
+    // there's actually something to show.
+    els.liveStatus.classList.toggle('clickable', !!n);
+    els.liveStatus.title = n ? 'See what changed on the last refresh' : '';
   } else {
     els.liveStatus.hidden = true;
+    els.liveStatus.classList.remove('clickable');
   }
 }
 
@@ -7450,6 +8009,58 @@ function handleComposerSubmit(text, opts = {}) {
 
   // Skill dispatch: a "/learn" or "/quiz" command, or the active skill-mode
   // toggle, builds that skill instead of composing a page.
+  // "/correct <what's actually true>" — remembered for every future compose, not
+  // just this page. Deliberately explicit rather than sniffed out of ordinary
+  // refines: a correction that gets stored without the user meaning to is worse
+  // than one they had to type a command for.
+  const correctCmd = query.match(/^\/correct\s+(.+)/is);
+  if (correctCmd) {
+    const cur = currentEntry(tab);
+    const c = addCorrection(correctCmd[1].trim(), cur && cur.query);
+    els.prompt.value = '';
+    resetPromptHeight();
+    if (c) {
+      addMessage(tab, 'user', query);
+      addMessage(tab, 'bot', `Noted — I'll remember that: “${c.text}”. Settings → You lists everything you've corrected, if you want to edit or remove it.`, 'note');
+    }
+    return;
+  }
+
+  // "tell me when the price drops below $1,500" on a composed page → a threshold
+  // on the fact itself, checked on each living refresh. Only claimed when the
+  // phrasing parses AND we're on a composed page; anything else falls through to
+  // a normal compose, so this can't swallow an ordinary question.
+  {
+    const curAlert = currentEntry(tab);
+    if (curAlert && curAlert.kind === 'page' && !curAlert.lesson && !curAlert.skill) {
+      const parsed = parseFactAlert(query);
+      if (parsed) {
+        els.prompt.value = '';
+        resetPromptHeight();
+        addMessage(tab, 'user', query);
+        if (tab.private) { addMessage(tab, 'bot', 'Alerts aren’t available in private tabs.', 'note'); return; }
+        let rec = livingFor(curAlert.id);
+        if (!rec) {
+          // Watching a number implies keeping the page current — otherwise the
+          // figure never moves and the alert can never fire.
+          setLiving(tab, curAlert, 1800000); // every 30 min
+          rec = livingFor(curAlert.id);
+        }
+        if (!rec) { addMessage(tab, 'bot', 'Couldn’t set that up on this page.', 'note'); return; }
+        rec.alerts = rec.alerts || [];
+        const facts = pageFacts(curAlert.html);
+        const fact = matchFactForAlert(facts, parsed.label);
+        rec.alerts.push({ id: uid(), ...parsed, lastValue: fact ? fact.value : null, firedValue: null, createdAt: Date.now() });
+        scheduleSave();
+        updateLiveControls();
+        addMessage(tab, 'bot', fact
+          ? `Watching “${parsed.label}” on this page — it's ${fact.value} now, and I'll tell you when it ${describeAlert(parsed).replace(parsed.label + ' ', '')}. Checking every ${Math.round((rec.intervalMs || 1800000) / 60000)} min.`
+          : `I'll watch for “${parsed.label}”, but I can't see that figure on the page right now — so it'll only fire if a refresh brings it in. Checking every ${Math.round((rec.intervalMs || 1800000) / 60000)} min.`, 'note');
+        return;
+      }
+    }
+  }
+
   const learnCmd = query.match(/^\/learn\s+(.+)/is);
   const quizCmd = query.match(/^\/quiz\s+(.+)/is);
   const compareCmd = query.match(/^\/compare\s+(.+)/is);
@@ -7858,6 +8469,115 @@ function dismissDossierOffer(id) {
   if (dossierDismissed.length > 200) dossierDismissed = dossierDismissed.slice(-200);
   scheduleSave();
   renderSuggestions();
+}
+
+// ---- Corrections the user has made ------------------------------------------
+function addCorrection(text, sourceQuery) {
+  const t = String(text || '').trim();
+  if (!t) return null;
+  const at = Date.now();
+  const c = { id: uid(), text: t.slice(0, 600), createdAt: at, updatedAt: at, sourceQuery: sourceQuery || '' };
+  corrections.unshift(c);
+  if (corrections.length > MAX_CORRECTIONS) corrections.length = MAX_CORRECTIONS;
+  clearTombstone('corrections', c.id);
+  scheduleSave();
+  renderCorrections();
+  return c;
+}
+
+// The reviewable half of the promise: everything Sprig has been told, visible and
+// individually removable. Built as nodes — correction text is user-authored, but
+// it is also injected into prompts, so it never becomes markup here.
+function renderCorrections() {
+  const box = els.correctionsList;
+  if (!box) return;
+  box.innerHTML = '';
+  if (!corrections.length) {
+    const empty = document.createElement('div');
+    empty.className = 'src-empty';
+    empty.textContent = 'Nothing yet. Type /correct followed by what’s actually true, and it’ll show up here.';
+    box.appendChild(empty);
+    return;
+  }
+  for (const c of corrections) {
+    const row = document.createElement('div');
+    row.className = 'correction-row';
+    const txt = document.createElement('div');
+    txt.className = 'correction-text';
+    txt.textContent = c.text;
+    const meta = document.createElement('div');
+    meta.className = 'correction-meta';
+    meta.textContent = relTime(c.createdAt) + (c.sourceQuery ? ` · after “${String(c.sourceQuery).slice(0, 60)}”` : '');
+    const del = document.createElement('button');
+    del.type = 'button';
+    del.className = 'lib-btn';
+    del.textContent = 'Forget';
+    del.addEventListener('click', () => removeCorrection(c.id));
+    const left = document.createElement('div');
+    left.className = 'correction-main';
+    left.appendChild(txt);
+    left.appendChild(meta);
+    row.appendChild(left);
+    row.appendChild(del);
+    box.appendChild(row);
+  }
+}
+
+function removeCorrection(id) {
+  corrections = corrections.filter((c) => c.id !== id);
+  addTombstone('corrections', id); // or the next sync merge resurrects it
+  scheduleSave();
+  renderCorrections();
+}
+
+// The compose payload. Oldest last so the newest correction is the one that
+// survives if the model only skims, and dated so the prompt can tell it to
+// prefer a fresh live source over a stale assertion.
+function correctionsPayload() {
+  if (!corrections.length) return null;
+  return corrections.slice(0, 40).map((c) => `- ${c.text}  (you told me this ${relTime(c.createdAt)})`).join('\n');
+}
+
+// ---- Your Web as the default first hop (opt-in; settings.recallAuto) ----------
+// Every ordinary compose quietly asks the local index whether the user has already
+// read about this, and passes any hits as SUPPORTING context.
+//
+// The retrieval gate is deliberately stricter than the explicit paths: `any:false`
+// makes FTS require EVERY content word, where askFromYourWeb and buildDossier use
+// `any:true`. That inversion is the whole design. When the user asks "what was that
+// laptop review", a loose hit is better than a miss — they asked, and they can see
+// the answer came from their reading. Here they didn't ask, so a loose hit silently
+// drags an unrelated page into an unrelated answer, which is far worse than the
+// index simply staying quiet. A miss costs nothing; a wrong recall costs trust.
+const RECALL_MIN_WORDS = 2;   // one content word matches half the index
+const RECALL_MAX_HITS = 3;    // supporting context, not the subject of the page
+async function autoRecall(query, { excludeId = null } = {}) {
+  if (!settings.recallAuto || !settings.indexSites) return null;
+  if (!libraryFromIndex || !window.chervil || !window.chervil.index) return null;
+  const words = contentWords(query);
+  if (words.length < RECALL_MIN_WORDS) return null;
+  try {
+    const res = await window.chervil.index.search({
+      query: words.join(' '), limit: RECALL_MAX_HITS + 2, includeBody: true, any: false,
+    });
+    if (!res || !res.ok) return null;
+    // Never feed a page back to itself — a follow-up on a composed page would
+    // otherwise recall that very page as if it were prior reading.
+    const hits = (res.items || []).filter((h) => h && h.id && h.id !== excludeId).slice(0, RECALL_MAX_HITS);
+    if (!hits.length) return null;
+    return { context: buildRecallContext(hits, { limit: RECALL_MAX_HITS }), hits };
+  } catch { return null; }
+}
+
+// What the Sources panel shows about a recall — kept small and serializable, since
+// it rides along on the saved entry.
+function recallProvenance(hits) {
+  return (hits || []).map((h) => ({
+    title: h.title || h.query || 'Untitled',
+    url: h.url || '',
+    when: relTime(h.createdAt),
+    kind: h.kind === 'visited' ? 'read' : 'composed',
+  }));
 }
 
 // Pull together everything the user has read on a topic (Bet 3, manual half).
@@ -8506,6 +9226,16 @@ async function submitQuery(text, opts = {}) {
     } catch { /* ignore */ }
   }
 
+  // Your Web first hop. Only for an ordinary compose: a refine is about the page in
+  // view, verify has its own adversarial pipeline, deepDive never receives
+  // recallContext at all, and an explicit recall or a feeds digest already won the
+  // slot. Runs here — after the status is already on screen — so the index lookup
+  // sits inside the wait the user is already having, not in front of it.
+  let autoRecalled = null;
+  if (!opts.recallContext && !digest && !verify && !deep && !refineMode && !opts.remix) {
+    autoRecalled = await autoRecall(query, { excludeId: curEntry ? curEntry.id : null });
+  }
+
   try {
     const resp = await window.chervil.ask({
       query,
@@ -8515,11 +9245,12 @@ async function submitQuery(text, opts = {}) {
       allowNavigate,
       refineMode,
       spaceContext: opts.spaceContext || null,
-      recallContext: opts.recallContext || (digest ? digest.context : null),
-      recallMode: opts.recallMode || (digest ? 'digest' : 'find'),
+      recallContext: opts.recallContext || (digest ? digest.context : null) || (autoRecalled ? autoRecalled.context : null),
+      recallMode: opts.recallMode || (digest ? 'digest' : autoRecalled ? 'augment' : 'find'),
       deep,
       verify,
       profile: settings.profile || null,
+      corrections: correctionsPayload(),
       pageStyle: settings.pageStyle || 'balanced',
       attachments: composeAttachments,
       mcpServers: enabledMcpServers(runAgentObj),
@@ -8566,6 +9297,10 @@ async function submitQuery(text, opts = {}) {
         curEntry.sources = result.sources || [];
         curEntry.searches = result.searches || [];
         curEntry.query = query;
+        if (autoRecalled) curEntry.recalled = recallProvenance(autoRecalled.hits);
+        // The page was rewritten, so claim verdicts anchored to the old wording no
+        // longer describe what's on screen. Stale ticks are worse than no ticks.
+        delete curEntry.claimChecks;
         if (opts.linksNewTab || digest) curEntry.linksNewTab = true;
       } else {
         pushEntry(tab, {
@@ -8575,6 +9310,7 @@ async function submitQuery(text, opts = {}) {
           sources: result.sources || [],
           searches: result.searches || [],
           query,
+          ...(autoRecalled ? { recalled: recallProvenance(autoRecalled.hits) } : {}),
           // A digest is a "home base" you asked for; its links open in new tabs so
           // clicking a feed item doesn't replace the summary. handleLinkClick honors
           // this on the entry regardless of what the model marked. Covers both the
@@ -11725,6 +12461,7 @@ function refreshSettingsUI() {
   renderAccountBox();
   refreshPrivacyUI();
   renderIndexSettings();   // Your Web: reflect the toggle/excludes + live counts
+  renderCorrections();     // You: what Sprig has been told it got wrong
 }
 
 // Settings opens in a TAB, the way a browser does it — so it has a title, sits in
@@ -11908,7 +12645,7 @@ function scheduleSave() {
     // `feeds` is subscriptions only — items live in the page index. Putting them
     // here would grow this payload without bound, which is the thing the comment
     // above is about.
-    const state = { tabs: persistTabs, activeId: persistActiveId, tabGroups, settings, bookmarks, bookmarkFolders, bookmarkTombstones, favorites, favoriteFolders, favoriteTombstones, collections, deletionTombstones, siteHistory, downloads, agentAudit, spaces, activeSpaceId, savedSpaces, activeSavedSpaceId, living, schedules, watchers, feeds, agents, activeAgentId, pipelines, pageStores, dossierOffers, dossierDismissed };
+    const state = { tabs: persistTabs, activeId: persistActiveId, tabGroups, settings, bookmarks, bookmarkFolders, bookmarkTombstones, favorites, favoriteFolders, favoriteTombstones, collections, deletionTombstones, siteHistory, downloads, agentAudit, spaces, activeSpaceId, savedSpaces, activeSavedSpaceId, living, schedules, watchers, feeds, agents, activeAgentId, pipelines, pageStores, dossierOffers, dossierDismissed, corrections };
     if (!libraryFromIndex) state.library = library;
     window.chervil.saveState(state)
       .then((r) => { if (r && r.mtimeMs) lastStateMtimeMs = r.mtimeMs; }) // our own write — keep baseline current
@@ -12157,6 +12894,9 @@ async function init() {
   if (restored && restored.activeSavedSpaceId) activeSavedSpaceId = restored.activeSavedSpaceId;
   ensureSavedSpaces();
 
+  if (restored && Array.isArray(restored.corrections)) {
+    corrections = restored.corrections.filter((c) => c && c.id && typeof c.text === 'string' && c.text.trim());
+  }
   if (restored && Array.isArray(restored.living)) {
     living = restored.living.filter((r) => r && r.entryId && r.intervalMs);
     // Reset the clock so pages don't all refresh at once on launch (avoids a cost burst).
@@ -13675,7 +14415,7 @@ els.remixBar.addEventListener('click', (e) => {
 els.audioBtn.addEventListener('click', playPageAudio);
 els.audioToggle.addEventListener('click', toggleAudio);
 els.audioStop.addEventListener('click', stopAudio);
-els.verifyBtn.addEventListener('click', verifyPage);
+els.verifyBtn.addEventListener('click', checkPageClaims);
 if (els.refreshPageBtn) els.refreshPageBtn.addEventListener('click', refreshCurrentPage);
 els.sourcesBtn.addEventListener('click', toggleSourcesPanel);
 els.exportSelect.addEventListener('change', onExportSelect);
@@ -13683,6 +14423,13 @@ els.remixMin.addEventListener('click', minimizeRemix);
 els.remixHandle.addEventListener('click', expandRemix);
 if (els.followupForm) els.followupForm.addEventListener('submit', handleFollowup);
 els.sourcesClose.addEventListener('click', () => { els.sourcesPanel.hidden = true; });
+
+// "3 changes" in the remix bar opens the panel, which leads with what moved.
+if (els.liveStatus) els.liveStatus.addEventListener('click', () => {
+  const cur = currentEntry(activeTab());
+  if (!deltaCount(cur && cur.lastDelta)) return;
+  if (els.sourcesPanel.hidden) toggleSourcesPanel();
+});
 els.liveSelect.addEventListener('change', onLiveSelectChange);
 els.voiceSelect.addEventListener('change', () => { settings.voiceURI = els.voiceSelect.value; scheduleSave(); });
 els.rateSelect.addEventListener('change', () => { settings.audioRate = parseFloat(els.rateSelect.value) || 1; scheduleSave(); });
@@ -13943,9 +14690,24 @@ function dossierMinPagesLabel(n) {
   return `${n} pages on one subject`;
 }
 
+// "Answer from my own reading first" depends on the toggle above it — there's
+// nothing to recall from until the index is being written to. This has to be
+// callable on its own: it lives in renderIndexSettings, which only runs when the
+// Settings page is (re)rendered, so ticking site-indexing left this box stuck
+// disabled until you navigated away and back.
+function syncRecallAutoEnabled() {
+  if (!els.recallAutoToggle) return;
+  els.recallAutoToggle.disabled = !settings.indexSites;
+  els.recallAutoToggle.checked = !!settings.recallAuto && !!settings.indexSites;
+  els.recallAutoToggle.title = settings.indexSites
+    ? ''
+    : 'Turn on “Keep the text of websites I read” first — there’s nothing to answer from otherwise.';
+}
+
 function renderIndexSettings() {
   if (els.trashRetention) els.trashRetention.value = String(Number(settings.trashRetentionDays) || 0);
   if (els.indexSitesToggle) els.indexSitesToggle.checked = !!settings.indexSites;
+  syncRecallAutoEnabled();
   if (els.indexExcludes) els.indexExcludes.value = (settings.indexExcludes || []).join(', ');
   if (els.dossierOffersToggle) {
     els.dossierOffersToggle.checked = !!settings.dossierOffers;
@@ -13984,11 +14746,23 @@ if (els.dossierMinPages) els.dossierMinPages.addEventListener('input', () => {
 
 if (els.indexSitesToggle) els.indexSitesToggle.addEventListener('change', () => {
   settings.indexSites = els.indexSitesToggle.checked;
+  // Turning indexing off strands recall with nothing to read from, so retire it
+  // rather than leaving a ticked box that silently does nothing.
+  if (!settings.indexSites) settings.recallAuto = false;
+  syncRecallAutoEnabled();
   scheduleSave();
   renderIndexStats();
   toast(settings.indexSites
     ? 'Chervil will keep the text of sites you read — on this computer only.'
     : 'Stopped keeping sites you read. What’s already kept stays until you delete it.');
+});
+
+if (els.recallAutoToggle) els.recallAutoToggle.addEventListener('change', () => {
+  settings.recallAuto = els.recallAutoToggle.checked;
+  scheduleSave();
+  toast(settings.recallAuto
+    ? 'Sprig will check what you’ve read before composing, and show you when it used it.'
+    : 'Back to asking explicitly — your reading is only used when you say so.');
 });
 
 if (els.trashRetention) els.trashRetention.addEventListener('change', () => {

@@ -72,6 +72,20 @@
     .msg.bot { align-self: flex-start; background: #1b212d; color: #e6e6e6; border: 1px solid #232a38; border-bottom-left-radius: 4px; }
     .msg.bot.err { color: #ffb4b4; border-color: #5a2a2a; }
     .msg.typing { color: #8b93a3; font-style: italic; }
+    /* Sources Sprig searched. The reply itself is plain text with no links in it
+       (see toPlainText in lib/agent.js), so this footer is the only way to reach
+       what it read — clicking one opens it in the main Chervil window. */
+    .msg-sources {
+      margin-top: 7px;
+      padding-top: 6px;
+      border-top: 1px solid #232a38;
+      font-size: 11.5px;
+      line-height: 1.5;
+      color: #7c8595;
+      white-space: normal;
+    }
+    .msg-sources a { color: #6ea8fe; text-decoration: none; cursor: pointer; }
+    .msg-sources a:hover { text-decoration: underline; }
     #empty {
       display: none;
       margin: auto;
@@ -217,6 +231,28 @@
       return el;
     }
 
+    // Hostname, not title — the bubble is narrow and a headline eats the whole row.
+    function hostOf(url) {
+      try { return new URL(url).hostname.replace(/^www\./, ''); } catch { return url; }
+    }
+    function addSources(bubble, sources) {
+      const list = (Array.isArray(sources) ? sources : []).filter((s) => s && s.url).slice(0, 4);
+      if (!list.length) return;
+      const foot = document.createElement('div');
+      foot.className = 'msg-sources';
+      foot.appendChild(document.createTextNode('Sources: '));
+      list.forEach((s, i) => {
+        const a = document.createElement('a');
+        a.textContent = hostOf(s.url);
+        a.title = s.title || s.url;
+        a.addEventListener('click', () => { if (window.quick) window.quick.openUrl(s.url); });
+        foot.appendChild(a);
+        if (i < list.length - 1) foot.appendChild(document.createTextNode(', '));
+      });
+      bubble.appendChild(foot);
+      scrollBottom();
+    }
+
     function setChat(on) {
       if (chatMode === on) return;
       chatMode = on;
@@ -246,7 +282,7 @@
         if (myGen !== gen) return;        // conversation was cleared while awaiting — drop it
         typing.remove();
         if (resp && resp.ok) {
-          addMsg('bot', (resp.text || '…'));
+          addSources(addMsg('bot', (resp.text || '…')), resp.sources);
           count++;
         } else {
           addMsg('bot', (resp && resp.error) || 'Something went wrong.', 'err');

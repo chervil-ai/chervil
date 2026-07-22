@@ -1357,6 +1357,17 @@ body.resizing #web-views { pointer-events: none; }
 .src-fresh { font-size: 12px; color: var(--muted); display: flex; align-items: center; gap: 6px; }
 .src-fresh .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); flex: none; }
 .src-empty { font-size: 12px; color: var(--muted); line-height: 1.45; }
+/* A claim the sources didn't agree on. Set apart enough to notice, but this is
+   information, not a warning — Sprig kept both positions rather than picking. */
+.src-conflict {
+  font-size: 12.5px;
+  color: var(--text);
+  line-height: 1.45;
+  padding: 6px 8px;
+  border-left: 2px solid var(--accent);
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  border-radius: 0 6px 6px 0;
+}
 .remix-sep { flex: none; width: 1px; height: 18px; background: var(--border); margin: 0 2px; }
 .live-select {
   flex: none;
@@ -1377,6 +1388,36 @@ body.resizing #web-views { pointer-events: none; }
   white-space: nowrap;
 }
 .live-status[hidden] { display: none; }
+/* A checked claim in the Sources panel. */
+.src-claim { display: flex; flex-direction: column; gap: 3px; padding: 6px 0; border-bottom: 1px solid var(--border); }
+.src-claim:last-child { border-bottom: 0; }
+.src-claim-head { display: flex; gap: 7px; align-items: baseline; font-size: 12.5px; line-height: 1.45; }
+.src-claim-quote { flex: 1 1 auto; min-width: 0; }
+.src-claim-note { font-size: 12px; color: var(--muted); line-height: 1.45; padding-left: 22px; }
+.src-claim .src-item { padding-left: 22px; }
+
+/* Settings → You: the list of things Sprig has been corrected on. */
+.corrections-list { display: flex; flex-direction: column; gap: 8px; }
+.correction-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.correction-main { flex: 1 1 auto; min-width: 0; }
+.correction-text { font-size: 13px; line-height: 1.45; word-break: break-word; }
+.correction-meta { font-size: 11px; color: var(--muted); margin-top: 3px; }
+.correction-row .lib-btn { flex: none; }
+
+.live-status.clickable { cursor: pointer; text-decoration: underline dotted; text-underline-offset: 3px; }
+.live-status.clickable:hover { color: #a8f0c4; }
+/* One changed fact from a living-page refresh. */
+.src-change { font-size: 12.5px; color: var(--text); line-height: 1.5; }
+.src-change .lbl { color: var(--muted); }
+.src-change .was { color: var(--muted); text-decoration: line-through; }
+.src-change .now { font-weight: 600; }
 
 /* Toast notifications */
 #toast {

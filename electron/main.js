@@ -32,7 +32,7 @@ const profileArg = process.argv.find((a) => a.startsWith('--profile-dir='));
 if (profileArg) app.setPath('userData', path.resolve(profileArg.slice('--profile-dir='.length)));
 
 const QRCode = require('qrcode');
-const { runAgent, runChat, runTranslate, runAgentTurn, runOrchestrator, runAppletAsk, runComposeApplet, runListModels, runAgentStep, runAgentPlan, runExtractSlides, runExtractDoc, runExtractSheets, runSynthesizeAgent, runWatchCheck } = require('../lib/agent');
+const { runAgent, runChat, runTranslate, runAgentTurn, runOrchestrator, runAppletAsk, runComposeApplet, runListModels, runAgentStep, runAgentPlan, runExtractSlides, runExtractDoc, runExtractSheets, runSynthesizeAgent, runCheckClaims, runWatchCheck } = require('../lib/agent');
 const { generateHeroImage, editImage } = require('../lib/images');
 const { buildEpub } = require('../lib/epub');
 const { getSkill } = require('../lib/skills');
@@ -1102,6 +1102,12 @@ ipcMain.on('chervil:quick-open-in-app', () => {
   if (mainWindow && !mainWindow.webContents.isDestroyed()) mainWindow.webContents.send('chervil:quick-open-in-app');
 });
 
+// A source link under a quick-chat reply — open it in the main window like any
+// other link handed to Chervil. The panel stays up so the conversation survives.
+ipcMain.on('chervil:quick-open-url', (_event, url) => {
+  openExternalHttpUrl(String(url || ''));
+});
+
 // "New chat" in the floating panel — clear the renderer's quick-chat history too.
 ipcMain.on('chervil:quick-clear', () => {
   if (mainWindow && !mainWindow.webContents.isDestroyed()) mainWindow.webContents.send('chervil:quick-clear');
@@ -1298,7 +1304,7 @@ app.on('window-all-closed', () => {
 const askAborters = new Map();
 
 ipcMain.handle('chervil:ask', async (event, payload) => {
-  const { query, history, requestId, pageContext, allowNavigate, refineMode, spaceContext, recallContext, recallMode, deep, verify, profile, pageStyle, attachments, mcpServers, agent } =
+  const { query, history, requestId, pageContext, allowNavigate, refineMode, spaceContext, recallContext, recallMode, deep, verify, profile, corrections, pageStyle, attachments, mcpServers, agent } =
     payload || {};
   const send = (channel, data) => {
     if (!event.sender.isDestroyed()) event.sender.send(channel, data);
@@ -1322,10 +1328,16 @@ ipcMain.handle('chervil:ask', async (event, payload) => {
       refineMode: refineMode || null,
       spaceContext: spaceContext || null,
       recallContext: recallContext || null,
-      recallMode: recallMode === 'synthesize' ? 'synthesize' : 'find',
+      // Whitelist, not a binary. This was `=== 'synthesize' ? … : 'find'`, which
+      // silently collapsed every mode added after it — 'digest' (Your Feeds) and
+      // 'augment' (the Your Web first hop) both arrived here and left as 'find',
+      // so their addenda were unreachable and a feeds digest was prompted as if
+      // the user were trying to re-find a page they'd read. Add new modes HERE.
+      recallMode: ['synthesize', 'digest', 'augment'].includes(recallMode) ? recallMode : 'find',
       deep: deep === true,
       verify: verify === true,
       profile: typeof profile === 'string' ? profile : null,
+      corrections: typeof corrections === 'string' ? corrections : null,
       pageStyle: typeof pageStyle === 'string' ? pageStyle : 'balanced',
       attachments: Array.isArray(attachments) ? attachments : [],
       mcpServers: Array.isArray(mcpServers) ? mcpServers : [],
@@ -1605,6 +1617,32 @@ ipcMain.handle('chervil:translate', async (_event, payload) => {
 // --- Skills: build any registered skill (RFC 0003) -------------------------
 // Generic build: getSkill → build → optional enrich (Learn's media verify) →
 // toHtml. Replaces the old lesson-specific build-lesson handler.
+// Check the load-bearing claims of a composed page. Like a skill build it does live
+// research and can run a while, so it shares the status channel and the Stop path.
+ipcMain.handle('chervil:check-claims', async (event, payload) => {
+  const { html, title, requestId } = payload || {};
+  const send = (channel, data) => {
+    if (!event.sender.isDestroyed()) event.sender.send(channel, data);
+  };
+  const aborter = new AbortController();
+  if (requestId) askAborters.set(requestId, aborter);
+  try {
+    const res = await runCheckClaims({
+      html: typeof html === 'string' ? html : '',
+      title: typeof title === 'string' ? title : '',
+      config: providerConfigFrom(payload),
+      onStatus: (status) => send('chervil:status', { requestId, status }),
+      signal: aborter.signal,
+    });
+    return { ok: true, ...res };
+  } catch (err) {
+    if (aborter.signal.aborted) return { ok: false, aborted: true, error: 'Stopped.' };
+    return { ok: false, error: String(err && err.message ? err.message : err) };
+  } finally {
+    if (requestId) askAborters.delete(requestId);
+  }
+});
+
 ipcMain.handle('chervil:build-skill', async (event, payload) => {
   const { skill: skillId, input, level, goals, requestId } = payload || {};
   const send = (channel, data) => {

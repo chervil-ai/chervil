@@ -18,6 +18,8 @@ contextBridge.exposeInMainWorld('quick', {
   chat: (query) => ipcRenderer.invoke('chervil:quick-chat', { query }),
   /** Tell main the panel flipped between ask (false) and chat (true) so it resizes the window. */
   setMode: (chat) => ipcRenderer.send('chervil:quick-mode', !!chat),
+  /** Open a source link from a reply in the main Chervil window. */
+  openUrl: (url) => ipcRenderer.send('chervil:quick-open-url', String(url || '')),
   /** Hand the running conversation to the main Chervil window. */
   openInApp: () => ipcRenderer.send('chervil:quick-open-in-app'),
   /** Start a fresh chat — also clears the renderer's quick-chat history. */

@@ -612,6 +612,10 @@
           <input id="index-sites-toggle" type="checkbox" />
           <span>Keep the text of websites I read, so I can search and ask about them later. <strong>Private tabs are never included</strong>, and neither is any page behind a login or paywall.</span>
         </label>
+        <label class="toggle-row">
+          <input id="recall-auto-toggle" type="checkbox" />
+          <span>Answer from my own reading first. Before composing any page, Sprig checks this index and uses what you’ve already read where it genuinely helps — marking those parts so you can see them and get back to the original. <strong>This sends matching pages from your reading along with your question</strong>, so turn it on only if you’re happy for that to happen automatically rather than each time you ask.</span>
+        </label>
         <label class="field-label" for="index-excludes">Never keep these sites</label>
         <span class="field-row">
           <input id="index-excludes" type="text" placeholder="mybank.com, myhealth.org, webmail" spellcheck="false" />
@@ -747,6 +751,13 @@
         <div id="account-box" class="account-box">
           <p class="group-hint">Connecting…</p>
         </div>
+      </section>
+
+      <section class="setting-group" data-sgroup="you">
+        <h3>What you’ve corrected</h3>
+        <p class="group-hint">When Sprig gets something wrong, type <strong>/correct</strong> followed by what’s actually true — “/correct our office moved to Dayton in March”. Sprig applies it to every page it composes from then on, so it stops making the same mistake. These live on this computer with the rest of your settings.<br /><br />
+        Each one is dated, and a correction <strong>loses to a fresher live source</strong>: if Sprig finds today that a price or a role has changed, it goes with what it found and tells you, so an old note can’t quietly outlive the truth.</p>
+        <div id="corrections-list" class="corrections-list"></div>
       </section>
 
       <section class="setting-group" data-sgroup="you">
@@ -933,7 +944,7 @@
           <button id="audio-btn" class="remix-btn audio">🔊 Audio</button>
           <span class="remix-sep"></span>
           <button id="refresh-page-btn" class="remix-btn" title="Re-run this page's query and update it in place">↻ Refresh</button>
-          <button id="verify-btn" class="remix-btn verify" title="Fact-check this page against the live web">✓ Verify</button>
+          <button id="verify-btn" class="remix-btn verify" title="Check the claims this page rests on and mark the verdicts here, on the page">✓ Verify</button>
           <button id="sources-btn" class="remix-btn" title="Sources Sprig used">Sources</button>
           <select id="export-select" class="live-select" title="Export or share this page as a file">
             <option value="">⤓ Export…</option>

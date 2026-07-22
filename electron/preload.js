@@ -159,6 +159,8 @@ contextBridge.exposeInMainWorld('chervil', {
 
   /** Build any registered skill (RFC 0003) → { ok, kind, artifact, html }. */
   buildSkill: (payload) => ipcRenderer.invoke('chervil:build-skill', payload),
+  /** Fact-check the load-bearing claims of a composed page → { ok, claims, sources }. */
+  checkClaims: (payload) => ipcRenderer.invoke('chervil:check-claims', payload),
 
   /** Re-render a stored skill artifact to current HTML (pure, no model call). */
   renderSkill: (payload) => ipcRenderer.invoke('chervil:render-skill', payload),
