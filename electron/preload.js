@@ -374,6 +374,9 @@ contextBridge.exposeInMainWorld('chervil', {
   /** "Check this page for RSS feeds" from the right-click menu → discover + subscribe. */
   onContextFindFeeds: (cb) => ipcRenderer.on('chervil:context-find-feeds', (_e, url) => cb(url)),
 
+  /** "Open Link in New Tab" from the right-click menu → open the URL in a Chervil tab. */
+  onContextOpenTab: (cb) => ipcRenderer.on('chervil:context-open-tab', (_e, url) => cb(url)),
+
   /** Load persisted session state (tabs, prompts, pages). */
   loadState: () => ipcRenderer.invoke('chervil:load-state'),
 

@@ -135,7 +135,7 @@
         <div id="omni-actions">
           <button id="map-btn" class="omni-btn text" title="Thinking canvas — map of this tab's pages">⌗ <span class="lbl">Map</span></button>
           <button id="history-btn" class="omni-btn text" title="Library — Saved Pages, Pages, Favorites, Collections, Feeds, Downloads, Sites &amp; Trash">🕘 <span class="lbl">Library</span></button>
-          <button id="sched-btn" class="omni-btn text" title="Scheduled agents">⏰ <span class="lbl">Schedules</span></button>
+          <button id="sched-btn" class="omni-btn text" title="Sprig’s Desk — standing goals, schedules, watchers &amp; the Trust Ledger">🗓 <span class="lbl">Desk</span></button>
           <button id="agents-btn" class="omni-btn text" title="Agents — personas &amp; tools">👤 <span class="lbl">Agents</span></button>
           <button id="autofill-pw-btn" class="omni-btn" title="Fill a saved login" hidden>🔑</button>
           <button id="autofill-card-btn" class="omni-btn" title="Fill a saved payment card" hidden>💳</button>
@@ -1026,147 +1026,182 @@
     </div>
   </div>
 
-  <!-- Thinking canvas: a map of the current tab's page tree -->
-  <!-- Agents -->
-  <div id="agents-view" class="sched-view">
-    <div class="sched-panel">
-      <div class="sched-head">
-        <span class="sched-title">👤 Agents</span>
-        <button id="agents-close" class="omni-btn" title="Close">✕</button>
-      </div>
-      <p class="sched-sub">Import an agent file (Markdown + YAML frontmatter) to give Sprig a persona, a default model, allowed MCP servers, and starter prompts. Activate one to apply it to your conversations.</p>
-      <div class="sched-form">
-        <div class="sched-row">
-          <button id="agent-from-session" type="button" class="sched-add" style="margin-left:0">✨ Create agent from this session</button>
-          <span style="color:var(--muted);font-size:12px;">turns the active tab's conversation into a reusable agent</span>
-        </div>
-        <div class="sched-row">
-          <button id="agent-import" type="button" class="sched-add" style="margin-left:0">Import agent file…</button>
-          <span style="color:var(--muted);font-size:12px;">or paste an agent file below</span>
-        </div>
-        <textarea id="agent-paste" rows="5" placeholder="---&#10;name: Morning Briefing&#10;description: Daily AI + security news&#10;model: claude-opus-4-8&#10;mcp: [my-calendar]&#10;starters:&#10;  - Compose today's AI news briefing&#10;---&#10;You are a concise analyst. Cite sources, group by theme, flag anything contested."></textarea>
-        <div class="sched-row"><button id="agent-add" type="button" class="sched-add">Add pasted agent</button></div>
-      </div>
-      <div id="agents-list" class="sched-list"></div>
+  <!-- Desk, Agents, and the Thinking canvas open as Chervil TABS (viewport views,
+       like Settings/Library). They're authored here at <body> level for readability
+       but reparented into #viewport on boot (see renderer init) so they render in the
+       page area under the toolbar. They start `hidden`; renderCurrentPage shows them. -->
+  <!-- Agents — a page with a left rail of sections, like Settings/Library -->
+  <div id="agents-view" class="sched-view panel-view" hidden>
+    <nav class="panel-nav" aria-label="Agents sections">
+      <div class="panel-nav-head">👤 Agents</div>
+      <button class="panel-tab active" data-agents="mine">👤 My agents</button>
+      <button class="panel-tab" data-agents="store">🏪 Store</button>
+      <button class="panel-tab" data-agents="pipelines">🧩 Pipelines</button>
+      <button class="panel-tab" data-agents="starters">✨ Starters</button>
+      <button class="panel-tab" data-agents="activity">🛡 Activity</button>
+    </nav>
+    <div class="panel-content">
 
-      <div class="agents-subhead">🏪 Agent store — import community agents</div>
-      <p class="sched-sub">Browse vetted agents others have published. Click <b>Add</b> to import one into your Agents.</p>
-      <div class="sched-form">
-        <div class="sched-row">
-          <select id="store-cat-select" title="Filter by category"></select>
-          <button id="store-refresh" type="button" class="sched-add">Browse store</button>
+      <section data-agents="mine">
+        <div class="sched-head"><span class="sched-title">👤 My agents</span></div>
+        <p class="sched-sub">Import an agent file (Markdown + YAML frontmatter) to give Sprig a persona, a default model, allowed MCP servers, and starter prompts. Activate one to apply it to your conversations.</p>
+        <div class="sched-form">
+          <div class="sched-row">
+            <button id="agent-from-session" type="button" class="sched-add" style="margin-left:0">✨ Create agent from this session</button>
+            <span style="color:var(--muted);font-size:12px;">turns the active tab's conversation into a reusable agent</span>
+          </div>
+          <div class="sched-row">
+            <button id="agent-import" type="button" class="sched-add" style="margin-left:0">Import agent file…</button>
+            <span style="color:var(--muted);font-size:12px;">or paste an agent file below</span>
+          </div>
+          <textarea id="agent-paste" rows="5" placeholder="---&#10;name: Morning Briefing&#10;description: Daily AI + security news&#10;model: claude-opus-4-8&#10;mcp: [my-calendar]&#10;starters:&#10;  - Compose today's AI news briefing&#10;---&#10;You are a concise analyst. Cite sources, group by theme, flag anything contested."></textarea>
+          <div class="sched-row"><button id="agent-add" type="button" class="sched-add">Add pasted agent</button></div>
         </div>
-      </div>
-      <div id="store-agents-list" class="sched-list"></div>
+        <div id="agents-list" class="sched-list"></div>
+      </section>
 
-      <div class="agents-subhead">🧩 Agent pipelines — agents that hand off to each other</div>
-      <p class="sched-sub">Chain two or more agents into a team. Each runs in order, builds on the previous one's output, and the last agent composes the final page. Great for research → draft → critique flows.</p>
-      <div class="sched-form">
-        <div class="sched-row">
-          <input id="pipeline-name" type="text" placeholder="Pipeline name (e.g. Research → Write → Critique)" />
+      <section data-agents="store">
+        <div class="sched-head"><span class="sched-title">🏪 Agent store</span></div>
+        <p class="sched-sub">Browse vetted agents others have published. Click <b>Add</b> to import one into your Agents.</p>
+        <div class="sched-form">
+          <div class="sched-row">
+            <select id="store-cat-select" title="Filter by category"></select>
+            <button id="store-refresh" type="button" class="sched-add">Browse store</button>
+          </div>
         </div>
-        <div class="sched-row">
-          <select id="pipeline-stage-select" title="Pick an agent to add as the next stage"></select>
-          <button id="pipeline-add-stage" type="button" class="sched-add">Add stage</button>
-        </div>
-        <div id="pipeline-draft" class="pipeline-draft"></div>
-        <div class="sched-row">
-          <label class="pipeline-orch-label"><input id="pipeline-orchestrated" type="checkbox" /> 🧠 Orchestrated — a coordinator picks who acts next (instead of a fixed order)</label>
-        </div>
-        <div class="sched-row"><button id="pipeline-save" type="button" class="sched-add">Save pipeline</button></div>
-      </div>
-      <div id="pipelines-list" class="sched-list"></div>
+        <div id="store-agents-list" class="sched-list"></div>
+      </section>
 
-      <div class="agents-subhead">Starter agents — one-click add</div>
-      <div id="starter-agents-list" class="sched-list"></div>
+      <section data-agents="pipelines">
+        <div class="sched-head"><span class="sched-title">🧩 Agent pipelines</span></div>
+        <p class="sched-sub">Chain two or more agents into a team. Each runs in order, builds on the previous one's output, and the last agent composes the final page. Great for research → draft → critique flows.</p>
+        <div class="sched-form">
+          <div class="sched-row">
+            <input id="pipeline-name" type="text" placeholder="Pipeline name (e.g. Research → Write → Critique)" />
+          </div>
+          <div class="sched-row">
+            <select id="pipeline-stage-select" title="Pick an agent to add as the next stage"></select>
+            <button id="pipeline-add-stage" type="button" class="sched-add">Add stage</button>
+          </div>
+          <div id="pipeline-draft" class="pipeline-draft"></div>
+          <div class="sched-row">
+            <label class="pipeline-orch-label"><input id="pipeline-orchestrated" type="checkbox" /> 🧠 Orchestrated — a coordinator picks who acts next (instead of a fixed order)</label>
+          </div>
+          <div class="sched-row"><button id="pipeline-save" type="button" class="sched-add">Save pipeline</button></div>
+        </div>
+        <div id="pipelines-list" class="sched-list"></div>
+      </section>
 
-      <div class="agents-subhead audit-head">
-        <span>🛡 Agent activity</span>
-        <button id="audit-clear" class="lib-btn" hidden>Clear</button>
-      </div>
-      <div id="audit-list" class="audit-list"></div>
+      <section data-agents="starters">
+        <div class="sched-head"><span class="sched-title">✨ Starter agents</span></div>
+        <p class="sched-sub">One-click add — vetted agents to get you going.</p>
+        <div id="starter-agents-list" class="sched-list"></div>
+      </section>
+
+      <section data-agents="activity">
+        <div class="sched-head"><span class="sched-title">🛡 Agent activity</span></div>
+        <p class="sched-sub">Every step Sprig takes on a live site is now logged in one place — the <b>Trust Ledger</b>, alongside everything else he does on his own.</p>
+        <button id="agents-open-ledger" type="button" class="sched-add" style="margin-left:0">📜 Open the Trust Ledger</button>
+      </section>
     </div>
   </div>
 
-  <!-- Scheduled agents -->
-  <div id="sched-view" class="sched-view">
-    <div class="sched-panel">
-      <div class="sched-head">
-        <span class="sched-title">⏰ Schedules &amp; watchers</span>
-        <button id="sched-close" class="omni-btn" title="Close">✕</button>
-      </div>
-      <p class="sched-sub">Sprig runs a prompt on a schedule and notifies you when the page is ready. Runs in the background while Chervil sits in the tray.</p>
+  <!-- Sprig's Desk — a page with a left rail of sections, like Settings/Library -->
+  <div id="sched-view" class="sched-view panel-view" hidden>
+    <nav class="panel-nav" aria-label="Desk sections">
+      <div class="panel-nav-head">🗓 Sprig’s Desk</div>
+      <button class="panel-tab active" data-desk="goals">🎯 Standing goals</button>
+      <button class="panel-tab" data-desk="schedules">⏰ Schedules</button>
+      <button class="panel-tab" data-desk="ledger">📜 Trust Ledger</button>
+    </nav>
+    <div class="panel-content">
 
-      <form id="sched-form" class="sched-form" autocomplete="off">
-        <textarea id="sched-prompt" rows="2" placeholder="What should Sprig do on a schedule? e.g. “Compose an AI news briefing for today”"></textarea>
-        <div class="sched-row">
-          <label>When
-            <select id="sched-type">
-              <option value="daily">Every day at…</option>
-              <option value="weekly">Specific days at…</option>
-              <option value="interval">Every…</option>
-            </select>
-          </label>
-          <label id="sched-time-wrap">Time <input id="sched-time" type="time" value="08:00" /></label>
-          <label id="sched-interval-wrap" hidden>Interval
-            <select id="sched-interval">
-              <option value="1800000">30 min</option>
-              <option value="3600000">1 hour</option>
-              <option value="10800000">3 hours</option>
-              <option value="21600000">6 hours</option>
-              <option value="43200000">12 hours</option>
-            </select>
-          </label>
+      <!-- Standing goals: the hero. Delegate an ongoing goal; Sprig keeps a briefing on it. -->
+      <section data-desk="goals">
+        <div class="sched-head">
+          <span class="sched-title">🎯 Standing goals</span>
+          <button id="briefing-btn" type="button" class="sched-add" style="margin-left:auto">☀ Today’s briefing</button>
         </div>
-        <div id="sched-days" class="sched-days" hidden>
-          <label><input type="checkbox" value="1" /> Mon</label>
-          <label><input type="checkbox" value="2" /> Tue</label>
-          <label><input type="checkbox" value="3" /> Wed</label>
-          <label><input type="checkbox" value="4" /> Thu</label>
-          <label><input type="checkbox" value="5" /> Fri</label>
-          <label><input type="checkbox" value="6" /> Sat</label>
-          <label><input type="checkbox" value="0" /> Sun</label>
-        </div>
-        <div class="sched-row">
-          <label>Run as agent
-            <select id="sched-agent"><option value="">None (default Sprig)</option></select>
-          </label>
-        </div>
-        <div class="sched-row">
-          <label class="sched-deep"><input id="sched-deep" type="checkbox" /> Deep Dive (thorough, cited)</label>
-          <button type="submit" class="sched-add">Add schedule</button>
-        </div>
-      </form>
+        <p class="sched-sub">Delegate an ongoing goal in plain language — Sprig keeps a fresh, cited briefing on it and logs every update to the ledger. <b>Paste a page URL instead</b> and he’ll watch that page for changes (a price drop, back-in-stock, updated docs). Or just say “keep me posted on …” / “watch this page and tell me when …” in the omnibox.</p>
+        <form id="intent-form" class="sched-form" autocomplete="off">
+          <input id="intent-topic" type="text" placeholder="A topic to track, or a page URL to watch — e.g. “the Electron 40 release” or “example.com/pricing”" spellcheck="false" />
+          <div class="sched-row">
+            <label>Refresh
+              <select id="intent-interval">
+                <option value="3600000">hourly</option>
+                <option value="21600000">every 6 hours</option>
+                <option value="43200000">every 12 hours</option>
+                <option value="86400000" selected>daily</option>
+                <option value="604800000">weekly</option>
+              </select>
+            </label>
+            <button type="submit" class="sched-add">Add goal</button>
+          </div>
+        </form>
+        <div id="intent-list" class="sched-list"></div>
+      </section>
 
-      <div id="sched-list" class="sched-list"></div>
-
-      <!-- Page watchers: poll a URL and notify on change / condition -->
-      <div class="sched-divider"></div>
-      <div class="sched-head">
-        <span class="sched-title">👁 Page watchers</span>
-      </div>
-      <p class="sched-sub">Sprig watches a web page and pings you when something changes — a price drops, an item is back in stock, docs update. (Tip: on any live site just say “watch this page and tell me when…”.)</p>
-      <form id="watch-form" class="sched-form" autocomplete="off">
-        <input id="watch-url" type="text" placeholder="Page URL to watch — https://…" spellcheck="false" />
-        <textarea id="watch-cond" rows="2" placeholder="Tell me when… e.g. “the price drops below $500”, “it’s back in stock” (leave blank to watch for any change)"></textarea>
-        <div class="sched-row">
-          <label>Check
-            <select id="watch-interval">
-              <option value="900000">every 15 min</option>
-              <option value="1800000">every 30 min</option>
-              <option value="3600000" selected>hourly</option>
-              <option value="21600000">every 6 hours</option>
-              <option value="86400000">daily</option>
-            </select>
-          </label>
-          <button type="submit" class="sched-add">Watch page</button>
+      <section data-desk="schedules">
+        <div class="sched-head">
+          <span class="sched-title">⏰ Schedules</span>
         </div>
-      </form>
-      <div id="watch-list" class="sched-list"></div>
+        <p class="sched-sub">Sprig runs a prompt on a schedule and notifies you when the page is ready.</p>
+        <form id="sched-form" class="sched-form" autocomplete="off">
+          <textarea id="sched-prompt" rows="2" placeholder="What should Sprig do on a schedule? e.g. “Compose an AI news briefing for today”"></textarea>
+          <div class="sched-row">
+            <label>When
+              <select id="sched-type">
+                <option value="daily">Every day at…</option>
+                <option value="weekly">Specific days at…</option>
+                <option value="interval">Every…</option>
+              </select>
+            </label>
+            <label id="sched-time-wrap">Time <input id="sched-time" type="time" value="08:00" /></label>
+            <label id="sched-interval-wrap" hidden>Interval
+              <select id="sched-interval">
+                <option value="1800000">30 min</option>
+                <option value="3600000">1 hour</option>
+                <option value="10800000">3 hours</option>
+                <option value="21600000">6 hours</option>
+                <option value="43200000">12 hours</option>
+              </select>
+            </label>
+          </div>
+          <div id="sched-days" class="sched-days" hidden>
+            <label><input type="checkbox" value="1" /> Mon</label>
+            <label><input type="checkbox" value="2" /> Tue</label>
+            <label><input type="checkbox" value="3" /> Wed</label>
+            <label><input type="checkbox" value="4" /> Thu</label>
+            <label><input type="checkbox" value="5" /> Fri</label>
+            <label><input type="checkbox" value="6" /> Sat</label>
+            <label><input type="checkbox" value="0" /> Sun</label>
+          </div>
+          <div class="sched-row">
+            <label>Run as agent
+              <select id="sched-agent"><option value="">None (default Sprig)</option></select>
+            </label>
+          </div>
+          <div class="sched-row">
+            <label class="sched-deep"><input id="sched-deep" type="checkbox" /> Deep Dive (thorough, cited)</label>
+            <button type="submit" class="sched-add">Add schedule</button>
+          </div>
+        </form>
+        <div id="sched-list" class="sched-list"></div>
+      </section>
+
+      <!-- Trust Ledger: what Sprig did on his own, with undo where reversible -->
+      <section data-desk="ledger">
+        <div class="sched-head">
+          <span class="sched-title">📜 Trust Ledger</span>
+          <button id="ledger-clear" class="lib-btn" hidden>Clear</button>
+        </div>
+        <p class="sched-sub">What Sprig did on his own — every goal refresh and reversible action, newest first. Undo is offered wherever the action can be reversed.</p>
+        <div id="ledger-list" class="sched-list"></div>
+      </section>
     </div>
   </div>
 
-  <div id="map-view" class="map-view">
+  <div id="map-view" class="map-view" hidden>
     <div class="map-head">
       <span class="map-title">⌗ Thinking canvas</span>
       <span class="map-hint">Each page is a node. Branches fork when you go back and ask something new. Click a node to jump there.</span>

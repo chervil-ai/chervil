@@ -269,6 +269,19 @@ const els = {
   synthGo: document.getElementById('synth-go'),
 };
 
+// Sprig's Desk, Agents, and the Thinking canvas open as Chervil TABS now — viewport
+// views like Settings/Library, not floating modals. They're authored at <body> level
+// for readability but must live INSIDE #viewport so their `position:absolute; inset:0`
+// anchors to the page area (below the toolbar/tab strip). Reparent once, here, before
+// anything renders — so a restored `desk`/`agents`/`canvas` tab shows correctly.
+{
+  const vp = document.getElementById('viewport');
+  for (const id of ['agents-view', 'sched-view', 'map-view']) {
+    const el = document.getElementById(id);
+    if (vp && el && el.parentElement !== vp) vp.appendChild(el);
+  }
+}
+
 // ---- State ----
 // A tab is a browsing session: its own chat + a back/forward stack of pages.
 //   tab = { id, title, conversation: [{role,text,cls}], history: [{role,content}],
@@ -592,7 +605,7 @@ const MAX_BOOKMARK_TOMBSTONES = 1000;
 // Id-keyed delete tombstones for the other synced collections (composed pages,
 // trash, site history, agents, schedules), so those removals also survive the
 // cross-machine union-merge instead of resurrecting. { coll: [{ id, at }] }
-let deletionTombstones = { pages: [], trash: [], sites: [], agents: [], schedules: [], watchers: [] };
+let deletionTombstones = { pages: [], trash: [], sites: [], agents: [], schedules: [], watchers: [], intents: [] };
 const MAX_DEL_TOMBSTONES = 1000;
 let siteHistory = []; // [{ id, url, title, at }] newest-first — real sites visited
 const MAX_SITE_HISTORY = 500;
@@ -640,6 +653,23 @@ let schedules = [];
 //   watcher = { id, url, title, condition, intervalMs, enabled, running, lastRun,
 //               lastValue, lastSummary, lastChangedAt, triggered }
 let watchers = [];
+// Standing Intents ("Sprig's Desk"): goal-level jobs you delegate in plain language
+// ("keep me posted on X"). The unifying reframe over one-off watchers/schedules — you
+// hand Sprig an ongoing GOAL and he re-composes a fresh briefing on it on a cadence,
+// recording every run so the Trust Ledger can show what he did while you were away.
+//   intent = { id, goal, topic, kind:'research', intervalMs, enabled, running,
+//              lastRun, createdAt, lastSummary, lastChangedAt, tabId, entryId,
+//              history:[{ at, changed, summary, entryId }] }
+let intents = [];
+const MAX_INTENT_HISTORY = 20;
+// Trust Ledger: the human-readable record of everything Sprig did on his own —
+// intent runs, and reversible side-effecting actions (e.g. an unsubscribe) that
+// carry an `undo` payload. This is the auditable-autonomy spine, distinct from the
+// low-level agentAudit (which logs individual live-site agent steps).
+//   entry = { id, at, kind, title, detail, url?, intentId?, tabId?, entryId?,
+//             reversible, undone, undo? }
+let ledger = [];
+const MAX_LEDGER = 400;
 // Your Feeds: subscriptions Chervil pulls on a cadence (RSS/Atom, podcasts,
 // newsletters, blogs, YouTube channels, subreddits).
 //   feed = { id, type, name, config, enabled, intervalMs, maxItems, createdAt, updatedAt }
@@ -719,6 +749,11 @@ const CHERVIL_RUNTIME = `<script>(function(){
   document.addEventListener('click', function(e){
     var a = e.target && e.target.closest ? e.target.closest('a') : null;
     if(!a) return;
+    // In-app deep link: a composed page (e.g. the briefing) can point a row at
+    // another Chervil tab entry via data-chervil-tab/entry. These have no URL, so
+    // they must be caught BEFORE the '#'/http checks and forwarded as their own type.
+    var dTab = a.getAttribute('data-chervil-tab');
+    if(dTab){ e.preventDefault(); try { parent.postMessage({ __chervil:true, type:'open-entry', tab:dTab, entry:a.getAttribute('data-chervil-entry')||'' }, '*'); } catch(_){} return; }
     var raw = a.getAttribute('href');
     if(!raw || raw.charAt(0)==='#') return;     // let in-page anchors scroll
     var href = a.href;
@@ -1862,7 +1897,10 @@ function appendMessageEl(role, text, cls, sources) {
       sources.forEach((s, i) => {
         if (!s || !s.url) return;
         const a = document.createElement('a');
-        a.href = '#';
+        // Carry the real URL on href (not '#') so the right-click menu's Copy/Open
+        // act on the source, not the app's own file:// page. Click still routes
+        // through handleLinkClick (preventDefault keeps the SPA from navigating).
+        a.href = s.url;
         a.className = 'chat-source-link';
         a.textContent = s.title || s.url;
         a.title = s.url;
@@ -2174,7 +2212,7 @@ let liveSrcdoc = '';
 //
 // Named for what it does. `showViewportView(el)` would read as "this is all you
 // need to call", which it isn't.
-const VIEWPORT_VIEWS = () => [els.settingsView, els.libraryView];
+const VIEWPORT_VIEWS = () => [els.settingsView, els.libraryView, els.schedView, els.agentsView, els.mapView];
 function hideViewportViews(except) {
   for (const v of VIEWPORT_VIEWS()) if (v && v !== except) v.hidden = true;
 }
@@ -2311,6 +2349,27 @@ function renderCurrentPage() {
     renderLibraryView(entry);
     setOmnibox('Library');
     setBadge('', 'library');
+    els.save.disabled = true;
+    setRemixVisible(false);
+  } else if (entry.kind === 'desk') {
+    // Sprig's Desk, Agents, and the Thinking canvas are viewport-view tabs (same
+    // family as Settings/Library) — each has no html, so they must be routed here
+    // rather than falling to the composed-page `else`.
+    renderDeskView(entry);
+    setOmnibox('Sprig’s Desk');
+    setBadge('', 'desk');
+    els.save.disabled = true;
+    setRemixVisible(false);
+  } else if (entry.kind === 'agents') {
+    renderAgentsView(entry);
+    setOmnibox('Agents');
+    setBadge('', 'agents');
+    els.save.disabled = true;
+    setRemixVisible(false);
+  } else if (entry.kind === 'canvas') {
+    renderCanvasView(entry);
+    setOmnibox('Thinking canvas');
+    setBadge('', 'canvas');
     els.save.disabled = true;
     setRemixVisible(false);
   } else {
@@ -3840,7 +3899,7 @@ function startScheduler() {
 // with no records of its own, so without this the tick would never start (or would
 // stop itself) while ambient offers are on.
 function schedulerHasWork() {
-  return !!(living.length || schedules.length || watchers.length || feeds.length || dossierOffersEnabled());
+  return !!(living.length || schedules.length || watchers.length || intents.length || feeds.length || dossierOffersEnabled());
 }
 
 // Master 30s tick: drives Living-page refresh, scheduled agents, page watchers, and feeds.
@@ -3849,6 +3908,7 @@ function schedulerTick() {
   tickLiving();
   tickSchedules();
   tickWatchers();
+  tickIntents();
   // Self-batching and re-entrancy-guarded; this tick is every 30s.
   tickFeeds().catch(() => {});
   // Rate-limits itself to DOSSIER_SCAN_MS internally; this tick is every 30s.
@@ -4110,6 +4170,468 @@ function parseWatchIntent(text) {
   m = q.match(/^(?:tell|let|notify|ping|alert)\s+me(?:\s+know)?\s+(?:when|if)\s+(.+)$/i);
   if (m) return { condition: m[1].trim() };
   return null;
+}
+
+// ============================================================================
+// Standing Intents — "Sprig's Desk"
+// ----------------------------------------------------------------------------
+// A standing intent is an ongoing GOAL you delegate in plain language. Unlike a
+// watcher (one page/URL) or a schedule (one fixed prompt), an intent is topic-
+// level: Sprig re-composes a fresh, web-grounded briefing on the topic on a
+// cadence and logs every run to the Trust Ledger. Runs reuse the ordinary compose
+// path (submitQuery), so intents inherit citations, freshness, and Your-Web recall
+// for free — the intent layer only decides WHAT to keep on top of and HOW OFTEN.
+// ============================================================================
+
+const INTENT_INTERVALS = {
+  3600000: 'hourly', 21600000: 'every 6 hours', 43200000: 'every 12 hours',
+  86400000: 'daily', 604800000: 'weekly',
+};
+function intentIntervalLabel(ms) { return INTENT_INTERVALS[ms] || 'periodically'; }
+
+// Turn a free-text cadence phrase ("daily", "every 6 hours", "hourly") into ms, or
+// 0 when there's no cadence to read. Shared by the NL parser and the Desk form.
+function cadenceToMs(phrase) {
+  const p = String(phrase || '').toLowerCase().trim();
+  if (/\b(hourly|every\s+hour)\b/.test(p)) return 3600000;
+  if (/\b(daily|every\s+(day|morning))\b/.test(p)) return 86400000;
+  if (/\b(weekly|every\s+week)\b/.test(p)) return 604800000;
+  const m = p.match(/every\s+(\d+)\s*(min(?:ute)?s?|hours?|days?)/);
+  if (m) {
+    const n = parseInt(m[1], 10) || 1;
+    const u = m[2];
+    return u.startsWith('min') ? n * 60000 : u.startsWith('hour') ? n * 3600000 : n * 86400000;
+  }
+  return 0;
+}
+
+// Goal-level "keep me on top of X" phrasing → { goal, topic, intervalMs }, or null.
+// Deliberately narrow so it can't swallow an ordinary compose: it needs an explicit
+// ongoing-delegation lead AND a topic, and it bows out of the page-scoped "watch
+// this page" phrasings (those belong to parseWatchIntent).
+function parseStandingIntent(text) {
+  const q = String(text || '').trim();
+  if (!q) return null;
+  if (/\b(this|the)\s+(page|site|article|tab|url)\b/i.test(q)) return null;
+  const m = q.match(/^(?:please\s+)?(?:can\s+you\s+)?(?:keep\s+me\s+(?:posted|updated|informed|in\s+the\s+loop|up\s+to\s+date)|keep\s+me\s+on\s+top\s+of|stay\s+on\s+top\s+of|keep\s+(?:an\s+eye|tabs)\s+on|keep\s+up\s+with|keep\s+track\s+of)\b(.*)$/i);
+  if (!m) return null;
+  let topic = m[1]
+    .replace(/^\s*(?:on|of|with|about|for)\s+/i, '')
+    .replace(/\bfor\s+me\b/ig, ' ')
+    .replace(/[.!?]+\s*$/, '')
+    .trim();
+  // Peel a trailing cadence ("… every day", "… hourly") off the topic and read it.
+  let intervalMs = 0;
+  const cad = topic.match(/(?:,?\s*(?:and\s+)?(?:check|update|refresh|tell\s+me|ping\s+me)?\s*)\b(hourly|daily|weekly|every\s+(?:hour|day|week|morning|\d+\s*(?:min(?:ute)?s?|hours?|days?)))\b\s*$/i);
+  if (cad) { intervalMs = cadenceToMs(cad[1]); topic = topic.slice(0, cad.index).replace(/[,\s]+$/, '').trim(); }
+  topic = topic.replace(/^\s*(?:on|of|with|about|for)\s+/i, '').trim();
+  if (topic.length < 2 || topic.length > 160 || !/[a-z0-9]/i.test(topic)) return null;
+
+  // A URL in the goal makes this a WATCH intent — poll that page for changes —
+  // rather than a research briefing. Bare domains must end in a real web TLD so
+  // "Node.js"/"Vue.js" stay research topics, not watches on node.js.
+  const um = topic.match(/(https?:\/\/[^\s]+|(?:[a-z0-9-]+\.)+(?:com|org|net|io|dev|co|ai|app|edu|gov|news|xyz|info|me|tv|gg|us|uk|ca|au|de|fr|jp|cn|in|nl|se|no|es|it)(?:\/[^\s]*)?)/i);
+  if (um) {
+    let url = um[0];
+    if (!/^https?:\/\//i.test(url)) url = 'https://' + url;
+    let condition = '';
+    const after = topic.slice(um.index + um[0].length).trim();
+    const cm = after.match(/^(?:until|for|when|if|and\s+tell\s+me\s+(?:when|if))\s+(.+)$/i);
+    if (cm) condition = cm[1].trim();
+    return { goal: q, kind: 'watch', url, condition, intervalMs: intervalMs || 3600000 };
+  }
+  return { goal: q, kind: 'research', topic, intervalMs: intervalMs || 86400000 };
+}
+
+function createIntent({ goal, topic, intervalMs, kind, url, condition } = {}) {
+  const isWatch = kind === 'watch' && !!url;
+  const t = (topic || '').trim() || (isWatch ? hostOf(url) : '');
+  if (!t) return null;
+  const it = {
+    id: uid(),
+    goal: (goal || '').trim() || (isWatch ? `Keep me posted on ${t}` : `Keep me on top of ${t}`),
+    topic: t,
+    kind: isWatch ? 'watch' : 'research',
+    intervalMs: intervalMs || (isWatch ? 3600000 : 86400000),
+    enabled: true,
+    running: false,
+    lastRun: 0,
+    createdAt: Date.now(),
+    lastSummary: '',
+    lastChangedAt: 0,
+    tabId: null,
+    entryId: null,
+    history: [],
+    // Watch-kind carries the URL/condition and the poll state, like a watcher.
+    ...(isWatch ? { url, condition: (condition || '').trim(), lastValue: '', triggered: false } : {}),
+  };
+  intents.push(it);
+  startScheduler();
+  scheduleSave();
+  renderIntentsIfOpen();
+  return it;
+}
+
+function pushIntentHistory(it, rec) {
+  it.history = it.history || [];
+  it.history.unshift(rec);
+  if (it.history.length > MAX_INTENT_HISTORY) it.history.length = MAX_INTENT_HISTORY;
+}
+
+// Consolidation: classic page-watchers are now watch-kind standing intents. Drain
+// any watchers (legacy on disk, or synced in from a machine still on the old build)
+// into equivalent intents and empty the array. Idempotent — a migrated intent is
+// tagged `fromWatcher`, so re-running never duplicates — and self-healing, so a
+// mixed-version sync converges to intents rather than resurrecting the old section.
+function migrateWatchersToIntents() {
+  if (!Array.isArray(watchers) || !watchers.length) return;
+  for (const w of watchers) {
+    if (!w || !w.url) continue;
+    // Deterministic id from the watcher id: two devices migrating the same watcher
+    // produce the SAME intent id, so the cross-machine union merge dedups them
+    // instead of leaving one copy per device.
+    const wid = 'wi_' + w.id;
+    if (intents.find((it) => it.id === wid)) continue;
+    intents.push({
+      id: wid,
+      fromWatcher: w.id,
+      goal: `Watch ${w.title || hostOf(w.url)}`,
+      topic: w.title || hostOf(w.url),
+      kind: 'watch',
+      url: w.url,
+      condition: w.condition || '',
+      intervalMs: w.intervalMs || 3600000,
+      enabled: w.enabled !== false,
+      running: false,
+      lastRun: w.lastRun || 0,
+      createdAt: w.createdAt || Date.now(),
+      lastSummary: w.lastSummary || '',
+      lastChangedAt: w.lastChangedAt || 0,
+      lastValue: w.lastValue || '',
+      triggered: !!w.triggered,
+      tabId: null,
+      entryId: null,
+      history: [],
+    });
+  }
+  watchers = [];
+  startScheduler();
+  scheduleSave();
+  renderIntentsIfOpen();
+}
+
+function tickIntents() {
+  const now = Date.now();
+  for (const it of intents.slice()) {
+    if (it.enabled && !it.running && now - (it.lastRun || 0) >= it.intervalMs) runIntent(it);
+  }
+}
+
+// Poll a watch-kind intent's URL and fire on change / met condition — the watcher
+// engine (window.chervil.watchCheck), but recorded to the intent's history + the
+// Trust Ledger so it lives on the Desk like every other standing goal.
+async function runIntentWatch(it) {
+  if (it.running) return;
+  it.running = true;
+  it.lastRun = Date.now();
+  renderIntentsIfOpen();
+  try {
+    const res = await window.chervil.watchCheck({
+      url: it.url, condition: it.condition || '', lastValue: it.lastValue || '', config: providerConfig(),
+    });
+    if (res && res.ok) {
+      const prev = it.lastValue || '';
+      const conditionWatch = !!(it.condition && it.condition.trim());
+      let fire = false;
+      let note = '';
+      if (conditionWatch) {
+        if (res.met && !it.triggered) { fire = true; note = res.summary || 'Your condition is now met.'; }
+        it.triggered = !!res.met;
+      } else if (res.value && prev && res.value.trim().toLowerCase() !== prev.trim().toLowerCase()) {
+        fire = true;
+        note = res.summary || `Changed to ${res.value}`;
+      }
+      if (res.value) it.lastValue = res.value;
+      if (res.summary) it.lastSummary = res.summary;
+      if (fire) {
+        it.lastChangedAt = Date.now();
+        pushIntentHistory(it, { at: Date.now(), changed: true, summary: note, delta: note, entryId: null });
+        logLedger({ kind: 'intent-watch', title: `“${it.topic}” changed`, detail: note, intentId: it.id, url: it.url });
+        if (settings.notifications && window.chervil.notify) {
+          window.chervil.notify({ title: `Chervil · ${it.topic}`, body: note, url: it.url });
+        }
+      } else if (!prev) {
+        // Baseline — record quietly so the row shows "watching · <value>".
+        pushIntentHistory(it, { at: Date.now(), changed: false, summary: it.lastValue || 'watching', delta: '', entryId: null });
+      }
+    }
+  } catch { /* transient failure — retry next tick */ }
+  it.running = false;
+  renderIntentsIfOpen();
+  scheduleSave();
+}
+
+// Run one standing intent: compose a fresh briefing on its topic in the intent's own
+// tab, diff it against last time, and record the run to the intent's history AND the
+// Trust Ledger. Mirrors runSchedule's background-compose shape.
+async function runIntent(it) {
+  if (!it || it.running) return;
+  if (it.kind === 'watch') return runIntentWatch(it);
+  let tab = tabs.find((t) => t.id === it.tabId);
+  if (!tab) {
+    tab = newTab(false);
+    tab.title = it.topic.length > 32 ? it.topic.slice(0, 29) + '…' : it.topic;
+    it.tabId = tab.id;
+    renderTabs();
+  }
+  if (isTabBusy(tab.id)) return; // try again next tick
+  it.running = true;
+  it.lastRun = Date.now();
+  renderIntentsIfOpen();
+  try {
+    const before = currentEntry(tab);
+    // Snapshot the PRIOR briefing's HTML before we re-compose over it — the diff is
+    // against this. Captured as a string now because submitQuery may replace the
+    // entry object (or the same object could be mutated in place).
+    const beforeHtml = (before && before.kind === 'page') ? before.html : '';
+    const prompt = `Compose a concise, current briefing on: ${it.topic}. Lead with what is NEW or has CHANGED recently; skip evergreen background. Use the web for up-to-date sources and cite them.`;
+    await submitQuery(prompt, {
+      tab, skipFollowup: true, allowNavigate: false, background: true, displayText: prompt,
+    });
+    const after = currentEntry(tab);
+    if (after && after !== before && after.kind === 'page') {
+      it.entryId = after.id;
+      const summary = (after.title || it.topic || '').trim();
+      // The whole point of this pass: detect change by DIFFING THE FACTS, not the
+      // title. A re-composed briefing always differs textually, so a title/text
+      // compare cried "changed!" every single run. pageDelta pairs moved figures
+      // (prices, %, dates, counts) value-first — the same engine living pages use.
+      const isBaseline = !beforeHtml;
+      const delta = isBaseline ? null : pageDelta(beforeHtml, after.html);
+      const changed = !!delta && deltaCount(delta) > 0;
+      const deltaText = changed ? deltaSummary(delta) : (delta && delta.wordingOnly ? 'reworded — no figures changed' : '');
+      if (changed) it.lastChangedAt = Date.now();
+      it.lastSummary = summary;
+      pushIntentHistory(it, { at: Date.now(), changed, summary, delta: changed ? deltaSummary(delta) : '', entryId: after.id });
+      logLedger({
+        kind: 'intent-run',
+        title: `Refreshed “${it.topic}”`,
+        detail: isBaseline ? summary : (changed ? deltaSummary(delta) : 'no figures changed'),
+        intentId: it.id,
+        tabId: tab.id,
+        entryId: after.id,
+      });
+      // Go quiet unless something real moved — that's the delegation promise. The
+      // first run (baseline) still pings so you know the goal is live; after that,
+      // only a measurable change earns a notification, with WHAT changed in the body.
+      if (settings.notifications && window.chervil.notify && (isBaseline || changed)) {
+        window.chervil.notify({
+          title: `Chervil · ${it.topic}`,
+          body: isBaseline ? `${summary || 'Your briefing'} is ready.` : deltaSummary(delta),
+          tabId: tab.id,
+          entryId: after.id,
+        });
+      }
+    }
+  } catch { /* ignore a failed run; retry next slot */ }
+  it.running = false;
+  renderIntentsIfOpen();
+  scheduleSave();
+}
+
+function deleteIntent(id) {
+  addTombstone('intents', id);
+  intents = intents.filter((x) => x.id !== id);
+  scheduleSave();
+  renderIntentsIfOpen();
+}
+
+// ============================================================================
+// Trust Ledger — what Sprig did on his own, with undo where reversible
+// ============================================================================
+
+function logLedger(entry) {
+  ledger.unshift({ id: uid(), at: Date.now(), reversible: false, undone: false, ...entry });
+  if (ledger.length > MAX_LEDGER) ledger.length = MAX_LEDGER;
+  scheduleSave();
+  renderLedgerIfOpen();
+}
+
+// Reverse a reversible ledger action. Today the one reversible kind is a feed
+// unsubscribe (undo re-subscribes from the snapshot we stored at removal time).
+function undoLedger(id) {
+  const e = ledger.find((x) => x.id === id);
+  if (!e || e.undone || !e.reversible || !e.undo) return;
+  if (e.undo.type === 'resubscribe' && e.undo.feed) {
+    const f = e.undo.feed;
+    createFeed({
+      type: f.type, name: f.name, config: f.config, intervalMs: f.intervalMs,
+      maxItems: f.maxItems, folder: f.folder, retentionMs: f.retentionMs, pullNow: true,
+    });
+    e.undone = true;
+    toast(`Re-subscribed to “${f.name || 'feed'}”.`);
+    renderLedgerIfOpen();
+    renderFeedsIfOpen();
+    scheduleSave();
+  }
+}
+
+// "Unsubscribe me from <name>" → find matching feeds, confirm, remove, and log a
+// reversible ledger entry per feed so the whole thing is one-click undoable. This is
+// the first bounded, side-effecting, reversible autonomous action: plan → confirm →
+// act → ledger → undo, all local and safe.
+function parseUnsubscribeIntent(text) {
+  const q = String(text || '').trim();
+  const m = q.match(/^(?:please\s+)?unsubscribe\s+(?:me\s+)?(?:from\s+)?(.+)$/i)
+    || q.match(/^(?:stop|remove)\s+(?:my\s+)?(?:the\s+)?(.+?)\s+(?:feed|subscription)s?\.?$/i);
+  if (!m) return null;
+  const name = m[1].replace(/\b(feed|subscription)s?\b/ig, '').replace(/[.!?]+\s*$/, '').trim();
+  return name ? { name } : null;
+}
+
+function unsubscribeByIntent(tab, query, name) {
+  els.prompt.value = '';
+  resetPromptHeight();
+  addMessage(tab, 'user', query);
+  const needle = name.toLowerCase();
+  const matches = feeds.filter((f) =>
+    (f.name || '').toLowerCase().includes(needle) || (f.folder || '').toLowerCase() === needle);
+  if (!matches.length) {
+    addMessage(tab, 'bot', `I don’t see a feed matching “${name}”. Library → Feeds lists what you’re subscribed to.`, 'note');
+    return;
+  }
+  const names = matches.map((f) => `“${f.name}”`).join(', ');
+  if (!confirm(`Unsubscribe from ${matches.length === 1 ? names : matches.length + ' feeds: ' + names}?\n\nThis removes ${matches.length === 1 ? 'it' : 'them'} and any stored items. You can undo from the Trust Ledger.`)) {
+    addMessage(tab, 'bot', 'Left your subscriptions as they are.', 'note');
+    return;
+  }
+  for (const f of matches) {
+    const snapshot = { type: f.type, name: f.name, config: f.config, intervalMs: f.intervalMs, maxItems: f.maxItems, folder: f.folder, retentionMs: f.retentionMs };
+    removeFeed(f.id);
+    logLedger({
+      kind: 'unsubscribe',
+      title: `Unsubscribed from “${f.name}”`,
+      detail: 'You can re-subscribe with one click.',
+      reversible: true,
+      undo: { type: 'resubscribe', feed: snapshot },
+    });
+  }
+  addMessage(tab, 'bot', `Done — unsubscribed from ${matches.length === 1 ? names : matches.length + ' feeds'}. It’s in your Trust Ledger (🗓 Desk) if you want to undo.`, 'note');
+}
+
+// ============================================================================
+// Personal Briefing — "what changed since you last looked", composed from your
+// own signals: standing intents, watchers that fired, and recent feed items.
+// Assembled deterministically (no model round-trip) so it's instant, private, and
+// never invents anything — every line traces to a real record or a real feed item.
+// ============================================================================
+
+function isBriefingQuery(text) {
+  // Normalize away politeness/trailing punctuation, then require a STANDALONE briefing
+  // phrase — "my briefing", "today's briefing", "morning briefing" — so it can't hijack
+  // an ordinary "briefing on <topic>" compose (which should stay a normal page).
+  const q = String(text || '').trim().toLowerCase()
+    .replace(/^please\s+/, '').replace(/\s+for me$/, '').replace(/[.!?]+$/, '').trim();
+  if (['catch me up', 'bring me up to speed', 'what did i miss'].includes(q)) return true;
+  if (/^what'?s changed since i last looked$/.test(q)) return true;
+  return /^(?:my |today'?s |the |daily |morning )*briefing$/.test(q);
+}
+
+async function buildBriefing(tab) {
+  els.prompt.value = '';
+  resetPromptHeight();
+  const since = Date.now() - 36 * 60 * 60 * 1000; // a comfortable "since you last looked" window
+  const esc = (s) => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  const sections = [];
+
+  // 1) Standing intents — the freshest refresh of each goal, newest first.
+  const withRuns = intents
+    .filter((it) => it.history && it.history.length)
+    .sort((a, b) => (b.history[0].at || 0) - (a.history[0].at || 0));
+  if (withRuns.length) {
+    // Deep-link each row to its composed page via the in-app bridge (data-chervil-tab
+    // /entry, handled by CHERVIL_RUNTIME) — a research intent's page lives in an app
+    // tab, not at a URL. A watch intent has no page, so it links to the watched URL.
+    const rows = withRuns.map((it) => {
+      const h = it.history[0];
+      const title = esc(h.summary || it.topic);
+      // Lead with WHAT changed (the fact delta) when there is one — that's the news.
+      const change = h.changed ? (h.delta ? ` · <b>${esc(h.delta)}</b>` : ' · <b>updated</b>') : '';
+      const meta = `<span class="b-meta">${esc(it.topic)} · ${esc(relTime(h.at))}${change}</span>`;
+      let link;
+      if (it.kind === 'watch' && it.url) link = `<a href="${esc(it.url)}">${title}</a>`;
+      else if (h.entryId && it.tabId) link = `<a href="#" data-chervil-tab="${esc(it.tabId)}" data-chervil-entry="${esc(h.entryId)}">${title}</a>`;
+      else link = `<span class="b-title">${title}</span>`;
+      return `<li>${link}${meta}</li>`;
+    }).join('');
+    sections.push(`<section><h2>🗓 Your standing goals</h2><ul class="b-list">${rows}</ul></section>`);
+  }
+
+  // (Page-watches are now watch-kind standing intents, so they already appear in the
+  // "standing goals" section above — no separate watchers block needed.)
+
+  // 2) Recent items from Your Feeds, grouped by source.
+  try {
+    if (window.chervil.index && window.chervil.index.feeds) {
+      const r = await window.chervil.index.feeds.recent({ sinceMs: since, limit: 40, undigestedOnly: false });
+      const items = (r && r.ok && r.items) || [];
+      if (items.length) {
+        const byFeed = new Map();
+        const feedName = new Map(feeds.map((f) => [f.id, f.name]));
+        for (const it of items) {
+          const k = it.feedId || 'misc';
+          if (!byFeed.has(k)) byFeed.set(k, []);
+          byFeed.get(k).push(it);
+        }
+        const blocks = [];
+        for (const [fid, list] of byFeed) {
+          const rows = list.slice(0, 6).map((it) =>
+            `<li><a href="${esc(it.url)}">${esc(it.title || it.url)}</a></li>`).join('');
+          blocks.push(`<div class="b-feed"><h3>${esc(feedName.get(fid) || 'Feed')}</h3><ul class="b-list">${rows}</ul></div>`);
+        }
+        sections.push(`<section><h2>📡 New in your feeds</h2>${blocks.join('')}</section>`);
+      }
+    }
+  } catch { /* index unavailable — just skip the feeds section */ }
+
+  const now = new Date();
+  const dateLine = now.toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' });
+  const body = sections.length
+    ? sections.join('')
+    : `<section class="b-empty"><p>Nothing new to report yet. Delegate a goal on 🗓 Sprig’s Desk — try <em>“keep me posted on …”</em> — subscribe to a few feeds, or watch a page, and your briefing fills itself in.</p></section>`;
+
+  const html = `<!doctype html><html><head><meta charset="utf-8"><title>Your briefing</title><style>
+    :root{--bg:#fff;--fg:#1a1a1a;--muted:#6b7280;--line:#e5e7eb;--accent:#2563eb;--card:#f9fafb}
+    @media (prefers-color-scheme:dark){:root{--bg:#0f1115;--fg:#e6e7ea;--muted:#9aa0a6;--line:#262a30;--accent:#6ea8ff;--card:#151821}}
+    *{box-sizing:border-box}body{margin:0;font:16px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;color:var(--fg);background:var(--bg)}
+    .wrap{max-width:760px;margin:0 auto;padding:40px 28px}
+    .b-hero{margin:0 0 4px;font-size:30px;font-weight:750;letter-spacing:-.02em}
+    .b-date{color:var(--muted);margin:0 0 28px;font-size:15px}
+    section{margin:0 0 30px}
+    h2{font-size:15px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);border-bottom:1px solid var(--line);padding-bottom:8px;margin:0 0 14px}
+    h3{font-size:15px;margin:16px 0 6px}
+    ul.b-list{list-style:none;margin:0;padding:0}
+    ul.b-list li{padding:9px 0;border-bottom:1px solid var(--line)}
+    ul.b-list li:last-child{border-bottom:none}
+    a{color:var(--accent);text-decoration:none}a:hover{text-decoration:underline}
+    .b-title{font-weight:600}
+    .b-meta{display:block;color:var(--muted);font-size:13px;margin-top:2px}
+    .b-feed{margin-bottom:8px}
+    .b-empty{color:var(--muted)}
+  </style></head><body><div class="wrap">
+    <h1 class="b-hero">Your briefing</h1>
+    <p class="b-date">${esc(dateLine)} · what’s changed since you last looked</p>
+    ${body}
+  </div></body></html>`;
+
+  const t = tab && !isTabBusy(tab.id) ? tab : newTab(true);
+  if (t !== activeTab()) { activeId = t.id; renderTabs(); }
+  t.title = 'Your briefing';
+  pushEntry(t, { kind: 'page', html, title: 'Your briefing', query: 'my briefing', linksNewTab: true });
+  renderTabs();
+  renderCurrentPage();
+  refreshComposer();
+  scheduleSave();
 }
 
 // --- Your Feeds: pull subscriptions on a cadence -----------------------------
@@ -5503,8 +6025,18 @@ function confirmAgentAction(a) {
   });
 }
 
-// The read → decide → act loop, bounded and gated.
-async function startAgent(task) {
+// Does this live-site request mean "unsubscribe me"? Broad on purpose (the agent's
+// confirm gate is the real safety), but excludes the Your-Feeds phrasings handled
+// off-site by parseUnsubscribeIntent.
+function isUnsubscribeIntent(text) {
+  const q = String(text || '').trim();
+  return /\bunsubscribe\b|\bopt[-\s]?out\b|\bstop\s+(?:these\s+|the\s+|getting\s+)?(?:emails?|e-?mails?|notifications?|newsletters?)\b|\btake\s+me\s+off\b.*\b(?:list|emails?)\b/i.test(q);
+}
+
+// The read → decide → act loop, bounded and gated. `opts.ledger` (if set) logs a
+// Trust Ledger entry when the agent finishes, so an autonomous live-site action
+// (e.g. an unsubscribe) is recorded alongside everything else Sprig does.
+async function startAgent(task, opts = {}) {
   const tab = activeTab();
   const cur = currentEntry(tab);
   if (!cur || cur.kind !== 'navigate') return; // only on a live site
@@ -5547,7 +6079,11 @@ async function startAgent(task) {
 
       const a = resp.action;
       steps.push(a);
-      if (a.action === 'finish') { addMessage(tab, 'bot', '✅ ' + (a.reason || 'Done.')); break; }
+      if (a.action === 'finish') {
+        addMessage(tab, 'bot', '✅ ' + (a.reason || 'Done.'));
+        if (opts.ledger) logLedger({ kind: 'agent-action', title: opts.ledger.title || 'Live-site action', detail: a.reason || 'Completed.', url: opts.ledger.url || (cur && cur.url) || '' });
+        break;
+      }
       if (a.action === 'need_user') { addMessage(tab, 'bot', '🙋 ' + (a.reason || 'I’ll let you take it from here.')); break; }
 
       // Every action passes through the deterministic control layer (RFC 0006).
@@ -5783,8 +6319,7 @@ const MAP_NODE_H = 56;
 const MAP_GAP_X = 26;
 const MAP_GAP_Y = 48;
 
-function renderMap() {
-  const tab = activeTab();
+function renderMap(tab = activeTab()) {
   els.mapEdges.innerHTML = '';
   [...els.mapCanvas.querySelectorAll('.map-node')].forEach((n) => n.remove());
   if (!tab || !tab.pages.length) {
@@ -5860,19 +6395,115 @@ function renderMap() {
   if (curNode) setTimeout(() => curNode.scrollIntoView({ block: 'center', inline: 'center' }), 0);
 }
 
+// Clicking a node jumps to that page in ITS tab (the canvas maps another tab's
+// tree, so switch to that tab rather than the canvas tab we're viewing from).
 function jumpToNode(tab, id) {
+  if (!tab) return;
   tab.currentId = id;
-  closeMap();
+  if (tab.id !== activeId) { activeId = tab.id; renderConversation(); refreshComposer(); }
   renderCurrentPage();
   renderTabs();
   scheduleSave();
 }
 
-function openMap() { renderMap(); els.mapView.classList.add('open'); }
-function closeMap() { els.mapView.classList.remove('open'); }
+// --- Viewport-view panels (Desk / Agents / Canvas) open as tabs --------------
+// Shared boilerplate: hide the frame/overlay/webviews and reveal one panel, exactly
+// like renderSettingsView/renderLibraryView.
+function showViewportPanel(el) {
+  hideWebviews();
+  els.frame.hidden = true;
+  els.frame.removeAttribute('srcdoc');
+  liveSrcdoc = '';
+  els.overlay.hidden = true;
+  hideViewportViews(el);
+  el.hidden = false;
+}
+
+// Reuse an existing tab of this kind, or open a fresh one. Mirrors openSettings/
+// openLibrary so a panel behaves like any other Chervil tab (in the strip, in
+// history, one instance).
+function openPanelTab(kind, title, seed) {
+  const existing = tabs.find((t) => { const e = currentEntry(t); return e && e.kind === kind; });
+  if (existing) {
+    if (seed) { const e = currentEntry(existing); if (e) Object.assign(e, seed); }
+    switchTab(existing.id);
+    // switchTab no-ops when the tab is already active, so a seed (e.g. deep-linking
+    // to a rail section on the panel you're already viewing) needs an explicit render.
+    if (seed && activeId === existing.id) renderCurrentPage();
+    return existing;
+  }
+  const tab = newTab(true);
+  pushEntry(tab, { kind, title, ...(seed || {}) });
+  tab.title = title;
+  renderTabs();
+  renderCurrentPage();
+  scheduleSave();
+  return tab;
+}
+
+// Close a panel tab the same way Settings/Library do: step back if it was pushed
+// onto an existing tab's history, otherwise close the whole tab.
+function closePanelEntry(kind) {
+  const tab = activeTab();
+  const entry = currentEntry(tab);
+  if (!entry || entry.kind !== kind) return;
+  if (parentOf(tab, entry)) goBack();
+  else closeTab(tab.id);
+}
+
+function openMap() {
+  // The canvas maps the CURRENT tab's tree — capture it as the source before the
+  // canvas tab becomes active, so we don't end up mapping the canvas tab itself.
+  const src = activeTab();
+  openPanelTab('canvas', 'Thinking canvas', { sourceTabId: src ? src.id : null });
+}
+function renderCanvasView(entry) {
+  showViewportPanel(els.mapView);
+  const src = entry && entry.sourceTabId ? tabs.find((t) => t.id === entry.sourceTabId) : null;
+  renderMap(src || null);
+}
+
+// Show one left-rail section of a panel and hide the rest — the generic twin of
+// setSettingsTab, keyed by a data-attribute (`desk`/`agents`) so one function drives
+// both panels. Tab buttons carry the same attribute, so skip them when toggling.
+function setPanelSection(viewEl, dataAttr, section) {
+  if (!viewEl) return;
+  const key = dataAttr; // data-desk → dataset.desk (no dashes to camelCase here)
+  viewEl.querySelectorAll('.panel-tab').forEach((b) => b.classList.toggle('active', b.dataset[key] === section));
+  viewEl.querySelectorAll('[data-' + dataAttr + ']').forEach((el) => {
+    if (el.classList.contains('panel-tab')) return;
+    el.style.display = el.dataset[key] === section ? '' : 'none';
+  });
+  const content = viewEl.querySelector('.panel-content');
+  if (content) content.scrollTop = 0;
+}
+
+// `section` optionally deep-links to a rail section (e.g. 'ledger'); guarded to a
+// string so a stray click-event arg can't poison entry.deskSection.
+function openDesk(section) {
+  const seed = typeof section === 'string' ? { deskSection: section } : null;
+  openPanelTab('desk', 'Sprig’s Desk', seed);
+}
+function renderDeskView(entry) {
+  showViewportPanel(els.schedView);
+  populateSchedAgentSelect();
+  renderIntents();
+  renderSchedules();
+  renderLedger();
+  setPanelSection(els.schedView, 'desk', (entry && entry.deskSection) || 'goals');
+}
+
+function openAgents() { openPanelTab('agents', 'Agents'); }
+function renderAgentsView(entry) {
+  showViewportPanel(els.agentsView);
+  renderAgents();
+  renderStoreSection();
+  renderPipelinesSection();
+  renderStarterAgents();
+  setPanelSection(els.agentsView, 'agents', (entry && entry.agentsSection) || 'mine');
+}
 
 // --- Scheduled agents UI ----------------------------------------------------
-function openSched() { populateSchedAgentSelect(); renderSchedules(); renderWatchers(); els.schedView.classList.add('open'); }
 function populateSchedAgentSelect() {
   const sel = document.getElementById('sched-agent');
   if (!sel) return;
@@ -5886,9 +6517,211 @@ function populateSchedAgentSelect() {
   }
   if (cur && agents.find((a) => a.id === cur)) sel.value = cur;
 }
-function closeSched() { els.schedView.classList.remove('open'); }
-function renderSchedulesIfOpen() { if (els.schedView && els.schedView.classList.contains('open')) renderSchedules(); }
-function renderWatchersIfOpen() { if (els.schedView && els.schedView.classList.contains('open')) renderWatchers(); }
+// The Desk is a tab now — its ✕ closes the tab, and background re-renders happen
+// only while that tab is the one on screen (schedView not hidden).
+function closeSched() { closePanelEntry('desk'); }
+function closeMap() { closePanelEntry('canvas'); }
+const deskVisible = () => els.schedView && !els.schedView.hidden;
+function renderSchedulesIfOpen() { if (deskVisible()) renderSchedules(); }
+function renderWatchersIfOpen() { if (deskVisible()) renderWatchers(); }
+function renderIntentsIfOpen() { if (deskVisible()) renderIntents(); }
+function renderLedgerIfOpen() { if (deskVisible()) renderLedger(); }
+
+// The Standing Intents list — the hero of Sprig's Desk. Each row is an ongoing goal
+// with its last refresh, plus open/run/pause/delete controls.
+function renderIntents() {
+  const list = document.getElementById('intent-list');
+  if (!list) return;
+  list.innerHTML = '';
+  if (!intents.length) {
+    const e = document.createElement('div');
+    e.className = 'sched-empty';
+    e.textContent = 'No standing goals yet. Add one above, or just tell Sprig “keep me posted on …” in the omnibox.';
+    list.appendChild(e);
+    return;
+  }
+  for (const it of intents) {
+    const item = document.createElement('div');
+    item.className = 'sched-item';
+    const main = document.createElement('div');
+    main.className = 'si-main';
+    const title = document.createElement('div');
+    title.className = 'si-title';
+    const isWatch = it.kind === 'watch';
+    title.textContent = (isWatch ? '👁 ' : '🎯 ') + it.topic;
+    const when = document.createElement('div');
+    when.className = 'si-when';
+    const bits = [intentIntervalLabel(it.intervalMs)];
+    if (isWatch) bits.push(it.condition ? `until “${it.condition}”` : 'any change');
+    if (!it.enabled) bits.push('paused');
+    if (it.running) bits.push(isWatch ? 'checking…' : 'refreshing…');
+    const last = it.history && it.history[0];
+    // Show WHAT changed at the last run (fact delta / watch note), not just that it ran.
+    if (isWatch && it.lastValue) bits.push(`now: ${it.lastValue}`);
+    if (last && last.changed && last.delta) bits.push(last.delta);
+    else if (last && last.changed) bits.push('changed ' + relTime(last.at));
+    else if (last) bits.push('checked ' + relTime(last.at) + (isWatch ? '' : ' · no change'));
+    else if (it.lastRun) bits.push('checked ' + relTime(it.lastRun));
+    when.textContent = bits.join(' · ');
+    main.appendChild(title);
+    main.appendChild(when);
+
+    const openBtn = document.createElement('button');
+    openBtn.className = 'si-btn';
+    openBtn.textContent = 'Open';
+    // Watch intents open the watched URL; research intents open their composed page.
+    openBtn.disabled = isWatch ? !it.url : (!it.tabId || !it.entryId);
+    openBtn.addEventListener('click', () => { if (isWatch) openUrlInTab(it.url); else openIntentPage(it); });
+    const runBtn = document.createElement('button');
+    runBtn.className = 'si-btn';
+    runBtn.textContent = isWatch ? 'Check now' : 'Refresh now';
+    runBtn.addEventListener('click', () => runIntent(it));
+    const tog = document.createElement('button');
+    tog.className = 'si-btn';
+    tog.textContent = it.enabled ? 'Pause' : 'Resume';
+    tog.addEventListener('click', () => { it.enabled = !it.enabled; if (it.enabled) startScheduler(); scheduleSave(); renderIntents(); });
+    const del = document.createElement('button');
+    del.className = 'si-btn';
+    del.textContent = 'Delete';
+    del.addEventListener('click', () => deleteIntent(it.id));
+
+    item.appendChild(main);
+    item.appendChild(openBtn);
+    item.appendChild(runBtn);
+    item.appendChild(tog);
+    item.appendChild(del);
+    list.appendChild(item);
+  }
+}
+
+// Jump to a standing intent's composed page: focus its tab and entry, creating a
+// fresh run if the page has aged out of the tree.
+function openIntentPage(it) {
+  const tab = tabs.find((t) => t.id === it.tabId);
+  if (!tab || !it.entryId || !tab.pages.find((p) => p.id === it.entryId)) { runIntent(it); return; }
+  activeId = tab.id;
+  tab.currentId = it.entryId;
+  renderTabs();
+  renderConversation();
+  renderCurrentPage();
+  refreshComposer();
+  scheduleSave();
+}
+
+// Jump to an in-app tab entry referenced from inside a composed page (the deep-link
+// bridge — see the data-chervil-tab handling in CHERVIL_RUNTIME). Degrades to a toast
+// if the tab was closed or the entry rolled out of its history.
+function openEntryRef(tabId, entryId) {
+  const tab = tabs.find((t) => t.id === tabId);
+  if (!tab) { toast('That page isn’t open anymore.'); return; }
+  if (entryId && !tab.pages.find((p) => p.id === entryId)) { toast('That page has rolled off — refresh the goal to rebuild it.'); return; }
+  activeId = tab.id;
+  if (entryId) tab.currentId = entryId;
+  renderTabs();
+  renderConversation();
+  renderCurrentPage();
+  refreshComposer();
+  scheduleSave();
+}
+
+function addIntentFromForm() {
+  const input = document.getElementById('intent-topic');
+  const sel = document.getElementById('intent-interval');
+  if (!input) return;
+  const raw = input.value.trim();
+  if (!raw) return;
+  const intervalMs = parseInt(sel && sel.value, 10) || 86400000;
+  // A URL in the field makes it a watch (poll that page); anything else is a research
+  // goal. Route both through parseStandingIntent's URL detection for one code path.
+  const urlM = raw.match(/^(https?:\/\/[^\s]+|(?:[a-z0-9-]+\.)+(?:com|org|net|io|dev|co|ai|app|edu|gov|news|xyz|info|me|tv|gg|us|uk|ca|au|de|fr|jp|cn|in|nl|se|no|es|it)(?:\/[^\s]*)?)$/i);
+  const it = urlM
+    ? createIntent({ kind: 'watch', url: /^https?:\/\//i.test(raw) ? raw : 'https://' + raw, intervalMs, goal: `Keep me posted on ${raw}` })
+    : createIntent({ topic: raw, intervalMs, goal: `Keep me on top of ${raw}` });
+  if (!it) return;
+  input.value = '';
+  renderIntents();
+  runIntent(it);
+}
+
+// The Trust Ledger — everything Sprig did on his own, newest first, with a View
+// (jump to the page/URL) and an Undo (for reversible actions like an unsubscribe).
+// The Trust Ledger is the ONE auditable place: high-level actions Sprig took on his
+// own (goal refreshes, unsubscribes) MERGED with the low-level live-site agent steps
+// that used to live in the Agents panel (agentAudit) — one time-sorted stream.
+function ledgerRows() {
+  const fromLedger = ledger.map((e) => ({ ...e }));
+  const fromAudit = agentAudit.map((a) => ({
+    id: 'audit:' + a.at + ':' + (a.type || ''),
+    at: a.at,
+    title: `🤖 ${a.type || 'action'}${a.target ? ' — ' + a.target : ''}`,
+    detail: (a.decision || 'allow') + (a.ok === false ? ' · failed' : ''),
+    reversible: false,
+    undone: false,
+  }));
+  return [...fromLedger, ...fromAudit].sort((x, y) => (y.at || 0) - (x.at || 0)).slice(0, 150);
+}
+
+function renderLedger() {
+  const list = document.getElementById('ledger-list');
+  if (!list) return;
+  const rows = ledgerRows();
+  const clearBtn = document.getElementById('ledger-clear');
+  if (clearBtn) clearBtn.hidden = !rows.length;
+  list.innerHTML = '';
+  if (!rows.length) {
+    const e = document.createElement('div');
+    e.className = 'sched-empty';
+    e.textContent = 'Nothing yet. When Sprig refreshes a goal, acts on a live site, or does anything on your behalf, it’s logged here — with an undo where it can be reversed.';
+    list.appendChild(e);
+    return;
+  }
+  for (const e of rows) {
+    const item = document.createElement('div');
+    item.className = 'sched-item';
+    const main = document.createElement('div');
+    main.className = 'si-main';
+    const title = document.createElement('div');
+    title.className = 'si-title';
+    title.textContent = (e.undone ? '↩ ' : '') + e.title;
+    const when = document.createElement('div');
+    when.className = 'si-when';
+    when.textContent = [e.detail, relTime(e.at), e.undone ? 'undone' : ''].filter(Boolean).join(' · ');
+    main.appendChild(title);
+    main.appendChild(when);
+    item.appendChild(main);
+
+    if (e.entryId && e.tabId) {
+      const view = document.createElement('button');
+      view.className = 'si-btn';
+      view.textContent = 'View';
+      view.addEventListener('click', () => {
+        const t = tabs.find((x) => x.id === e.tabId);
+        if (t && t.pages.find((p) => p.id === e.entryId)) {
+          activeId = t.id; t.currentId = e.entryId;
+          renderTabs(); renderConversation(); renderCurrentPage(); refreshComposer(); scheduleSave();
+        } else { toast('That page has rolled off — refresh the goal to rebuild it.'); }
+      });
+      item.appendChild(view);
+    }
+    if (e.reversible && !e.undone) {
+      const undo = document.createElement('button');
+      undo.className = 'si-btn';
+      undo.textContent = 'Undo';
+      undo.addEventListener('click', () => undoLedger(e.id));
+      item.appendChild(undo);
+    }
+    list.appendChild(item);
+  }
+}
+
+function clearLedger() {
+  if (!ledger.length && !agentAudit.length) return;
+  if (!confirm('Clear the Trust Ledger (goal refreshes and live-site agent steps)? This only clears the log — it doesn’t undo anything.')) return;
+  ledger = [];
+  agentAudit = [];
+  renderLedger();
+  scheduleSave();
+}
 // Feeds live in the Library now. Only re-render when the Library is showing the
 // Feeds section — a background pull shouldn't touch the DOM otherwise.
 function renderFeedsIfOpen() { if (libraryOpen() && drawerTab === 'feeds') renderFeeds(); }
@@ -6536,10 +7369,9 @@ function parseAgentFile(text, fallbackName) {
   };
 }
 
-function openAgents() { renderAgents(); renderStoreSection(); renderPipelinesSection(); renderStarterAgents(); renderAuditLog(); els.agentsView.classList.add('open'); }
-
-// Render the agent action audit trail (RFC 0006) — what Sprig did, and what the
-// control layer allowed, confirmed, or denied.
+// Render the agent action audit trail (RFC 0006). The dedicated Agents-view panel
+// was folded into the Trust Ledger, so els.auditList is gone and this early-returns;
+// agentAudit now surfaces (merged, time-sorted) inside renderLedger instead.
 function renderAuditLog() {
   const list = els.auditList;
   if (!list) return;
@@ -6582,7 +7414,7 @@ function clearAuditLog() {
   renderAuditLog();
   scheduleSave();
 }
-function closeAgents() { els.agentsView.classList.remove('open'); }
+function closeAgents() { closePanelEntry('agents'); }
 function setActiveAgent(id) { activeAgentId = id; scheduleSave(); renderAgents(); updateAgentChip(); }
 
 // Show the active agent as a dismissible chip above the composer.
@@ -8069,6 +8901,47 @@ function handleComposerSubmit(text, opts = {}) {
   if (compareCmd) { buildAndRenderSkill(tab, 'compare', compareCmd[1].trim(), 'comparison'); return; }
   if (skillMode) { buildAndRenderSkill(tab, skillMode, query, SKILL_LABELS[skillMode] || 'page'); return; }
 
+  // These NL delegations belong to the compose context — on a live site the same
+  // words should still drive the web agent (an on-page unsubscribe, a "watch this")
+  // rather than being intercepted here.
+  const onLiveSite = (() => { const c = currentEntry(tab); return !!(c && c.kind === 'navigate'); })();
+
+  // "My briefing / catch me up" → assemble a page from your own signals (standing
+  // intents, watchers that fired, recent feed items). Deterministic and instant.
+  if (!onLiveSite && isBriefingQuery(query)) { buildBriefing(tab); return; }
+
+  // "Keep me posted on X" → a standing intent: Sprig re-composes a briefing on the
+  // topic on a cadence and logs each run. Narrowly parsed so it can't hijack an
+  // ordinary compose (see parseStandingIntent).
+  if (!onLiveSite) {
+    const si = parseStandingIntent(query);
+    if (si) {
+      els.prompt.value = '';
+      resetPromptHeight();
+      addMessage(tab, 'user', query);
+      if (tab.private) { addMessage(tab, 'bot', 'Standing intents aren’t available in private tabs.', 'note'); return; }
+      const it = createIntent(si);
+      if (!it) { addMessage(tab, 'bot', 'I couldn’t set that up — try naming a clearer topic or page.', 'note'); return; }
+      const msg = it.kind === 'watch'
+        ? `On it — I’ll watch ${it.topic} ${it.condition ? `until “${it.condition}”` : 'for any change'} and check ${intentIntervalLabel(it.intervalMs)}. It’s on 🗓 Sprig’s Desk, and I’ll log changes to your Trust Ledger. Taking a baseline now…`
+        : `On it — I’ll keep on top of “${it.topic}” and refresh a briefing ${intentIntervalLabel(it.intervalMs)}. It’s on 🗓 Sprig’s Desk, and every update lands in your Trust Ledger. Running the first one now…`;
+      addMessage(tab, 'bot', msg, 'note');
+      runIntent(it);
+      return;
+    }
+  }
+
+  // "Unsubscribe me from X" → a bounded, reversible autonomous action: find the
+  // matching feed(s), confirm, remove, and log an undoable Trust Ledger entry.
+  if (!onLiveSite) {
+    const unsub = parseUnsubscribeIntent(query);
+    if (unsub) {
+      if (tab.private) { addMessage(tab, 'user', query); addMessage(tab, 'bot', 'Managing subscriptions isn’t available in private tabs.', 'note'); return; }
+      unsubscribeByIntent(tab, query, unsub.name);
+      return;
+    }
+  }
+
   // On an image-editor tab the composer edits THE IMAGE — "add a red arrow at
   // the button" must not web-search and compose a new page (or chat). Explicit
   // navigation still escapes ("open my email", "go to github.com").
@@ -8159,8 +9032,27 @@ function handleComposerSubmit(text, opts = {}) {
     // "Watch this page / tell me when …" → set up a page watcher on this URL.
     const watch = parseWatchIntent(query);
     if (watch) {
-      createWatcher(cur.url, tab.title || hostOf(cur.url), watch.condition);
+      // "Watch this page…" now creates a watch-kind STANDING INTENT (the Watchers
+      // section was folded into Sprig's Desk), so page-watches live in one place.
       els.prompt.value = ''; resetPromptHeight();
+      if (tab.private) { addMessage(tab, 'bot', 'Watching isn’t available in private tabs.', 'note'); return; }
+      const title = tab.title || hostOf(cur.url);
+      const it = createIntent({ kind: 'watch', url: cur.url, topic: title, condition: watch.condition, intervalMs: 3600000, goal: `Watch ${title}` });
+      if (it) {
+        toast(`👁 Watching “${it.topic}” ${it.condition ? `until “${it.condition}”` : 'for changes'} — it’s on 🗓 Sprig’s Desk.`);
+        runIntent(it);
+      }
+      return;
+    }
+    // "Unsubscribe me from this" ON A LIVE SITE → drive the web agent to find and
+    // use the page's own unsubscribe/opt-out control. The agent's existing plan +
+    // per-action confirm gate handles the irreversible click; we log the outcome to
+    // the Trust Ledger. (Off-site, the same words manage Your-Feeds — see above.)
+    if (isUnsubscribeIntent(query)) {
+      startAgent(
+        `On THIS page, unsubscribe the user from these emails/notifications. Find the unsubscribe, "email preferences", "manage notifications", or opt-out control and complete the opt-out. Stop and ask before any final irreversible confirmation. Original request: “${query}”.`,
+        { ledger: { title: `Unsubscribe on ${hostOf(cur.url)}`, url: cur.url } },
+      );
       return;
     }
     startAgent(query);
@@ -12206,7 +13098,7 @@ function setSettingsTab(group) {
 const TOOLBAR_BUTTONS = [
   { key: 'map', id: 'map-btn', label: 'Map' },
   { key: 'history', id: 'history-btn', label: 'Library' },
-  { key: 'schedules', id: 'sched-btn', label: 'Schedules' },
+  { key: 'schedules', id: 'sched-btn', label: 'Desk' },
   { key: 'agents', id: 'agents-btn', label: 'Agents' },
   { key: 'pwFill', id: 'autofill-pw-btn', label: 'Fill saved login (🔑)' },
   { key: 'cardFill', id: 'autofill-card-btn', label: 'Fill saved card (💳)' },
@@ -12264,8 +13156,11 @@ function applyToolbar() {
 
 function setToolbarVisible(key, visible) {
   if (!settings.toolbar) settings.toolbar = {};
-  if (visible) delete settings.toolbar[key];
-  else settings.toolbar[key] = false;
+  // Store the explicit choice both ways. The old code deleted the override when
+  // ticked, which only reads as "on the bar" for buttons whose DEFAULT is on-bar —
+  // for a default-in-menu button (Map, Desk, Agents, …) it fell back to "in menu",
+  // so ticking it did nothing and the box snapped back. Ticked = on the bar, always.
+  settings.toolbar[key] = !!visible;
   applyToolbar();
   scheduleSave();
 }
@@ -12645,7 +13540,7 @@ function scheduleSave() {
     // `feeds` is subscriptions only — items live in the page index. Putting them
     // here would grow this payload without bound, which is the thing the comment
     // above is about.
-    const state = { tabs: persistTabs, activeId: persistActiveId, tabGroups, settings, bookmarks, bookmarkFolders, bookmarkTombstones, favorites, favoriteFolders, favoriteTombstones, collections, deletionTombstones, siteHistory, downloads, agentAudit, spaces, activeSpaceId, savedSpaces, activeSavedSpaceId, living, schedules, watchers, feeds, agents, activeAgentId, pipelines, pageStores, dossierOffers, dossierDismissed, corrections };
+    const state = { tabs: persistTabs, activeId: persistActiveId, tabGroups, settings, bookmarks, bookmarkFolders, bookmarkTombstones, favorites, favoriteFolders, favoriteTombstones, collections, deletionTombstones, siteHistory, downloads, agentAudit, spaces, activeSpaceId, savedSpaces, activeSavedSpaceId, living, schedules, watchers, intents, ledger, feeds, agents, activeAgentId, pipelines, pageStores, dossierOffers, dossierDismissed, corrections };
     if (!libraryFromIndex) state.library = library;
     window.chervil.saveState(state)
       .then((r) => { if (r && r.mtimeMs) lastStateMtimeMs = r.mtimeMs; }) // our own write — keep baseline current
@@ -12689,7 +13584,13 @@ async function reconcileNow() {
   if (Array.isArray(m.savedSpaces)) savedSpaces = m.savedSpaces.filter((s) => s && s.id);
   if (Array.isArray(m.agents)) agents = m.agents;
   if (Array.isArray(m.schedules)) schedules = m.schedules;
+  // Standing intents + Trust Ledger sync live too (this was previously only applied
+  // on reload). Apply intents BEFORE draining watchers so the fromWatcher dedup sees
+  // what's already migrated.
+  if (Array.isArray(m.intents)) intents = m.intents.filter((it) => it && it.topic && it.intervalMs).map((it) => ({ ...it, running: false, history: Array.isArray(it.history) ? it.history : [] }));
+  if (Array.isArray(m.ledger)) ledger = m.ledger.filter((e) => e && e.id && e.title);
   if (Array.isArray(m.watchers)) watchers = m.watchers.filter((w) => w && w.url).map((w) => ({ ...w, running: false }));
+  migrateWatchersToIntents(); // classic watchers → watch-intents (idempotent)
   if (Array.isArray(m.feeds)) {
     feeds = m.feeds.filter((f) => f && f.id && f.type && f.config);
     // A feed subscribed on another machine has no cursor here, so it reads as due
@@ -12912,6 +13813,17 @@ async function init() {
       .filter((w) => w && w.url && w.intervalMs)
       .map((w) => ({ ...w, running: false })); // keep lastRun so cadence resumes without a launch burst
   }
+  if (restored && Array.isArray(restored.intents)) {
+    intents = restored.intents
+      .filter((it) => it && it.topic && it.intervalMs)
+      .map((it) => ({ ...it, running: false, history: Array.isArray(it.history) ? it.history : [] }));
+  }
+  if (restored && Array.isArray(restored.ledger)) {
+    ledger = restored.ledger.filter((e) => e && e.id && e.title);
+  }
+  // Consolidation: fold any classic watchers (this profile's, or older) into
+  // watch-intents now that both are restored, then the Watchers section is gone.
+  migrateWatchersToIntents();
   if (restored && Array.isArray(restored.feeds)) {
     // No `running:false` reset needed — unlike watchers, a feed's runtime never
     // touches this record (it's in feedStatus, in memory), so a crash mid-fetch
@@ -14378,17 +15290,41 @@ for (const btn of [els.back, els.fwd]) {
 
 // Thinking canvas (page map)
 els.mapBtn.addEventListener('click', openMap);
-els.schedBtn.addEventListener('click', openSched);
-els.schedView.addEventListener('click', (e) => { if (e.target === els.schedView) closeSched(); });
-document.getElementById('sched-close').addEventListener('click', closeSched);
+els.schedBtn.addEventListener('click', () => openDesk());
+// Left-rail section switching — mirror the chosen section onto the tab's entry so a
+// switch away and back (or a restart) returns to the same section, like Settings.
+{
+  const nav = els.schedView && els.schedView.querySelector('.panel-nav');
+  if (nav) nav.addEventListener('click', (e) => {
+    const b = e.target.closest('.panel-tab');
+    if (!b) return;
+    const section = b.dataset.desk;
+    const entry = currentEntry(activeTab());
+    if (entry && entry.kind === 'desk') { entry.deskSection = section; scheduleSave(); }
+    setPanelSection(els.schedView, 'desk', section);
+  });
+}
 document.getElementById('sched-type').addEventListener('change', onSchedTypeChange);
 document.getElementById('sched-form').addEventListener('submit', (e) => { e.preventDefault(); addScheduleFromForm(); });
 { const wf = document.getElementById('watch-form'); if (wf) wf.addEventListener('submit', (e) => { e.preventDefault(); addWatcherFromForm(); }); }
+{ const inf = document.getElementById('intent-form'); if (inf) inf.addEventListener('submit', (e) => { e.preventDefault(); addIntentFromForm(); }); }
+{ const bb = document.getElementById('briefing-btn'); if (bb) bb.addEventListener('click', () => buildBriefing(null)); }
+{ const lc = document.getElementById('ledger-clear'); if (lc) lc.addEventListener('click', clearLedger); }
 { const ff = document.getElementById('feed-form'); if (ff) ff.addEventListener('submit', (e) => { e.preventDefault(); addFeedFromForm(); }); }
 if (els.libImportOpml) els.libImportOpml.addEventListener('click', importFeedsFromOpml);
 els.agentsBtn.addEventListener('click', openAgents);
-els.agentsView.addEventListener('click', (e) => { if (e.target === els.agentsView) closeAgents(); });
-document.getElementById('agents-close').addEventListener('click', closeAgents);
+{
+  const nav = els.agentsView && els.agentsView.querySelector('.panel-nav');
+  if (nav) nav.addEventListener('click', (e) => {
+    const b = e.target.closest('.panel-tab');
+    if (!b) return;
+    const section = b.dataset.agents;
+    const entry = currentEntry(activeTab());
+    if (entry && entry.kind === 'agents') { entry.agentsSection = section; scheduleSave(); }
+    setPanelSection(els.agentsView, 'agents', section);
+  });
+}
+{ const ol = document.getElementById('agents-open-ledger'); if (ol) ol.addEventListener('click', () => openDesk('ledger')); }
 if (els.auditClear) els.auditClear.addEventListener('click', clearAuditLog);
 document.getElementById('agent-import').addEventListener('click', importAgentFile);
 document.getElementById('agent-add').addEventListener('click', addAgentFromPaste);
@@ -14405,7 +15341,6 @@ document.getElementById('agent-add').addEventListener('click', addAgentFromPaste
   if (storeCat) storeCat.addEventListener('change', () => { if (storeAgentsCache !== null) loadStoreAgents(); });
 }
 els.mapClose.addEventListener('click', closeMap);
-els.mapView.addEventListener('click', (e) => { if (e.target === els.mapView) closeMap(); });
 
 // Remix bar + audio controls
 els.remixBar.addEventListener('click', (e) => {
@@ -15032,9 +15967,9 @@ document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') {
     if (findIsOpen()) { closeFind(); return; }
     if (tabSwitcherIsOpen()) { closeTabSwitcher(); return; }
-    if (els.agentsView.classList.contains('open')) { closeAgents(); return; }
-    if (els.schedView.classList.contains('open')) { closeSched(); return; }
-    if (els.mapView.classList.contains('open')) { closeMap(); return; }
+    if (els.agentsView && !els.agentsView.hidden) { closeAgents(); return; }
+    if (els.schedView && !els.schedView.hidden) { closeSched(); return; }
+    if (els.mapView && !els.mapView.hidden) { closeMap(); return; }
     if (settingsOpen()) { closeSettings(); return; }
     if (libraryOpen()) { closeLibrary(); return; }
     // Nothing else consumed Esc — stop the active tab if it's composing.
@@ -15060,6 +15995,7 @@ window.addEventListener('message', (e) => {
   const d = e.data;
   if (!d || d.__chervil !== true) return;
   if (d.type === 'link' && d.href) { handleLinkClick(d.href, d.text || '', !!d.newtab); return; }
+  if (d.type === 'open-entry' && d.tab) { openEntryRef(d.tab, d.entry || ''); return; }
   if (d.type === 'tool') { handleAppletTool(e.source, d); return; }
   if (d.type === 'tts') { handleFrameTts(e.source, d); return; }
   if (d.type === 'scroll' && typeof d.y === 'number') { previewScrollY = d.y; return; }
@@ -15386,6 +16322,15 @@ if (window.chervil.onContextAsk) {
     const cur = els.prompt.value.trim();
     els.prompt.value = cur ? `${cur} ${t}` : t;
     els.prompt.focus();
+  });
+}
+
+// Right-click → "Open Link in New Tab" opens the URL as a live site in a new tab.
+if (window.chervil.onContextOpenTab) {
+  window.chervil.onContextOpenTab((url) => {
+    const u = String(url || '').trim();
+    if (!/^https?:\/\//i.test(u)) return;
+    openUrlInNewTab(u);
   });
 }
 

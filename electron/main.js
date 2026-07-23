@@ -396,10 +396,25 @@ function attachContextMenu(wc, opts = {}) {
     const sel = (params.selectionText || '').trim();
 
     if (params.linkURL) {
-      groups.push([
+      const linkGroup = [];
+      // Open a web link in a fresh Chervil tab (like Chrome's "Open in new tab").
+      // Only for real http(s) links; the renderer owns the tab strip, so hand it off.
+      if (/^https?:\/\//i.test(params.linkURL)) {
+        linkGroup.push({
+          label: 'Open Link in New Tab',
+          click: () => {
+            if (mainWindow && !mainWindow.webContents.isDestroyed()) {
+              mainWindow.show();
+              mainWindow.webContents.send('chervil:context-open-tab', params.linkURL);
+            }
+          },
+        });
+      }
+      linkGroup.push(
         { label: 'Open Link in Browser', click: () => shell.openExternal(params.linkURL) },
         { label: 'Copy Link Address', click: () => clipboard.writeText(params.linkURL) },
-      ]);
+      );
+      groups.push(linkGroup);
     }
 
     if (params.mediaType === 'image' && params.srcURL) {

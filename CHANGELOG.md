@@ -6,6 +6,67 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.26.0] — 2026-07-23
+
+**Sprig's Desk — the browser that keeps working when you close the laptop.** Until now
+Chervil answered when you asked. This release lets you *delegate* — hand Sprig an ongoing
+goal in plain language and he keeps at it in the background, tells you only when something
+actually changed, and shows you everything he did while you were away. The novel part
+isn't any single trick; it's the combination nothing else has: persistent, proactive,
+**local**, and **auditable**.
+
+### Added
+
+- **Standing Intents — delegate an ongoing goal, not a one-off question.** Say
+  *"keep me posted on the Electron 40 release"* and Sprig keeps a fresh, cited briefing on
+  it on whatever cadence you choose — hourly to weekly. It's the reframe from "an AI you
+  query" to "an AI that works for you," and it lives on a new home base, **🗓 Sprig's Desk**.
+- **It only tells you when something real moved.** A re-composed briefing always reads
+  differently, so "this changed" used to mean nothing. Now Sprig compares the *figures*
+  between runs — *starting price $1,999 → $1,799* — and stays quiet unless a number,
+  price, or date actually shifts. The first run pings so you know the goal is live; after
+  that, silence means nothing changed.
+- **Watch a page as a standing goal.** Point a goal at a URL instead of a topic —
+  *"keep me posted on example.com/pricing until it drops below $50"* — and Sprig watches
+  that page for a price drop, back-in-stock, or a docs update. (This absorbs the old Page
+  Watchers; see Changed.)
+- **The Trust Ledger — a plain-language record of everything Sprig did on his own.**
+  Every goal refresh and every action he takes is logged in one place you can read, with a
+  one-click **undo** wherever the action can be reversed. Auditable autonomy is the whole
+  point: an agent you can't see isn't one you can trust.
+- **"My briefing" — your web, on one page.** Say *"my briefing"* or *"catch me up"* and
+  Chervil assembles a page from your own signals — what your standing goals turned up,
+  what changed, and the latest from your feeds. Built on your machine from real records,
+  so it's instant and never invents anything.
+- **Unsubscribe, done for you.** Off a website, *"unsubscribe me from &lt;newsletter&gt;"*
+  removes the matching feed with a one-click undo in the Ledger. On a live site, Sprig
+  drives the page's own unsubscribe flow — planning it, pausing for your OK before the
+  irreversible click, and logging the outcome.
+
+### Changed
+
+- **Page Watchers are now Standing Intents.** The separate Watchers list is gone; watching
+  a page is just a goal with a URL, so everything Sprig keeps an eye on lives in one place.
+  Your existing watchers are migrated automatically — nothing to redo.
+- **The Desk, Agents, and Thinking-canvas panels are real tabs now**, not floating pop-ups
+  — they open in the tab strip with a left-hand section rail, exactly like Settings and the
+  Library. Back/forward and Escape work the way they should.
+- **The agent activity log folded into the Trust Ledger.** What used to be a separate panel
+  in Agents is now part of the one ledger, so there's a single place to see everything —
+  background goal refreshes and live-site agent steps alike.
+- **Right-clicking a source link in chat now offers "Open Link in New Tab"** (a Chervil
+  tab), alongside opening in your browser or copying the address.
+
+### Fixed
+
+- **Copying or opening a chat source link gave a local file path.** Right-clicking a source
+  under a chat reply copied `file:///…/index.html#` instead of the actual source URL,
+  because the link had no real address on it. It carries the real URL now.
+- **Ticking a toolbar button that wasn't on the bar did nothing.** In Settings → Toolbar
+  buttons, checking a default-hidden button (Map, Desk, Agents…) to pin it to the bar
+  silently reverted. Ticking now always puts the button on the bar; unticking moves it to
+  the ⋯ menu — for every button.
+
 ## [0.25.0] — 2026-07-22
 
 **Show your work.** An AI that answers in one confident voice is hiding something: the
