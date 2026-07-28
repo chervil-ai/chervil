@@ -6,6 +6,34 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.27.0] — 2026-07-28
+
+**Sprig on your home screen.** Chervil Chat — Sprig in your pocket — gets a proper
+Android home‑screen widget: a one‑tap pill that drops you straight into a chat, a photo
+question, or voice. And when publishing to getchervil.com stops working because your
+token was regenerated, Chervil now says so plainly and sends you to fix it, instead of
+leaving you with a vague error.
+
+### Added
+
+- **Chervil Chat on your Android home screen.** A new companion Android app wraps
+  Chervil Chat (getchervil.com/chat) as an installable app and adds a home‑screen
+  widget: a translucent pill with a green **Sprig** chip plus **photo** and **voice**
+  buttons. Tap the chip to chat, the camera to ask about a picture, or the waveform to
+  talk — each opens Chervil Chat straight to that action. Built as a Trusted Web
+  Activity, so it runs full‑screen with no browser chrome. (Chervil Pro.)
+
+### Fixed
+
+- **A clear path when your publish token stops working.** If getchervil.com no longer
+  recognizes your publish token — usually because it was regenerated on the website, or
+  your account was reset — publishing used to fail with a generic “couldn’t publish.”
+  Chervil now detects that specific case (a 401 from the publish, lesson, agent, or
+  cloud‑refresh calls) and tells you the token is no longer valid, with one‑tap actions
+  to generate a new one at getchervil.com/me and open Settings → Publishing. The
+  Account panel in Settings → You calls it out specifically too, rather than a blanket
+  “couldn’t verify your account.”
+
 ## [0.26.0] — 2026-07-23
 
 **Sprig's Desk — the browser that keeps working when you close the laptop.** Until now

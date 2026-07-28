@@ -13422,10 +13422,15 @@ async function renderAccountBox() {
   box.innerHTML = '';
 
   if (!res || !res.ok) {
-    box.appendChild(hint(res && res.error ? `Couldn't verify your account (${res.error}).` : 'Couldn’t reach getchervil.com to check your account.'));
+    // A rejected token (401) is a distinct, fixable state — don't bury it in a
+    // generic "couldn't verify". Tell the user the token is stale and where to
+    // mint a fresh one; the value is saved fine, it just isn't recognized anymore.
+    box.appendChild(hint(res && res.code === 'bad_token'
+      ? 'Your publish token is no longer valid — it was likely regenerated on the website or your account was reset. Generate a new token at getchervil.com/me and paste it under Publishing below.'
+      : (res && res.error ? `Couldn't verify your account (${res.error}).` : 'Couldn’t reach getchervil.com to check your account.')));
     const acts = document.createElement('div');
     acts.className = 'account-actions';
-    acts.appendChild(linkBtn('Open your account →', base + '/me', true));
+    acts.appendChild(linkBtn(res && res.code === 'bad_token' ? 'Generate a new token →' : 'Open your account →', base + '/me', true));
     box.appendChild(acts);
     return;
   }
@@ -14793,6 +14798,27 @@ function addToAnyShareAction(title, url, done, shared) {
   };
 }
 
+// getchervil.com returned 401 for our publish token (main tags these res.code
+// 'bad_token'). The token IS saved locally — it's just no longer recognized by the
+// server (regenerated on the website, or the account/DB was reset). Re-typing the
+// same dead token won't help, so send the user straight to mint a fresh one instead
+// of surfacing a generic "couldn't publish". This is the common "my token stopped
+// working after an update" report: the value persisted fine; the server rotated it.
+function isBadToken(res) { return !!(res && res.code === 'bad_token'); }
+function reportBadToken(tab, noun) {
+  const base = (settings.publishBase || 'https://getchervil.com').replace(/\/+$/, '');
+  const msg = `Your publish token is no longer valid, so ${noun ? 'that ' + noun : 'the page'} couldn’t be published. Sign in at ${base.replace(/^https?:\/\//, '')}/me, generate a new publish token, then paste it into Settings → Publishing.`;
+  if (tab) addMessage(tab, 'bot', msg, 'error'); else toast('Publish token invalid — regenerate it at getchervil.com/me.');
+  showActionSheet(
+    'Publish token no longer valid',
+    'getchervil.com didn’t recognize your token. It was likely regenerated on the website, or your account was reset. Grab a fresh token and paste it in — your pages and settings are untouched.',
+    [
+      { label: 'Open getchervil.com/me', onClick: () => { if (window.chervil.openExternal) window.chervil.openExternal(base + '/me'); } },
+      { label: 'Open Settings → Publishing', onClick: () => openSettings('publishing') },
+    ]
+  );
+}
+
 async function publishCurrentPage(kind = 'page') {
   const tab = activeTab();
   const entry = currentEntry(tab);
@@ -14843,6 +14869,8 @@ async function publishCurrentPage(kind = 'page') {
       };
       // Share first (Your places), then the cloud-live offer once that's done.
       offerShareToNetworks(entry.title || entry.query || 'my new page', res.url, offerCloud);
+    } else if (isBadToken(res)) {
+      reportBadToken(tab, noun);
     } else {
       addMessage(tab, 'bot', `Couldn’t publish: ${(res && res.error) || 'unknown error'}`, 'error');
     }
@@ -14876,6 +14904,8 @@ async function publishCurrentLesson() {
       addMessage(tab, 'bot', `${res.updated ? 'Updated' : 'Published'} — it’s live at ${res.url}`);
       try { await navigator.clipboard.writeText(res.url); toast('Published — link copied to clipboard.'); } catch { toast('Published.'); }
       offerShareToNetworks(entry.title || 'my new lesson', res.url);
+    } else if (isBadToken(res)) {
+      reportBadToken(tab, 'lesson');
     } else {
       addMessage(tab, 'bot', `Couldn’t publish: ${(res && res.error) || 'unknown error'}`, 'error');
     }

@@ -849,7 +849,7 @@ ipcMain.handle('chervil:account-status', async (_event, payload) => {
     const base = String((payload && payload.baseUrl) || 'https://getchervil.com').replace(/\/+$/, '');
     const res = await fetch(`${base}/api/account`, { headers: { Authorization: `Bearer ${token}` } });
     const data = await res.json().catch(() => ({}));
-    if (!res.ok) return { ok: false, error: data.error || `Account check failed (${res.status}).` };
+    if (!res.ok) return { ok: false, code: res.status === 401 ? 'bad_token' : undefined, error: data.error || `Account check failed (${res.status}).` };
     return { ok: true, pro: !!data.pro, username: data.username || null };
   } catch (err) {
     return { ok: false, error: String(err && err.message ? err.message : err) };
@@ -1786,6 +1786,7 @@ ipcMain.handle('chervil:publish-lesson', async (_event, payload) => {
     const data = await res.json().catch(() => ({}));
     if (!res.ok) {
       if (res.status === 404) return { ok: false, error: 'Publishing isn’t available yet — the Chervil hosted service (getchervil.com) is still in development. (404)' };
+      if (res.status === 401) return { ok: false, code: 'bad_token', error: data.error || 'Your publish token isn’t valid anymore.' };
       return { ok: false, error: data.error || `Publish failed (${res.status}).` };
     }
     return { ok: true, url: data.url, id: data.id, updated: data.updated };
@@ -1816,6 +1817,7 @@ ipcMain.handle('chervil:publish-page', async (_event, payload) => {
     const data = await res.json().catch(() => ({}));
     if (!res.ok) {
       if (res.status === 404) return { ok: false, error: 'Publishing isn’t available yet — the Chervil hosted service (getchervil.com) is still in development. (404)' };
+      if (res.status === 401) return { ok: false, code: 'bad_token', error: data.error || 'Your publish token isn’t valid anymore.' };
       return { ok: false, error: data.error || `Publish failed (${res.status}).` };
     }
     return { ok: true, url: data.url, id: data.id, updated: data.updated };
@@ -1871,6 +1873,7 @@ ipcMain.handle('chervil:publish-agent', async (_event, payload) => {
     const data = await res.json().catch(() => ({}));
     if (!res.ok) {
       if (res.status === 404) return { ok: false, error: 'Publishing isn’t available yet — the Chervil hosted service is still in development. (404)' };
+      if (res.status === 401) return { ok: false, code: 'bad_token', error: data.error || 'Your publish token isn’t valid anymore.' };
       return { ok: false, error: data.error || `Publish failed (${res.status}).` };
     }
     return { ok: true, url: data.url, id: data.id, updated: data.updated };
@@ -1928,6 +1931,7 @@ ipcMain.handle('chervil:set-cloud-living', async (_event, payload) => {
     const data = await res.json().catch(() => ({}));
     if (!res.ok) {
       if (res.status === 404) return { ok: false, error: 'Cloud living pages aren’t available on this server yet.' };
+      if (res.status === 401) return { ok: false, code: 'bad_token', error: data.error || 'Your publish token isn’t valid anymore.' };
       return { ok: false, error: data.error || `Failed (${res.status}).` };
     }
     return { ok: true, ...data };
