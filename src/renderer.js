@@ -28,6 +28,27 @@ const els = {
   folderFiles: document.getElementById('folder-files'),
   folderPickCount: document.getElementById('folder-pick-count'),
   folderAttach: document.getElementById('folder-attach'),
+  // Print preview (Chervil's own — Electron has no Chrome preview UI)
+  printModal: document.getElementById('print-modal'),
+  printClose: document.getElementById('print-close'),
+  printPreviewHost: document.getElementById('print-preview-host'),
+  printPreviewMsg: document.getElementById('print-preview-msg'),
+  printPagesCount: document.getElementById('print-pages-count'),
+  printDest: document.getElementById('print-dest'),
+  printPageMode: document.getElementById('print-page-mode'),
+  printRangeField: document.getElementById('print-range-field'),
+  printRange: document.getElementById('print-range'),
+  printRangeNote: document.getElementById('print-range-note'),
+  printCopies: document.getElementById('print-copies'),
+  printLayout: document.getElementById('print-layout'),
+  printPaper: document.getElementById('print-paper'),
+  printMargins: document.getElementById('print-margins'),
+  printScale: document.getElementById('print-scale'),
+  printColor: document.getElementById('print-color'),
+  printBg: document.getElementById('print-bg'),
+  printGo: document.getElementById('print-go'),
+  printCancel: document.getElementById('print-cancel'),
+  printSystem: document.getElementById('print-system'),
   dropOverlay: document.getElementById('drop-overlay'),
   pageTitle: document.getElementById('page-title'),
   badge: document.getElementById('mode-badge'),
@@ -485,6 +506,7 @@ let settings = {
   pageZoom: 1,               // default viewport zoom (Ctrl +/−/0) — composed pages, and sites with no remembered level
   siteZoom: {},              // per-site zoom memory: { hostname: factor } — zooming on a live site remembers it for that site
   searchEngine: 'google',    // engine used by omnibox search escapes (g!/ddg!/b!/s!) — 'google' | 'duckduckgo' | 'bing'
+  printDest: '',             // last print destination ('' = the OS default, '__pdf__' = Save as PDF)
   bookmarksBar: false,       // show the bookmarks strip under the omnibar (Ctrl+Shift+B)
   favoritesBar: false,       // show the favorites strip (★ sites) under the omnibar
   collapsedFolders: [],      // ["favorites:Name" | "bookmarks:Name"] folder groups the user collapsed in the Library
@@ -611,6 +633,12 @@ let siteHistory = []; // [{ id, url, title, at }] newest-first — real sites vi
 const MAX_SITE_HISTORY = 500;
 let downloads = []; // [{ id, filename, path, at, ok, state }] newest-first — files saved from embedded sites
 const MAX_DOWNLOADS = 200;
+// Saved replies: chat answers the user chose to keep. Composed pages land in the
+// Library on their own, but a chat reply lived only in its tab's conversation and
+// went with the tab — the one thing Chervil produced that nothing kept.
+// [{ id, title, text, question, sources, at, chatTitle }] newest-first
+let savedReplies = [];
+const MAX_SAVED_REPLIES = 500;
 let agentAudit = []; // [{ at, type, target, decision, ok }] — agent action audit trail (RFC 0006)
 const MAX_AGENT_AUDIT = 500;
 let drawerTab = 'history';
@@ -807,6 +835,23 @@ const CHERVIL_RUNTIME = `<script>(function(){
     if(!d || d.__chervil !== true) return;
     if(d.type === 'zoom'){ try { document.documentElement.style.zoom = d.factor || 1; } catch(_){} }
     else if(d.type === 'print'){ try { window.print(); } catch(_){} }
+    // Print preview asks for the page AS IT STANDS — ticked checkboxes, applet
+    // state, anything script has changed — since that's what the reader sees and
+    // expects on paper. Screen zoom is deliberately excluded: it's a viewing
+    // preference, and the print dialog has its own scale.
+    else if(d.type === 'snapshot'){
+      var z = '';
+      try {
+        z = document.documentElement.style.zoom;
+        document.documentElement.style.zoom = '';
+        var html = '<!DOCTYPE html>' + document.documentElement.outerHTML;
+        document.documentElement.style.zoom = z;
+        parent.postMessage({ __chervil:true, type:'snapshot-result', id:d.id, html:html }, '*');
+      } catch(_){
+        try { document.documentElement.style.zoom = z; } catch(_e){}
+        try { parent.postMessage({ __chervil:true, type:'snapshot-result', id:d.id, html:'' }, '*'); } catch(_e){}
+      }
+    }
   });
   function call(name, args){
     return new Promise(function(resolve, reject){
@@ -1798,7 +1843,7 @@ function renderConversation() {
   activeStatusEl = null;
   const tab = activeTab();
   if (!tab) return;
-  for (const m of tab.conversation) appendMessageEl(m.role, m.text, m.cls, m.sources);
+  for (const m of tab.conversation) appendMessageEl(m.role, m.text, m.cls, m.sources, m);
   const rs = runState.get(tab.id);
   // An in-flight chat reply isn't in tab.conversation yet (it's committed on
   // finish), so re-hang the live bubble or switching tabs mid-reply loses it.
@@ -1877,7 +1922,32 @@ function addMsgCopy(bubble, text) {
   bubble.appendChild(btn);
 }
 
-function appendMessageEl(role, text, cls, sources) {
+// A hover-revealed "keep this answer" button, beside the copy one. Only chat
+// replies get it (msg.kind === 'chat'): those are the ones nothing else keeps.
+// It toggles, so a mis-click is one click to undo, and it reflects saved state on
+// re-render — reopening a conversation shows which answers you already kept.
+function addMsgSave(bubble, msg) {
+  const btn = document.createElement('button');
+  btn.className = 'msg-save';
+  const paint = () => {
+    const on = isReplySaved(msg.text);
+    btn.textContent = on ? '★' : '☆';
+    btn.classList.toggle('saved', on);
+    btn.title = on ? 'Saved — click to remove from Library → Replies' : 'Save this answer to Library → Replies';
+    btn.setAttribute('aria-label', btn.title);
+    btn.setAttribute('aria-pressed', String(on));
+  };
+  paint();
+  btn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (isReplySaved(msg.text)) unsaveReplyByText(msg.text);
+    else saveReply(msg);
+    paint();
+  });
+  bubble.appendChild(btn);
+}
+
+function appendMessageEl(role, text, cls, sources, msg) {
   // Bot messages come from Sprig, so pair them with his avatar.
   if (role === 'bot') {
     const row = document.createElement('div');
@@ -1911,6 +1981,7 @@ function appendMessageEl(role, text, cls, sources) {
       bubble.appendChild(foot);
     }
     if (text && String(text).trim()) addMsgCopy(bubble, text);
+    if (msg && msg.kind === 'chat' && text && String(text).trim()) addMsgSave(bubble, msg);
     row.appendChild(sprigAvatar());
     row.appendChild(bubble);
     els.conversation.appendChild(row);
@@ -1925,10 +1996,13 @@ function appendMessageEl(role, text, cls, sources) {
 }
 
 // Adds a persisted message to a specific tab; renders if that tab is active.
-function addMessage(tab, role, text, cls = '', sources = null) {
-  tab.conversation.push({ role, text, cls, ...(sources && sources.length ? { sources } : {}) });
+// `meta` carries anything the message needs to be acted on later — today just
+// { kind:'chat', question, at } on chat replies, which is what makes them saveable.
+function addMessage(tab, role, text, cls = '', sources = null, meta = null) {
+  const msg = { role, text, cls, ...(sources && sources.length ? { sources } : {}), ...(meta || {}) };
+  tab.conversation.push(msg);
   if (tab.id === activeId) {
-    appendMessageEl(role, text, cls, sources);
+    appendMessageEl(role, text, cls, sources, msg);
     els.conversation.scrollTop = els.conversation.scrollHeight;
   }
   scheduleSave();
@@ -2472,9 +2546,245 @@ function nudgeZoom(dir) {
 }
 
 // ---- Print (Ctrl+P) ----
-// Print the visible view: the webview prints itself; the sandboxed frame can't be
-// driven from here, so we ask it to print itself via the runtime bridge.
-function printCurrentView() {
+// Chervil owns its print preview. Electron ships Chromium's printing stack but
+// not Chrome's preview UI, so handing straight to the OS dialog is what put
+// "This app doesn't support print preview" in the box where the preview should
+// be. Instead: render the page to PDF with the chosen options (main.js), show
+// that PDF here, and print the job with those same options — with the system
+// dialog still one click away for tray/duplex/printer-specific settings.
+
+// What's on screen, in a form the main process can print: a live site prints in
+// place (logged-in state, lazy-loaded content and all), while a composed page
+// goes over as HTML — snapshotted live where possible so ticked checkboxes and
+// applet state make it onto the paper.
+async function printSource() {
+  if (els.webview && !els.webview.hidden) {
+    try {
+      const id = els.webview.getWebContentsId();
+      if (id) return { webContentsId: id };
+    } catch { /* fall through to the composed-page path */ }
+  }
+  if (els.frame && !els.frame.hidden) {
+    const live = await framePageSnapshot();
+    // The runtime clears the inline zoom before it answers, but the page also
+    // carries the zoom stylesheet renderPage injects — leave that in and a page
+    // read at 150% prints at 150%. Screen zoom isn't a print setting; the dialog
+    // has its own scale.
+    if (live) return { html: live.replace(/html\s*\{\s*zoom\s*:[^}]*\}/gi, '') };
+    const entry = currentEntry(activeTab());
+    if (entry && entry.kind === 'page' && entry.html) return { html: entry.html };
+  }
+  return null;
+}
+
+// Ask the page runtime for the frame's current DOM. Resolves to '' if the page
+// has no runtime (an imported or restored page can lack it) or doesn't answer,
+// which is why every caller has a fallback.
+function framePageSnapshot(timeoutMs = 1500) {
+  return new Promise((resolve) => {
+    const win = els.frame && els.frame.contentWindow;
+    if (!win) { resolve(''); return; }
+    const id = uid();
+    let settled = false;
+    const finish = (html) => {
+      if (settled) return;
+      settled = true;
+      window.removeEventListener('message', onMsg);
+      resolve(html);
+    };
+    const onMsg = (e) => {
+      const d = e.data;
+      if (!d || d.__chervil !== true || d.type !== 'snapshot-result' || d.id !== id) return;
+      finish(String(d.html || ''));
+    };
+    window.addEventListener('message', onMsg);
+    try { win.postMessage({ __chervil: true, type: 'snapshot', id }, '*'); }
+    catch { finish(''); return; }
+    setTimeout(() => finish(''), timeoutMs);
+  });
+}
+
+const PRINT_PDF_DEST = '__pdf__';
+let printCtx = null;        // { source, title } for the open dialog
+let printRenderSeq = 0;     // only the newest render may paint (options change fast)
+let printRenderTimer = null;
+let printPreviewWv = null;
+let printing = false;
+let printOpening = false;
+
+function printOptions() {
+  const mode = els.printPageMode ? els.printPageMode.value : 'all';
+  return {
+    paper: els.printPaper ? els.printPaper.value : 'Letter',
+    landscape: !!(els.printLayout && els.printLayout.value === 'landscape'),
+    margins: els.printMargins ? els.printMargins.value : 'default',
+    scale: Number((els.printScale && els.printScale.value) || 1),
+    background: !(els.printBg && !els.printBg.checked),
+    color: !(els.printColor && els.printColor.value === 'mono'),
+    copies: Number((els.printCopies && els.printCopies.value) || 1),
+    pageRanges: mode === 'custom' && els.printRange ? els.printRange.value.trim() : '',
+  };
+}
+
+function printPreviewWebview() {
+  if (printPreviewWv) return printPreviewWv;
+  const wv = document.createElement('webview');
+  wv.setAttribute('plugins', ''); // Chromium's PDF viewer — the preview itself
+  els.printPreviewHost.appendChild(wv);
+  printPreviewWv = wv;
+  return wv;
+}
+
+function printMsg(text) {
+  if (!els.printPreviewMsg) return;
+  els.printPreviewMsg.hidden = !text;
+  if (text) els.printPreviewMsg.textContent = text;
+}
+
+// A note under the range box — small, beside the thing it's about, and never
+// covering the preview the way the stage-wide message does.
+function printRangeNote(text) {
+  if (!els.printRangeNote) return;
+  els.printRangeNote.hidden = !text;
+  if (text) els.printRangeNote.textContent = text;
+}
+
+// Re-render the preview from the current options. Debounced, because every
+// select fires this and a render is a real Chromium print pass.
+function schedulePrintRender(delay = 160) {
+  if (printRenderTimer) clearTimeout(printRenderTimer);
+  printRenderTimer = setTimeout(() => { printRenderTimer = null; renderPrintPreview(); }, delay);
+}
+
+async function renderPrintPreview() {
+  if (!printCtx) return;
+  const seq = ++printRenderSeq;
+  printMsg('Preparing preview…');
+  let res;
+  try { res = await window.chervil.print.render({ source: printCtx.source, options: printOptions() }); }
+  catch (e) { res = { ok: false, error: errText(e, 'the preview could not be rendered') }; }
+  if (seq !== printRenderSeq || !printCtx) return;   // a newer render won
+  if (!res || !res.ok) {
+    printMsg(`Couldn’t build a preview — ${(res && res.error) || 'unknown error'}.`);
+    if (els.printPagesCount) els.printPagesCount.textContent = '';
+    return;
+  }
+  const wv = printPreviewWebview();
+  // The PDF viewer's own chrome would be a second toolbar over ours.
+  wv.src = `${res.url}#toolbar=0&navpanes=0&view=FitH`;
+  if (els.printPagesCount) {
+    const total = res.total || res.pages;
+    els.printPagesCount.textContent = !total ? ''
+      : res.pages < total ? `${res.pages} of ${total} pages`
+        : `${total} page${total === 1 ? '' : 's'}`;
+  }
+  // An unusable range (a typo, or pages past the end) falls back to everything —
+  // same as Chrome. Say so, rather than letting the preview quietly disagree with
+  // what's typed in the box. `applied` is what actually got used, so this can't
+  // guess wrong.
+  const wanted = printOptions().pageRanges;
+  printRangeNote(wanted && !res.applied ? `Not a page range in this ${res.total}-page document — printing all of it.` : '');
+  printMsg('');
+}
+
+// The OS default the first time, then whatever was picked last — printing twice
+// in a row to the same place shouldn't need the same two clicks twice. Kept in
+// settings so it survives a restart, like every other remembered preference.
+async function populatePrintDestinations() {
+  if (!els.printDest) return;
+  els.printDest.innerHTML = '';
+  const pdf = document.createElement('option');
+  pdf.value = PRINT_PDF_DEST;
+  pdf.textContent = 'Save as PDF';
+  els.printDest.appendChild(pdf);
+  let res = null;
+  try { res = await window.chervil.print.printers(); } catch { /* no printers is a fine state */ }
+  for (const p of (res && res.printers) || []) {
+    const o = document.createElement('option');
+    o.value = p.name;
+    o.textContent = p.displayName || p.name;
+    els.printDest.appendChild(o);
+  }
+  const want = settings.printDest || (res && res.defaultName) || '';
+  if (want && [...els.printDest.options].some((o) => o.value === want)) els.printDest.value = want;
+}
+
+async function openPrintPreview() {
+  if (!els.printModal || !window.chervil.print) { printLegacy(); return; }
+  // Guarded twice: printCtx once it's open, printOpening while the snapshot is
+  // still in flight — a second Ctrl+P inside that second would otherwise start a
+  // whole parallel dialog.
+  if (printCtx || printOpening) return;
+  printOpening = true;
+  let source;
+  try { source = await printSource(); } finally { printOpening = false; }
+  if (!source) { toast('Open a page or site first, then print.'); return; }
+  const tab = activeTab();
+  printCtx = { source, title: (tab && tab.title) || 'Chervil page' };
+  els.printModal.classList.add('open');
+  if (els.printGo) els.printGo.disabled = false;
+  printMsg('Preparing preview…');
+  // Awaited so the destination is settled before the first render — the Print /
+  // Save split and the mono preview both key off it.
+  await populatePrintDestinations();
+  syncPrintFields();
+  renderPrintPreview();
+}
+
+function closePrintPreview() {
+  if (!els.printModal) return;
+  els.printModal.classList.remove('open');
+  printCtx = null;
+  printRenderSeq++;                                  // orphan any in-flight render
+  if (printRenderTimer) { clearTimeout(printRenderTimer); printRenderTimer = null; }
+  if (printPreviewWv) { try { printPreviewWv.remove(); } catch { /* ignore */ } printPreviewWv = null; }
+  if (els.printPagesCount) els.printPagesCount.textContent = '';
+  printRangeNote('');
+  printMsg('Preparing preview…');
+  try { window.chervil.print.done(); } catch { /* best effort */ }
+}
+
+// Fields that only make sense in some combinations (a range input with no range
+// mode; copies when the destination is a file).
+function syncPrintFields() {
+  const toPdf = els.printDest && els.printDest.value === PRINT_PDF_DEST;
+  if (els.printRangeField) els.printRangeField.hidden = !(els.printPageMode && els.printPageMode.value === 'custom');
+  if (els.printCopies) els.printCopies.disabled = toPdf;
+  if (els.printColor) els.printColor.disabled = toPdf;
+  if (els.printPreviewHost) els.printPreviewHost.classList.toggle('mono', !toPdf && !!(els.printColor && els.printColor.value === 'mono'));
+  if (els.printGo) els.printGo.textContent = toPdf ? 'Save' : 'Print';
+  if (els.printSystem) els.printSystem.hidden = !!toPdf;
+}
+
+async function runPrint(useSystemDialog) {
+  if (!printCtx || printing) return;
+  const toPdf = !useSystemDialog && els.printDest && els.printDest.value === PRINT_PDF_DEST;
+  printing = true;
+  if (els.printGo) els.printGo.disabled = true;
+  try {
+    if (toPdf) {
+      const res = await window.chervil.print.savePdf({ suggestedName: printCtx.title });
+      if (res && res.ok) { toast(`Saved to ${res.path}`); closePrintPreview(); }
+      else if (!(res && res.canceled)) toast(`Couldn’t save the PDF — ${(res && res.error) || 'unknown error'}.`);
+      return;
+    }
+    const opts = printOptions();
+    opts.silent = !useSystemDialog;                  // our settings ARE the dialog, unless asked otherwise
+    if (!useSystemDialog && els.printDest) opts.deviceName = els.printDest.value;
+    const res = await window.chervil.print.run({ source: printCtx.source, options: opts });
+    if (res && res.ok) { toast('Sent to the printer.'); closePrintPreview(); }
+    else if (!(res && res.canceled)) toast(`Couldn’t print — ${(res && res.error) || 'unknown error'}.`);
+  } catch (e) {
+    toast(`Couldn’t print — ${errText(e, 'unknown error')}.`);
+  } finally {
+    printing = false;
+    if (els.printGo) els.printGo.disabled = false;
+  }
+}
+
+// Fallback for the (unbuilt) case where the print bridge is missing: the old
+// behaviour — hand the view to the OS dialog and let it do what it does.
+function printLegacy() {
   try {
     if (els.webview && !els.webview.hidden) { els.webview.print(); return; }
     if (els.frame && !els.frame.hidden && els.frame.contentWindow) {
@@ -10006,7 +10316,7 @@ async function chatSubmit(tab, text) {
       // Prefer the finished text (it's authoritative), but fall back to what
       // streamed — an aborted turn returns ok with empty text and a partial buffer.
       const reply = (resp.text && resp.text.trim()) || streamed.trim() || '…';
-      addMessage(tab, 'bot', reply, '', resp.sources || []);
+      addMessage(tab, 'bot', reply, '', resp.sources || [], { kind: 'chat', question: query, at: Date.now() });
       tab.history.push({ role: 'assistant', content: reply });
     }
   } catch (e) {
@@ -10015,7 +10325,7 @@ async function chatSubmit(tab, text) {
     // Keep a partial reply rather than replacing it with the error — the user
     // already read it, and losing it on a dropped connection feels like a bug.
     if (streamed.trim()) {
-      addMessage(tab, 'bot', streamed.trim(), '', []);
+      addMessage(tab, 'bot', streamed.trim(), '', [], { kind: 'chat', question: query, at: Date.now() });
       tab.history.push({ role: 'assistant', content: streamed.trim() });
     }
     addMessage(tab, 'bot', String(e && e.message ? e.message : e), 'error');
@@ -11700,9 +12010,142 @@ function clearDownloads() {
   scheduleSave();
 }
 
+// ---- Saved replies (Library → Replies) ----
+// Chat is the one place Chervil answers without leaving anything behind: a
+// composed page files itself in the Library, but a chat reply lives in its tab's
+// conversation and goes when the tab does. Saving lifts the answer out of the
+// thread so it can be re-read later, opened as a real Chervil page (which gets it
+// export/print/remix for free), or fed back into a new question.
+function isReplySaved(text) {
+  const t = String(text == null ? '' : text).trim();
+  return !!t && savedReplies.some((r) => r.text === t);
+}
+
+// A row needs a name. The question that produced the answer is the best one —
+// it's what you'd search for — with the answer's own first line as the fallback
+// for a reply that arrived without one (a partial stream, an older message).
+function replyTitle(text, question) {
+  const q = String(question || '').trim();
+  if (q) return q.length > 80 ? q.slice(0, 77) + '…' : q;
+  const first = String(text || '').trim().split('\n').find((l) => l.trim()) || 'Saved reply';
+  return first.length > 80 ? first.slice(0, 77) + '…' : first;
+}
+
+function saveReply(msg) {
+  const text = String((msg && msg.text) || '').trim();
+  if (!text) return null;
+  if (isReplySaved(text)) return null;
+  const tab = activeTab();
+  const note = {
+    id: uid(),
+    title: replyTitle(text, msg.question),
+    text,
+    question: String(msg.question || ''),
+    sources: Array.isArray(msg.sources) ? msg.sources.slice(0, 12) : [],
+    at: Date.now(),
+    chatTitle: (tab && tab.title) || '',
+  };
+  savedReplies.unshift(note);
+  if (savedReplies.length > MAX_SAVED_REPLIES) savedReplies.length = MAX_SAVED_REPLIES;
+  clearTombstone('replies', note.id);
+  if (libraryOpen() && drawerTab === 'replies') renderDrawer();
+  scheduleSave();
+  toast('Saved — it’s in Library → Replies.');
+  return note;
+}
+
+function unsaveReplyByText(text) {
+  const t = String(text == null ? '' : text).trim();
+  for (const r of savedReplies.filter((x) => x.text === t)) addTombstone('replies', r.id);
+  savedReplies = savedReplies.filter((r) => r.text !== t);
+  if (libraryOpen() && drawerTab === 'replies') renderDrawer();
+  scheduleSave();
+  toast('Removed from your saved replies.');
+}
+
+function deleteSavedReply(id) {
+  addTombstone('replies', id);
+  savedReplies = savedReplies.filter((r) => r.id !== id);
+  renderDrawer();
+  renderConversation(); // a ★ in the open conversation may have just become a ☆
+  scheduleSave();
+}
+
+// A saved reply, as a real Chervil page. Going through the normal page entry (not
+// a bespoke viewer) is the point: Export, Print, Read aloud, Remix and Save all
+// work on it without another line of code.
+function replyPageHtml(note) {
+  const esc = (s) => String(s == null ? '' : s).replace(/[<>&]/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;' }[c]));
+  const paras = String(note.text || '').split(/\n{2,}/)
+    .map((p) => `<p>${esc(p).replace(/\n/g, '<br>')}</p>`).join('\n');
+  const asked = note.question ? `<p class="asked">You asked: “${esc(note.question)}”</p>` : '';
+  const when = note.at ? `<p class="when">Saved ${esc(new Date(note.at).toLocaleString())}</p>` : '';
+  const sources = (note.sources || []).filter((s) => s && s.url).length
+    ? `<h2>Sources</h2><ul class="src">${(note.sources || []).filter((s) => s && s.url)
+      .map((s) => `<li><a href="${esc(s.url)}">${esc(s.title || s.url)}</a></li>`).join('')}</ul>`
+    : '';
+  return `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${esc(note.title)}</title>
+<style>
+:root{color-scheme:light}
+body{font-family:system-ui,-apple-system,'Segoe UI',sans-serif;max-width:720px;margin:0 auto;padding:56px 24px 96px;line-height:1.65;font-size:17px;color:#1a1a1a;background:#faf9f7;}
+h1{font-size:28px;line-height:1.25;margin:0 0 6px;}
+h2{font-size:16px;text-transform:uppercase;letter-spacing:.06em;color:#666;margin:2em 0 .6em;}
+.asked{margin:0 0 2px;color:#3d6b52;font-style:italic;}
+.when{margin:0 0 28px;color:#8a8a8a;font-size:13px;}
+p{margin:0 0 1em;white-space:pre-wrap;}
+a{color:#1a6e46;}
+ul.src{padding-left:20px;} ul.src li{margin:0 0 .35em;}
+</style></head><body>
+<h1>${esc(note.title)}</h1>${asked}${when}
+${paras}
+${sources}
+</body></html>`;
+}
+
+function openSavedReply(note) {
+  const rootId = uid();
+  const tab = {
+    id: uid(),
+    title: note.title || 'Saved reply',
+    conversation: [],
+    history: [],
+    pages: [{ id: rootId, parentId: null, kind: 'page', html: replyPageHtml(note), title: note.title, sources: note.sources || [], query: note.question || note.title }],
+    currentId: rootId,
+  };
+  tabs.push(tab);
+  activeId = tab.id;
+  renderTabs();
+  renderConversation();
+  renderCurrentPage();
+  refreshComposer();
+  scheduleSave();
+}
+
+// Reuse: drop the answer into the composer as quoted context, so the next thing
+// you type acts ON it ("turn this into an email", "what changed since?"). We put
+// it in the prompt rather than sending it straight off — the whole value is the
+// instruction you add.
+function reuseSavedReply(note) {
+  if (!els.prompt) return;
+  const body = String(note.text || '').split('\n').map((l) => `> ${l}`).join('\n');
+  els.prompt.value = `${body}\n\n`;
+  resetPromptHeight();
+  els.prompt.focus();
+  try {
+    els.prompt.setSelectionRange(els.prompt.value.length, els.prompt.value.length);
+    els.prompt.scrollTop = els.prompt.scrollHeight;
+  } catch { /* ignore */ }
+  toast('Added to the composer — now say what to do with it.');
+}
+
+async function copySavedReply(note) {
+  try { await navigator.clipboard.writeText(String(note.text || '')); toast('Copied.'); }
+  catch { toast('Couldn’t copy.'); }
+}
+
 // Searchable text for a Library row across all tab types.
 function libItemText(it) {
-  return [it.title, it.url, it.query, it.filename].filter(Boolean).join(' ').toLowerCase();
+  return [it.title, it.url, it.query, it.filename, it.text, it.question].filter(Boolean).join(' ').toLowerCase();
 }
 
 // A site favicon via DuckDuckGo's icon service (privacy-friendly, needs no capture
@@ -12026,7 +12469,8 @@ function renderDrawer() {
       : drawerTab === 'favorites' ? favorites
         : drawerTab === 'sites' ? siteHistory
           : drawerTab === 'downloads' ? downloads
-            : library.trash;
+            : drawerTab === 'replies' ? savedReplies           // chat answers you kept
+              : library.trash;
 
   // Free-text filter across the visible list (title/url/query/filename).
   const q = librarySearch.trim().toLowerCase();
@@ -12108,7 +12552,9 @@ function renderDrawer() {
             ? 'No browsing history yet. Open a website and it shows up here.'
             : drawerTab === 'downloads'
               ? 'No downloads yet. Files you download from sites show up here.'
-              : 'Trash is empty.';
+              : drawerTab === 'replies'
+                ? 'No saved replies yet. In chat, hover an answer from Sprig and click ☆ to keep it here.'
+                : 'Trash is empty.';
     els.libraryList.appendChild(empty);
     return;
   }
@@ -12162,7 +12608,9 @@ function renderDrawer() {
           ? (item.title || item.url)
           : drawerTab === 'downloads'
             ? `${item.ok ? '⬇' : '⚠'} ${item.filename || 'file'}`
-            : (item.title || item.query || 'Untitled page');
+            : drawerTab === 'replies'
+              ? `💬 ${item.title || 'Saved reply'}`
+              : (item.title || item.query || 'Untitled page');
     const meta = document.createElement('div');
     meta.className = 'lib-meta';
     meta.textContent = drawerTab === 'bookmarks'
@@ -12173,8 +12621,19 @@ function renderDrawer() {
           ? `${item.url} · ${relTime(item.at)}`
           : drawerTab === 'downloads'
             ? (item.ok ? `${item.path} · ${relTime(item.at)}` : `${item.state || 'failed'} · ${relTime(item.at)}`)
-            : relTime(item.createdAt);
+            : drawerTab === 'replies'
+              ? [relTime(item.at), item.chatTitle, (item.sources || []).length ? `${item.sources.length} source${item.sources.length === 1 ? '' : 's'}` : ''].filter(Boolean).join(' · ')
+              : relTime(item.createdAt);
     main.appendChild(title);
+    // The answer itself, not just its title — a reply row is worth skimming in
+    // place, which is most of what "review it later" means.
+    if (drawerTab === 'replies') {
+      const prev = document.createElement('div');
+      prev.className = 'lib-snippet';
+      const t = String(item.text || '').replace(/\s+/g, ' ').trim();
+      prev.textContent = t.length > 220 ? t.slice(0, 219) + '…' : t;
+      main.appendChild(prev);
+    }
     // A content search shows the matching passage, so you can tell WHY a page came
     // back rather than guessing from its title (RFC 0013, phase 1b).
     if (item.snippet) main.appendChild(snippetNode(item.snippet));
@@ -12233,6 +12692,26 @@ function renderDrawer() {
       del.textContent = 'Remove';
       del.addEventListener('click', () => removeDownload(item.id));
       actions.appendChild(del);
+    } else if (drawerTab === 'replies') {
+      main.title = 'Open as a page';
+      main.style.cursor = 'pointer';
+      main.addEventListener('click', () => openSavedReply(item));
+      const reuse = document.createElement('button');
+      reuse.className = 'lib-btn';
+      reuse.textContent = 'Reuse';
+      reuse.title = 'Put this answer in the composer to build on';
+      reuse.addEventListener('click', () => reuseSavedReply(item));
+      actions.appendChild(reuse);
+      const copy = document.createElement('button');
+      copy.className = 'lib-btn';
+      copy.textContent = 'Copy';
+      copy.addEventListener('click', () => copySavedReply(item));
+      actions.appendChild(copy);
+      const del = document.createElement('button');
+      del.className = 'lib-btn';
+      del.textContent = 'Delete';
+      del.addEventListener('click', () => deleteSavedReply(item.id));
+      actions.appendChild(del);
     } else if (drawerTab === 'history') {
       main.title = 'Open';
       main.style.cursor = 'pointer';
@@ -12258,6 +12737,7 @@ function renderDrawer() {
 const LIBRARY_TAB_LABELS = {
   bookmarks: 'Saved Pages',
   history: 'Pages',
+  replies: 'Replies',
   favorites: 'Favorites',
   collections: 'Collections',
   feeds: 'Feeds',
@@ -13545,7 +14025,7 @@ function scheduleSave() {
     // `feeds` is subscriptions only — items live in the page index. Putting them
     // here would grow this payload without bound, which is the thing the comment
     // above is about.
-    const state = { tabs: persistTabs, activeId: persistActiveId, tabGroups, settings, bookmarks, bookmarkFolders, bookmarkTombstones, favorites, favoriteFolders, favoriteTombstones, collections, deletionTombstones, siteHistory, downloads, agentAudit, spaces, activeSpaceId, savedSpaces, activeSavedSpaceId, living, schedules, watchers, intents, ledger, feeds, agents, activeAgentId, pipelines, pageStores, dossierOffers, dossierDismissed, corrections };
+    const state = { tabs: persistTabs, activeId: persistActiveId, tabGroups, settings, bookmarks, bookmarkFolders, bookmarkTombstones, favorites, favoriteFolders, favoriteTombstones, collections, deletionTombstones, siteHistory, downloads, savedReplies, agentAudit, spaces, activeSpaceId, savedSpaces, activeSavedSpaceId, living, schedules, watchers, intents, ledger, feeds, agents, activeAgentId, pipelines, pageStores, dossierOffers, dossierDismissed, corrections };
     if (!libraryFromIndex) state.library = library;
     window.chervil.saveState(state)
       .then((r) => { if (r && r.mtimeMs) lastStateMtimeMs = r.mtimeMs; }) // our own write — keep baseline current
@@ -13576,6 +14056,7 @@ async function reconcileNow() {
   if (Array.isArray(m.favoriteTombstones)) favoriteTombstones = m.favoriteTombstones;
   if (Array.isArray(m.collections)) collections = m.collections.filter((c) => c && c.id && Array.isArray(c.items));
   if (Array.isArray(m.siteHistory)) siteHistory = m.siteHistory;
+  if (Array.isArray(m.savedReplies)) savedReplies = m.savedReplies.filter((r) => r && r.id && typeof r.text === 'string');
   // Once pages live in the index they are machine-local and are NOT synced, so a
   // merged state file has nothing to say about them — adopting its (stale, or
   // absent) library here would wipe the drawer.
@@ -13778,6 +14259,9 @@ async function init() {
   }
   if (restored && Array.isArray(restored.siteHistory)) siteHistory = restored.siteHistory;
   if (restored && Array.isArray(restored.downloads)) downloads = restored.downloads;
+  if (restored && Array.isArray(restored.savedReplies)) {
+    savedReplies = restored.savedReplies.filter((r) => r && r.id && typeof r.text === 'string' && r.text.trim());
+  }
   if (restored && Array.isArray(restored.agentAudit)) agentAudit = restored.agentAudit;
 
   // Spaces: restore, or migrate by creating a default Space and adopting any
@@ -15303,7 +15787,7 @@ window.addEventListener('click', () => { if (els.tabMenu && !els.tabMenu.hidden)
 window.addEventListener('contextmenu', () => { if (els.tabMenu && !els.tabMenu.hidden) closeTabMenu(); });
 window.addEventListener('blur', () => closeTabMenu());
 els.tabs.addEventListener('scroll', () => closeTabMenu());
-window.addEventListener('keydown', (e) => { if (e.key === 'Escape') { closeTabMenu(); if (tabSelectMode) exitTabSelect(); if (librarySelectMode) exitLibrarySelect(); if (els.foldersModal && els.foldersModal.classList.contains('open')) closeFoldersModal(); } });
+window.addEventListener('keydown', (e) => { if (e.key === 'Escape') { closeTabMenu(); if (tabSelectMode) exitTabSelect(); if (librarySelectMode) exitLibrarySelect(); if (els.foldersModal && els.foldersModal.classList.contains('open')) closeFoldersModal(); if (printCtx) closePrintPreview(); } });
 // Tab reorder: allow dropping a dragged tab anywhere along the strip/rail.
 els.tabs.addEventListener('dragover', onTabsDragOver);
 els.tabs.addEventListener('drop', (e) => e.preventDefault());
@@ -16398,11 +16882,27 @@ if (window.chervil.onMenuZoom) {
     else setZoom(1);
   });
 }
-if (window.chervil.onMenuPrint) window.chervil.onMenuPrint(() => printCurrentView());
+if (window.chervil.onMenuPrint) window.chervil.onMenuPrint(() => openPrintPreview());
 if (els.zoomIndicator) els.zoomIndicator.addEventListener('click', () => setZoom(1)); // click % = reset
 if (els.zoomIn) els.zoomIn.addEventListener('click', () => nudgeZoom(1));
 if (els.zoomOut) els.zoomOut.addEventListener('click', () => nudgeZoom(-1));
-if (els.printBtn) els.printBtn.addEventListener('click', () => printCurrentView());
+if (els.printBtn) els.printBtn.addEventListener('click', () => openPrintPreview());
+
+// Print preview wiring. Everything that changes the paper re-renders the sheet;
+// destination and copies don't (they change the job, not the page).
+if (els.printClose) els.printClose.addEventListener('click', () => closePrintPreview());
+if (els.printCancel) els.printCancel.addEventListener('click', () => closePrintPreview());
+if (els.printModal) els.printModal.addEventListener('click', (e) => { if (e.target === els.printModal) closePrintPreview(); });
+if (els.printGo) els.printGo.addEventListener('click', () => runPrint(false));
+if (els.printSystem) els.printSystem.addEventListener('click', () => runPrint(true));
+if (els.printDest) els.printDest.addEventListener('change', () => { settings.printDest = els.printDest.value; scheduleSave(); syncPrintFields(); });
+if (els.printColor) els.printColor.addEventListener('change', syncPrintFields);
+if (els.printPageMode) els.printPageMode.addEventListener('change', () => { syncPrintFields(); schedulePrintRender(); });
+if (els.printRange) els.printRange.addEventListener('input', () => schedulePrintRender(500));
+for (const el of [els.printLayout, els.printPaper, els.printMargins, els.printScale]) {
+  if (el) el.addEventListener('change', () => schedulePrintRender());
+}
+if (els.printBg) els.printBg.addEventListener('change', () => schedulePrintRender());
 if (els.readerBtn) els.readerBtn.addEventListener('click', () => openReaderView());
 if (els.feedBtn) els.feedBtn.addEventListener('click', onFeedButtonClick);
 if (els.askPageBtn) els.askPageBtn.addEventListener('click', toggleAskPage);

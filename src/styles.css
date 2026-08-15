@@ -394,6 +394,32 @@ body.resizing #web-views { pointer-events: none; }
 .msg-copy:hover { opacity: 1; color: var(--text); border-color: var(--accent); }
 .msg-copy.copied { opacity: 1; color: var(--accent); border-color: var(--accent); }
 
+/* Keep-this-answer star, sat beside the copy button on chat replies. Unlike copy
+   it has a persistent state, so a saved one stays visible without a hover. */
+.msg-save {
+  position: absolute;
+  top: 5px;
+  right: 32px;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel-2);
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.12s ease, color 0.12s ease, border-color 0.12s ease;
+}
+.msg:hover .msg-save { opacity: 0.8; }
+.msg-save:hover { opacity: 1; color: var(--text); border-color: var(--accent); }
+.msg-save.saved { opacity: 1; color: var(--accent); border-color: var(--accent); }
+
 @keyframes rise {
   from { opacity: 0; transform: translateY(6px); }
   to { opacity: 1; transform: translateY(0); }
@@ -2444,3 +2470,96 @@ body.resizing #web-views { pointer-events: none; }
   background: #fff;
   padding: 8px;
 }
+
+/* ---------- Print preview ---------- */
+/* Chervil draws its own preview because Electron ships no Chrome print-preview
+   UI (see the print handlers in electron/main.js). Layout mirrors Chrome's:
+   the sheet on the left, the settings that change it on the right. */
+.print-card {
+  width: min(1040px, 94vw);
+  max-height: 92vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.print-card .modal-head { flex: 0 0 auto; }
+.print-count { margin-left: auto; margin-right: 10px; font-size: 12px; color: var(--muted); }
+.print-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 264px;
+  gap: 0;
+  min-height: 0;
+  flex: 1 1 auto;
+}
+.print-stage {
+  position: relative;
+  min-height: 420px;
+  background: #2a2d34;                 /* the viewer's own grey, so the sheet reads as paper */
+  border-top: 1px solid var(--border);
+  overflow: hidden;
+}
+#print-preview-host { position: absolute; inset: 0; }
+#print-preview-host webview { width: 100%; height: 100%; border: 0; display: flex; }
+/* Black & white destination: the preview greys out too, so the setting is honest. */
+#print-preview-host.mono webview { filter: grayscale(1); }
+.print-msg {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  text-align: center;
+  font-size: 13px;
+  color: var(--muted);
+  background: #2a2d34;
+}
+.print-msg[hidden] { display: none; }
+.print-opts {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 16px;
+  overflow-y: auto;
+  border-left: 1px solid var(--border);
+  border-top: 1px solid var(--border);
+  background: var(--panel);
+}
+.print-field { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
+.print-field[hidden] { display: none; }
+.print-field select,
+.print-field input {
+  width: 100%;
+  padding: 7px 9px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--panel-2);
+  color: var(--text);
+  font-size: 13px;
+}
+.print-field select:focus,
+.print-field input:focus { outline: none; border-color: var(--accent); }
+.print-note { font-size: 11.5px; line-height: 1.35; color: #e0b072; }
+.print-note[hidden] { display: none; }
+.print-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+  color: var(--muted);
+  cursor: pointer;
+  margin-top: 2px;
+}
+.print-actions { display: flex; gap: 8px; margin-top: 8px; }
+.print-actions .lib-btn { flex: 1 1 auto; padding: 8px 12px; font-size: 13px; }
+.print-system-link {
+  border: 0;
+  background: none;
+  color: var(--muted);
+  font-size: 12px;
+  text-align: left;
+  padding: 2px 0;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.print-system-link:hover { color: var(--text); }

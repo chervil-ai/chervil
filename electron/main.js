@@ -3,8 +3,9 @@
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
+const { pathToFileURL } = require('url');
 const { execFile } = require('child_process');
-const { app, BrowserWindow, ipcMain, dialog, safeStorage, Notification, Tray, Menu, globalShortcut, screen, shell, clipboard, session } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, safeStorage, Notification, Tray, Menu, globalShortcut, screen, shell, clipboard, session, webContents } = require('electron');
 
 // Swallow only Node's one-time "SQLite is an experimental feature" ExperimentalWarning.
 // node:sqlite backs the whole page index (RFC 0013) — we're committed to it — and
@@ -2687,6 +2688,232 @@ ipcMain.handle('chervil:export-pdf', async (event, payload) => {
     try { fs.unlinkSync(tmp); } catch { /* ignore */ }
   }
 });
+
+// --- Print preview (Chervil's own) ---------------------------------------
+// Electron ships Chromium's *printing* stack but not Chrome's print-preview UI,
+// so webContents.print() hands straight to the OS dialog — and Windows, finding
+// no preview provider behind it, prints "This app doesn't support print preview"
+// where the preview should be. Chrome doesn't have that problem because Chrome
+// draws its own preview and only offers the system dialog as an escape hatch.
+// So does Chervil now: printToPDF with the chosen options renders the preview,
+// and the job is then printed with the same options, so what you saw is what
+// comes out. The system dialog is still one click away for tray/duplex/etc.
+const PRINT_PAPER = new Set(['Letter', 'Legal', 'Tabloid', 'A3', 'A4', 'A5']);
+// Inches per side. `default` matches Chromium's own default (0.4in); `minimum`
+// approximates the printable area, which we can't measure from here.
+const PRINT_MARGIN_IN = { default: 0.4, none: 0, minimum: 0.16 };
+
+let printPreviewFile = null;   // the one live preview PDF on disk
+let printPreviewSeq = 0;       // fresh filename per render, so the viewer can't serve a cached page
+let printPreviewTotal = 0;     // pages in the last previewed document — the clamp for page ranges
+
+// A page range Chromium rejects — bad syntax OR past the last page — does not
+// just fail that call: it wedges printToPDF for the ENTIRE process, and every
+// later call (Export PDF included) returns the same stale error until restart.
+// Measured on Electron 39. So a range never reaches Chromium unless it has been
+// parsed and clamped against a real page count first, which is why every preview
+// renders the whole document before it renders a subset.
+function normalizeRanges(spec, total) {
+  const out = [];
+  for (const part of String(spec || '').split(',')) {
+    const m = part.trim().match(/^(\d+)(?:\s*-\s*(\d+))?$/);
+    if (!m) continue;
+    const from = Number(m[1]);
+    const to = m[2] === undefined ? from : Number(m[2]);
+    if (!from || to < from) continue;                     // 0 and reversed ranges are both rejected
+    if (total > 0 && from > total) continue;              // wholly past the end — drop it
+    out.push({ from, to: total > 0 ? Math.min(to, total) : to });
+  }
+  return out;
+}
+const rangesToSpec = (r) => r.map((x) => (x.from === x.to ? `${x.from}` : `${x.from}-${x.to}`)).join(',');
+// How many pages a normalized range actually selects (for the "n of m" readout).
+const rangesPageCount = (r) => r.reduce((n, x) => n + (x.to - x.from + 1), 0);
+
+function clearPrintPreviewFile() {
+  if (!printPreviewFile) return;
+  try { fs.unlinkSync(printPreviewFile); } catch { /* already gone */ }
+  printPreviewFile = null;
+}
+
+const printPaper = (p) => (PRINT_PAPER.has(p) ? p : 'Letter');
+const printScale = (s) => Math.min(2, Math.max(0.1, Number(s) || 1));
+
+// Deliberately never carries pageRanges — see normalizeRanges. Callers add a
+// clamped range only after a rangeless pass has told them how long the document is.
+function printToPdfOptions(o = {}) {
+  const m = PRINT_MARGIN_IN[o.margins] !== undefined ? PRINT_MARGIN_IN[o.margins] : PRINT_MARGIN_IN.default;
+  return {
+    printBackground: o.background !== false,
+    landscape: !!o.landscape,
+    pageSize: printPaper(o.paper),
+    margins: { top: m, bottom: m, left: m, right: m },
+    scale: printScale(o.scale),
+    preferCSSPageSize: false,
+  };
+}
+
+// print() takes the same intent in a different shape: 0-based {from,to} ranges,
+// a percentage scale, and margins as a named type rather than measurements.
+function printJobOptions(o = {}) {
+  const opts = {
+    silent: o.silent !== false,
+    printBackground: o.background !== false,
+    landscape: !!o.landscape,
+    color: o.color !== false,
+    copies: Math.min(99, Math.max(1, Math.round(Number(o.copies) || 1))),
+    scaleFactor: Math.round(printScale(o.scale) * 100),
+    pageSize: printPaper(o.paper),
+    margins: { marginType: o.margins === 'none' ? 'none' : o.margins === 'minimum' ? 'printableArea' : 'default' },
+  };
+  if (o.deviceName) opts.deviceName = String(o.deviceName);
+  // Same clamp as the preview, against the page count the preview measured, then
+  // shifted to print()'s 0-based indices.
+  const ranges = normalizeRanges(o.pageRanges, printPreviewTotal);
+  if (ranges.length) opts.pageRanges = ranges.map((r) => ({ from: r.from - 1, to: r.to - 1 }));
+  return opts;
+}
+
+// Page count straight out of the bytes. Skia (which writes Chromium's PDFs)
+// emits plain object dictionaries rather than object streams, so counting page
+// objects is reliable here; the /Count read is the fallback, and a 0 just means
+// the UI shows no count rather than a wrong one.
+function pdfPageCount(buf) {
+  try {
+    const s = buf.toString('latin1');
+    const pages = (s.match(/\/Type\s*\/Page(?![s\w])/g) || []).length;
+    if (pages) return pages;
+    const m = s.match(/\/Count\s+(\d+)/);
+    return m ? Number(m[1]) : 0;
+  } catch { return 0; }
+}
+
+// The thing being printed, as a webContents we can drive: either a live site's
+// guest view (printed in place, so logged-in state and scroll-loaded content are
+// real) or a throwaway window holding a composed page's HTML.
+async function withPrintTarget(source, fn) {
+  const id = Number(source && source.webContentsId);
+  if (Number.isFinite(id) && id > 0) {
+    const wc = webContents.fromId(id);
+    if (!wc || wc.isDestroyed()) throw new Error('That page is no longer open.');
+    return fn(wc);
+  }
+  const html = source && source.html;
+  if (!html) throw new Error('Nothing to print.');
+  const tmp = path.join(os.tmpdir(), `chervil-print-src-${process.pid}-${++printPreviewSeq}.html`);
+  const win = new BrowserWindow({ show: false, webPreferences: { sandbox: true, javascript: false } });
+  try {
+    fs.writeFileSync(tmp, html, 'utf8');
+    await win.loadFile(tmp);
+    return await fn(win.webContents);
+  } finally {
+    try { win.destroy(); } catch { /* ignore */ }
+    try { fs.unlinkSync(tmp); } catch { /* ignore */ }
+  }
+}
+
+// Windows can leave every printer's isDefault false — "let Windows manage my
+// default printer" is on by default, and Chromium reports what the spooler says.
+// Ask the OS directly instead, once per run, so the dialog opens on the printer
+// the user actually prints to rather than on Save-as-PDF.
+let osDefaultPrinter = null;   // null = not looked up yet, '' = none/failed
+function findOsDefaultPrinter() {
+  if (osDefaultPrinter !== null) return Promise.resolve(osDefaultPrinter);
+  if (process.platform !== 'win32') { osDefaultPrinter = ''; return Promise.resolve(''); }
+  return new Promise((resolve) => {
+    const done = (v) => { if (osDefaultPrinter === null) osDefaultPrinter = v; resolve(osDefaultPrinter); };
+    const timer = setTimeout(() => done(''), 2500);   // never hold the dialog open on this
+    try {
+      execFile('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', '(Get-CimInstance Win32_Printer -Filter "Default=True" | Select-Object -First 1).Name'],
+        { windowsHide: true }, (err, stdout) => {
+          clearTimeout(timer);
+          done(err ? '' : String(stdout || '').trim());
+        });
+    } catch { clearTimeout(timer); done(''); }
+  });
+}
+
+ipcMain.handle('chervil:print-printers', async (event) => {
+  try {
+    const [printers, osDefault] = await Promise.all([event.sender.getPrintersAsync(), findOsDefaultPrinter()]);
+    return {
+      ok: true,
+      defaultName: osDefault || (printers || []).find((p) => p.isDefault)?.name || '',
+      printers: (printers || []).map((p) => ({ name: p.name, displayName: p.displayName || p.name, isDefault: !!p.isDefault, status: p.status })),
+    };
+  } catch (err) {
+    return { ok: false, error: String(err && err.message ? err.message : err), printers: [] };
+  }
+});
+
+ipcMain.handle('chervil:print-render', async (event, payload) => {
+  const { source, options } = payload || {};
+  const base = printToPdfOptions(options);
+  try {
+    const { pdf, total, shown, applied } = await withPrintTarget(source, async (wc) => {
+      // Pass one: the whole document. This is what makes the range safe to send —
+      // and it's also the honest denominator for the "n of m pages" readout.
+      const full = await wc.printToPDF(base);
+      const count = pdfPageCount(full);
+      const ranges = normalizeRanges(options && options.pageRanges, count);
+      const applied = rangesToSpec(ranges);
+      // No usable range, or one that covers everything anyway — the full pass is
+      // already the answer, so don't pay for a second one.
+      if (!ranges.length) return { pdf: full, total: count, shown: count, applied: '' };
+      if (ranges.length === 1 && ranges[0].from === 1 && ranges[0].to === count) return { pdf: full, total: count, shown: count, applied };
+      const part = await wc.printToPDF({ ...base, pageRanges: applied });
+      return { pdf: part, total: count, shown: rangesPageCount(ranges), applied };
+    });
+    clearPrintPreviewFile();
+    const file = path.join(os.tmpdir(), `chervil-preview-${process.pid}-${++printPreviewSeq}.pdf`);
+    fs.writeFileSync(file, pdf);
+    printPreviewFile = file;
+    printPreviewTotal = total;
+    return { ok: true, url: pathToFileURL(file).href, pages: shown, total, applied };
+  } catch (err) {
+    return { ok: false, error: String(err && err.message ? err.message : err) };
+  }
+});
+
+ipcMain.handle('chervil:print-run', async (event, payload) => {
+  const { source, options } = payload || {};
+  try {
+    return await withPrintTarget(source, (wc) => new Promise((resolve) => {
+      wc.print(printJobOptions(options), (success, reason) => {
+        // "cancelled" is the user closing the system dialog — not an error to report.
+        if (success) resolve({ ok: true });
+        else resolve({ ok: false, canceled: /cancel/i.test(String(reason || '')), error: String(reason || 'Printing failed.') });
+      });
+    }));
+  } catch (err) {
+    return { ok: false, error: String(err && err.message ? err.message : err) };
+  }
+});
+
+// The "Save as PDF" destination: the preview already IS the PDF, so this just
+// files it where the user wants it.
+ipcMain.handle('chervil:print-save-pdf', async (event, payload) => {
+  if (!printPreviewFile || !fs.existsSync(printPreviewFile)) return { ok: false, error: 'Nothing to save yet.' };
+  const win = BrowserWindow.fromWebContents(event.sender);
+  const safe = String((payload && payload.suggestedName) || 'chervil-page')
+    .replace(/[^a-z0-9\-_ ]+/gi, '').trim().slice(0, 80) || 'chervil-page';
+  const { canceled, filePath } = await dialog.showSaveDialog(win, {
+    title: 'Save as PDF',
+    defaultPath: `${safe}.pdf`,
+    filters: [{ name: 'PDF', extensions: ['pdf'] }],
+  });
+  if (canceled || !filePath) return { ok: false, canceled: true };
+  try {
+    fs.copyFileSync(printPreviewFile, filePath);
+    return { ok: true, path: filePath };
+  } catch (err) {
+    return { ok: false, error: String(err && err.message ? err.message : err) };
+  }
+});
+
+ipcMain.handle('chervil:print-done', async () => { clearPrintPreviewFile(); printPreviewTotal = 0; return { ok: true }; });
+
+app.on('will-quit', () => clearPrintPreviewFile());
 
 // --- Export a composed page as an editable PowerPoint (.pptx) ------------
 // The model turns the page into structured slides (title/bullets/notes), then

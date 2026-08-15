@@ -6,6 +6,40 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **Keep an answer from chat.** Composed pages file themselves in your Library, but a
+  chat answer only ever lived in its tab — close the tab and it was gone. Hover any of
+  Sprig's chat replies and click **☆** to keep it. Saved answers get their own
+  **Library → Replies** section, where you can read them back, search *inside* them
+  (not just their titles), **Copy** one, **Reuse** it — dropped into the composer as
+  quoted context so your next instruction acts on it — or open it as a real Chervil
+  page, which gets it Export, Print, Read aloud and Remix for free. Click the ★ again
+  to unkeep it. Saved replies sync across your computers like bookmarks do.
+
+### Changed
+
+- **Chervil has its own print preview.** Printing used to hand straight to the Windows
+  print dialog, which reported “This app doesn't support print preview” where the
+  preview should have been — Electron ships Chromium's printing stack but not Chrome's
+  preview UI. Ctrl+P now opens Chervil's own preview: the actual paginated sheet, with
+  destination, page range, copies, layout, paper size, margins, scale, colour and
+  background graphics beside it, and a live page count. Changing a setting re-renders
+  the sheet, so what you see is what prints. **Save as PDF** is a destination like any
+  other, and **Print using the system dialog…** is still one click away for tray,
+  duplex and other printer-specific settings. Live sites print in place (logged-in
+  state and all); composed pages print as they stand, with ticked checkboxes and applet
+  state intact — but at 100%, not at whatever zoom you were reading them at.
+
+### Fixed
+
+- **A bad page range no longer breaks printing until restart.** Handing Chromium a page
+  range it rejects — a typo, or pages past the end — wedges PDF generation for the whole
+  app: every later print *and* every PDF export fails with the same stale error until
+  Chervil is restarted. Page ranges are now parsed and clamped against the document's
+  real length before they ever reach it, so `2-99` on a 3-page document prints pages 2–3
+  and nonsense simply prints everything, with a note saying so.
+
 ## [0.27.0] — 2026-07-28
 
 **Sprig on your home screen.** Chervil Chat — Sprig in your pocket — gets a proper

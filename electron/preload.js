@@ -129,6 +129,16 @@ contextBridge.exposeInMainWorld('chervil', {
   /** Open an image (data: URL) in the OS-registered image viewer. */
   openImage: (payload) => ipcRenderer.invoke('chervil:open-image', payload),
 
+  /** Chervil's own print preview — Electron has no Chrome preview UI, so we
+   *  render the PDF ourselves, show it, then print with the same options. */
+  print: {
+    printers: () => ipcRenderer.invoke('chervil:print-printers'),
+    render: (payload) => ipcRenderer.invoke('chervil:print-render', payload),
+    run: (payload) => ipcRenderer.invoke('chervil:print-run', payload),
+    savePdf: (payload) => ipcRenderer.invoke('chervil:print-save-pdf', payload || {}),
+    done: () => ipcRenderer.invoke('chervil:print-done'),
+  },
+
   /** Credential vault (RFC 0008): passphrase-gated password store. Plaintext
    *  passwords are only returned by reveal/forOrigin, and only while unlocked. */
   creds: {
