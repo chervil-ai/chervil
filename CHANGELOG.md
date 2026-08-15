@@ -6,6 +6,14 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.28.0] — 2026-08-15
+
+**Keep the good answers, and print what you actually see.** Chat could answer beautifully
+and then lose the answer the moment you closed the tab — composed pages filed themselves
+away, chat replies didn't. Now a star keeps one. And printing finally shows you the page
+before it commits it to paper, instead of handing you a Windows dialog that admits it
+has no preview to give.
+
 ### Added
 
 - **Keep an answer from chat.** Composed pages file themselves in your Library, but a
